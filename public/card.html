@@ -42,7 +42,7 @@
   .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 10px; color: var(--muted); }
   .tabs button.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
   .inv { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; }
-  .inv-head { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; }
+  .inv-head { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; }
   .inv-head .who { font-weight: 600; }
   .inv-head .meta { color: var(--muted); font-size: 12.5px; }
   .inv-head .amt { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
@@ -51,6 +51,16 @@
   .pill.paid { background: var(--ok-soft); color: var(--ok); } .pill.part { background: var(--warn-soft); color: var(--warn); }
   .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: var(--accent); }
   .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.src { background: var(--bg); color: var(--muted); font-weight: 500; }
+  .inv-head button.x { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 4px 8px; line-height: 1; }
+  .inv-head button.x:hover { color: var(--bad); background: var(--bad-soft); }
+  .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bad-soft); color: var(--bad); border-top: 1px solid var(--line); font-weight: 500; }
+  .confirm-bar .spacer { flex: 1; }
+  button.solid-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 8px; }
+  .edit-form label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  .edit-form input { font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; background: #fff; color: var(--ink); }
+  .edit-form .btns { display: flex; gap: 6px; }
+  @media (max-width: 640px) { .edit-form { grid-template-columns: minmax(0, 1fr); } }
   .inv-body { border-top: 1px solid var(--line); padding: 8px 12px 12px; }
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
@@ -121,7 +131,7 @@
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { data: null, tab: 'invoices', open: new Set(), pollTimer: null };
+const state = { data: null, tab: 'invoices', open: new Set(), pollTimer: null, confirmDel: null, editing: null, draft: {} };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
@@ -191,7 +201,9 @@ function renderInvoices(list) {
           <div class="meta">${esc(meta)}${inv.status === 'error' ? esc(inv.error) : ''}</div>
         </div>
         <div class="amt">${ready ? money(inv.total) : ''}${ready && inv.payment_state === 'part' ? `<small>${money(inv.outstanding)} to pay</small>` : ''}</div>
+        <button class="x" data-ask-delete="${inv.id}" title="Remove invoice" aria-label="Remove invoice">✕</button>
       </div>
+      ${state.confirmDel === inv.id ? `<div class="confirm-bar">Remove this invoice from the job?<span class="spacer"></span><button class="solid-danger" data-delete="${inv.id}">Remove</button><button data-cancel>Cancel</button></div>` : ''}
       ${open ? renderInvoiceBody(inv) : ''}
     </article>`;
   }).join('');
@@ -224,10 +236,20 @@ function renderInvoiceBody(inv) {
   html += `<div class="actions">
       ${inv.file_path ? `<a class="btn" href="${fileUrl}" target="_blank" rel="noopener">View file</a>` : ''}
       <button data-reread="${inv.id}">Read again</button>
-      ${inv.status === 'ready' ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
+      ${inv.status === 'ready' && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
       <span class="spacer"></span>
-      <button class="danger link" data-delete="${inv.id}">Remove</button>
-    </div></div>`;
+      <button class="danger link" data-ask-delete="${inv.id}">Remove</button>
+    </div>`;
+  if (state.editing === inv.id) {
+    const d = state.draft;
+    html += `<form class="edit-form" data-edit-form="${inv.id}">
+      <label>Supplier<input name="supplier" value="${esc(d.supplier ?? inv.supplier ?? '')}"></label>
+      <label>Invoice number<input name="invoice_number" value="${esc(d.invoice_number ?? inv.invoice_number ?? '')}"></label>
+      <label>Total incl. GST<input name="total" inputmode="decimal" value="${esc(d.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
+    </form>`;
+  }
+  html += '</div>';
   return html;
 }
 
@@ -252,25 +274,36 @@ $('#view').addEventListener('click', async (e) => {
   const t = e.target;
   if (t.matches('input, select, a, button')) {
     if (t.dataset.reread) { await api(`/invoices/${t.dataset.reread}/reanalyze`, { method: 'POST' }).catch((x) => toast(x.message)); toast('Reading again…'); return load(); }
+    if (t.dataset.askDelete) { state.confirmDel = Number(t.dataset.askDelete); return render(); }
+    if (t.dataset.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
     if (t.dataset.delete) {
-      if (!confirm('Remove this invoice from the job?')) return;
-      await api(`/invoices/${t.dataset.delete}`, { method: 'DELETE' }).catch((x) => toast(x.message)); state.open.delete(Number(t.dataset.delete)); return load();
+      const id = Number(t.dataset.delete);
+      try { await api(`/invoices/${id}`, { method: 'DELETE' }); toast('Invoice removed'); } catch (x) { toast(x.message); }
+      state.confirmDel = null; state.open.delete(id); return load();
     }
-    if (t.dataset.edit) {
-      const inv = state.data.invoices.find((i) => i.id === Number(t.dataset.edit));
-      const supplier = prompt('Supplier', inv.supplier || ''); if (supplier === null) return;
-      const number = prompt('Invoice number', inv.invoice_number || ''); if (number === null) return;
-      const total = prompt('Total including GST', inv.total ?? ''); if (total === null) return;
-      await api(`/invoices/${inv.id}`, { method: 'PATCH', body: JSON.stringify({ supplier, invoice_number: number, total: total.replace(/[$,\s]/g, '') }) }).catch((x) => toast(x.message));
-      return load();
-    }
+    if (t.dataset.edit) { state.editing = Number(t.dataset.edit); state.draft = {}; return render(); }
     return;
   }
   const head = t.closest('[data-toggle]');
   if (head) { const id = Number(head.dataset.toggle); state.open.has(id) ? state.open.delete(id) : state.open.add(id); render(); }
 });
 
+$('#view').addEventListener('submit', async (e) => {
+  const f = e.target.closest('form[data-edit-form]'); if (!f) return;
+  e.preventDefault();
+  const v = Object.fromEntries(new FormData(f));
+  try {
+    await api(`/invoices/${f.dataset.editForm}`, { method: 'PATCH', body: JSON.stringify({ supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, '') }) });
+    state.editing = null; state.draft = {}; toast('Saved');
+  } catch (x) { toast(x.message); }
+  load();
+});
+
+// Keep what's typed in the edit form if the list refreshes while you type.
+$('#view').addEventListener('input', (e) => { if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value; });
+
 $('#view').addEventListener('change', async (e) => {
+  if (e.target.closest('form[data-edit-form]')) return;
   const t = e.target;
   try {
     if (t.dataset.invPaid) { await api(`/invoices/${t.dataset.invPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
