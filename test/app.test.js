@@ -45,7 +45,7 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-'));
   repo = openDb(dataDir);
   processor = createProcessor({ repo, analyzer: fakeAnalyzer, log: { error() {} } });
-  const app = createApp({ config, repo, processor, fetchJobImpl: async () => ({ jobNumber: '1234', jobTitle: '12 Smith St' }) });
+  const app = createApp({ config, repo, processor, fetchJobImpl: async () => ({ jobNumber: '1234', jobTitle: '12 Smith St', quoteAmount: 5000 }) });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -175,4 +175,34 @@ test('SendGrid-style multipart email and non-invoice files', async () => {
   assert.equal(job.invoices[0].status, 'error');
   assert.match(job.invoices[0].error, /does not look like an invoice/);
   assert.equal(job.totals.total, 0);
+});
+
+test('quoted price comes from ServiceM8, can be overridden, and drives the margin', async () => {
+  const token = await openCard('job-quote');
+  const fd = new FormData();
+  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
+  await api(token, '/invoices', { method: 'POST', body: fd });
+  await processor.idle();
+
+  let job = await (await api(token, '/job')).json();
+  assert.equal(job.totals.quote, 5000);
+  assert.equal(job.job.quote_source, 'servicem8');
+  assert.equal(job.totals.margin, 1700);
+  assert.equal(job.totals.marginPct, 34);
+
+  // Typed on the card: wins, even when the card is opened again from ServiceM8
+  assert.equal((await api(token, '/job', { method: 'PATCH', json: { quote_amount: '$6,000' } })).status, 200);
+  await openCard('job-quote');
+  job = await (await api(token, '/job')).json();
+  assert.equal(job.totals.quote, 6000);
+  assert.equal(job.job.quote_source, 'manual');
+  assert.equal(job.totals.margin, 2700);
+
+  // Clearing it goes back to ServiceM8's amount next time the card opens
+  await api(token, '/job', { method: 'PATCH', json: { quote_amount: null } });
+  await openCard('job-quote');
+  job = await (await api(token, '/job')).json();
+  assert.equal(job.totals.quote, 5000);
+
+  assert.equal((await api(token, '/job', { method: 'PATCH', json: { quote_amount: 'abc' } })).status, 400);
 });

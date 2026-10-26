@@ -7,141 +7,157 @@
 <!--__SM8_SDK__-->
 <style>
   :root {
-    --bg: #f6f7f9; --card: #fff; --ink: #1d2433; --muted: #667085; --line: #e4e7ec;
-    --accent: #2563eb; --accent-soft: #e8efff; --ok: #12805c; --ok-soft: #e3f6ee;
-    --warn: #b54708; --warn-soft: #fef0e1; --bad: #c4320a; --bad-soft: #fde8e4;
-    --radius: 10px;
+    --bg: #f5f6f8; --card: #fff; --ink: #1f2933; --muted: #7b8794; --line: #e4e7eb;
+    --accent: #4a86e8; --accent-soft: #eaf1fd; --ok: #2e9e5b; --ok-ink: #17784a; --ok-soft: #e3f6ec;
+    --warn: #b45309; --warn-soft: #fff1e0; --bad: #c2410c; --bad-soft: #fde8e4; --radius: 8px;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
-  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-  header h1 { font-size: 18px; margin: 0; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 "Open Sans", "Segoe UI", -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { padding: 14px; max-width: 1400px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  header h1 { font-size: 17px; margin: 0; }
   header .sub { color: var(--muted); }
-  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
-  .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  .tile .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
-  .tile.ok .value { color: var(--ok); } .tile.warn .value { color: var(--warn); }
-  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
-  .bar > div { height: 100%; background: var(--ok); }
-  .intake { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }
-  .box { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
-  .box h2 { font-size: 13px; margin: 0 0 6px; }
-  .box p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
-  .email-row { display: flex; gap: 6px; }
-  .email-row code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 13px; }
-  .drop { display: block; border: 2px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
-  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 6px; padding: 6px 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
-  button:hover, .btn:hover { border-color: #c9ced6; background: #fafbfc; }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  button.link { border: 0; background: none; color: var(--accent); padding: 4px 6px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
+  button, .btn { font: inherit; border: 1px solid #cfd5dc; background: #fff; color: var(--ink); border-radius: 4px; padding: 5px 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  button:hover, .btn:hover { background: #f7f8fa; }
+  button.primary { background: var(--ok); border-color: var(--ok); color: #fff; }
+  button.link { border: 0; background: none; color: var(--accent); padding: 2px 4px; }
   button.danger { color: var(--bad); }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
-  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 10px; color: var(--muted); }
-  .tabs button.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
-  .inv { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; }
-  .inv-head { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; }
-  .inv-head .who { font-weight: 600; }
-  .inv-head .meta { color: var(--muted); font-size: 12.5px; }
-  .inv-head .amt { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .inv-head .amt small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
-  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
-  .pill.paid { background: var(--ok-soft); color: var(--ok); } .pill.part { background: var(--warn-soft); color: var(--warn); }
-  .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: var(--accent); }
-  .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.src { background: var(--bg); color: var(--muted); font-weight: 500; }
-  .inv-head button.x { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 4px 8px; line-height: 1; }
-  .inv-head button.x:hover { color: var(--bad); background: var(--bad-soft); }
-  .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bad-soft); color: var(--bad); border-top: 1px solid var(--line); font-weight: 500; }
-  .confirm-bar .spacer { flex: 1; }
   button.solid-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
-  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 8px; }
-  .edit-form label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
-  .edit-form input { font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; background: #fff; color: var(--ink); }
-  .edit-form .btns { display: flex; gap: 6px; }
-  @media (max-width: 640px) { .edit-form { grid-template-columns: minmax(0, 1fr); } }
-  .inv-body { border-top: 1px solid var(--line); padding: 8px 12px 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
-  td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  tr.is-paid td.desc { color: var(--muted); text-decoration: line-through; }
+  .muted { color: var(--muted); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---- Quote vs costs ---- */
+  .summary { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 18px; padding: 14px 16px; margin-bottom: 12px; }
+  .s-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+  .s-label { color: var(--muted); font-size: 12px; }
+  .s-big { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .s-big small { font-size: 14px; font-weight: 400; color: var(--muted); }
+  .s-big button.link { font-size: 13px; font-weight: 400; vertical-align: 2px; }
+  .s-margin { text-align: right; }
+  .s-margin .s-big.good { color: var(--ok-ink); } .s-margin .s-big.bad { color: var(--bad); }
+  .bar { position: relative; display: flex; height: 16px; border-radius: 8px; background: #eceff3; margin: 10px 0 6px; }
+  .bar > span { height: 100%; }
+  .bar > span:first-child { border-radius: 8px 0 0 8px; }
+  .bar .quote-mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--ink); border-radius: 2px; }
+  .s-foot { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .s-foot b { color: var(--ink); font-weight: 600; }
+  .legend div { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .legend span:nth-child(2) { flex: 1; }
+  .quote-edit { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 400; }
+  .quote-edit input { font: inherit; width: 120px; border: 1px solid #cfd5dc; border-radius: 4px; padding: 4px 6px; }
+
+  /* ---- Split view ---- */
+  .split { display: grid; grid-template-columns: 260px minmax(0, 1fr) minmax(300px, 32%); gap: 12px; align-items: start; }
+  .list-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12.5px; }
+  .inv { padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 6px; background: var(--card); cursor: pointer; }
+  .inv:hover { border-color: #c5ccd4; }
+  .inv.sel { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .inv .r1, .inv .r2 { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .inv .r1 b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inv .r2 { margin-top: 2px; font-size: 12px; color: var(--muted); }
+  .inv .r2 span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .pill.paid { background: var(--ok-soft); color: var(--ok-ink); } .pill.part { background: var(--warn-soft); color: var(--warn); }
+  .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: #2a5db0; }
+  .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.dup { background: #eef0f3; color: var(--muted); }
+  .drop { display: block; border: 2px dashed #cfd5dc; border-radius: var(--radius); padding: 12px; text-align: center; color: var(--muted); cursor: pointer; margin-top: 8px; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: #2a5db0; }
+  .email { margin-top: 8px; }
+  .email .row { display: flex; gap: 6px; margin-top: 4px; }
+  .email code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 7px; font-size: 11.5px; }
+
+  .detail { padding: 14px; min-height: 300px; }
+  .d-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .d-head h2 { font-size: 16px; margin: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  td { padding: 5px 4px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+  tr.is-paid td.desc input { color: var(--muted); text-decoration: line-through; }
   td input[type=text], td select { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 3px 4px; width: 100%; color: inherit; }
   td input[type=text]:hover, td select:hover, td input[type=text]:focus, td select:focus { border-color: var(--line); background: #fff; outline: none; }
-  td input.amount { text-align: right; width: 90px; }
+  td input.amount { text-align: right; width: 76px; }
   input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--ok); cursor: pointer; }
-  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
-  .actions .spacer { flex: 1; }
-  .note { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 13px; background: var(--warn-soft); color: var(--warn); }
+  .d-total { text-align: right; color: var(--muted); margin-top: 8px; }
+  .d-total b { color: var(--ink); }
+  .note { margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12.5px; background: var(--warn-soft); color: var(--warn); }
   .note.bad { background: var(--bad-soft); color: var(--bad); }
-  .empty { text-align: center; color: var(--muted); padding: 30px 10px; background: var(--card); border: 1px dashed var(--line); border-radius: var(--radius); }
-  .chev { color: var(--muted); transition: transform .15s; display: inline-block; }
-  .open .chev { transform: rotate(90deg); }
-  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; }
+  .note.info { background: var(--accent-soft); color: #2a5db0; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
+  .actions .spacer { flex: 1; }
+  .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; background: var(--bad-soft); color: var(--bad); border-radius: 6px; font-weight: 500; }
+  .confirm-bar .spacer { flex: 1; }
+  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 6px; }
+  .edit-form label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  .edit-form input { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 7px; width: 100%; }
+  .edit-form .btns { display: flex; gap: 6px; }
+
+  .preview { height: calc(100vh - 210px); min-height: 420px; display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 10px; }
+  .preview .p-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .preview .p-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview iframe { flex: 1; border: 0; width: 100%; background: #525659; }
+  .preview .img { flex: 1; overflow: auto; background: #525659; display: flex; align-items: flex-start; justify-content: center; padding: 10px; }
+  .preview .img img { max-width: 100%; background: #fff; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 14px; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; z-index: 10; }
   .toast.show { opacity: 1; }
-  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 640px) {
-    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .intake { grid-template-columns: minmax(0, 1fr); }
+  .only-sm { display: none !important; }
+
+  @media (max-width: 1100px) {
+    .split { grid-template-columns: 260px minmax(0, 1fr); }
+    .preview { display: none; }
+    .only-sm { display: inline-flex !important; }
+  }
+  @media (max-width: 760px) {
+    .wrap { padding: 10px; }
+    .summary { grid-template-columns: minmax(0, 1fr); }
+    .split { grid-template-columns: minmax(0, 1fr); }
     .hide-sm { display: none; }
-    .email-row code { white-space: normal; word-break: break-all; }
-    .wrap { padding: 12px; }
+    .edit-form { grid-template-columns: minmax(0, 1fr); }
+    .s-margin { text-align: left; }
   }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Job Costs</h1>
-    <span class="sub" id="jobLabel"></span>
-  </header>
-
-  <section class="tiles">
-    <div class="tile"><div class="label">Total costs</div><div class="value" id="tTotal">–</div><div class="sub" style="color:var(--muted);font-size:12px" id="tCount"></div></div>
-    <div class="tile ok"><div class="label">Paid</div><div class="value" id="tPaid">–</div><div class="bar"><div id="tBar" style="width:0"></div></div></div>
-    <div class="tile warn"><div class="label">Still to pay</div><div class="value" id="tOut">–</div></div>
-    <div class="tile"><div class="label">GST included</div><div class="value" id="tTax">–</div></div>
-  </section>
-
-  <section class="intake">
-    <div class="box">
-      <h2>Email invoices to this job</h2>
-      <p>Forward supplier invoices here, or give this address to the supplier. PDFs and photos are read automatically.</p>
-      <div class="email-row" id="emailRow"><code id="inbox">Not set up yet</code><button id="copyBtn" type="button">Copy</button></div>
-    </div>
-    <div class="box">
-      <h2>Upload invoices</h2>
+  <header><h1>Job Costs</h1><span class="sub" id="jobLabel"></span></header>
+  <section class="panel summary" id="summary"></section>
+  <section class="split">
+    <aside>
+      <div class="list-head" id="listHead"></div>
+      <div id="list"></div>
       <label class="drop" id="drop">
         <input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden>
-        <strong>Drop PDFs or photos here</strong><br>or click to choose files
+        <strong>Drop invoices here</strong><br>or click to choose files
       </label>
-    </div>
+      <div class="email" id="emailBox"></div>
+    </aside>
+    <main class="panel detail" id="detail"></main>
+    <section class="panel preview" id="preview"></section>
   </section>
-
-  <nav class="tabs" id="tabs">
-    <button data-tab="invoices" class="active">Invoices</button>
-    <button data-tab="supplier">By supplier</button>
-    <button data-tab="category">By category</button>
-  </nav>
-  <main id="view"></main>
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { data: null, tab: 'invoices', open: new Set(), pollTimer: null, confirmDel: null, editing: null, draft: {} };
+const state = { data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
 const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other' };
+const CAT_COLOR = { materials: '#4a86e8', subcontractor: '#7c3aed', labour: '#0d9488', equipment_hire: '#d97706', freight: '#0891b2', fees: '#94a3b8', other: '#64748b' };
+const fileUrl = (inv) => `/api/invoices/${inv.id}/file?t=${encodeURIComponent(BOOT.token)}`;
 
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
 
 async function api(path, opts = {}) {
-  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } });
+  const isJson = opts.body && !(opts.body instanceof FormData);
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(isJson ? { 'Content-Type': 'application/json' } : {}) } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Request failed');
   return body;
@@ -150,145 +166,191 @@ async function api(path, opts = {}) {
 async function load() {
   try {
     state.data = await api('/job');
+    const ids = state.data.invoices.map((i) => i.id);
+    if (!ids.includes(state.selected)) state.selected = ids[0] ?? null;
     render();
   } catch (e) { toast(e.message); }
   clearTimeout(state.pollTimer);
   if (state.data && state.data.totals.processing > 0) state.pollTimer = setTimeout(load, 3000);
 }
 
-function render() {
-  const d = state.data;
-  const j = d.job || {};
-  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number : '', j.job_title].filter(Boolean).join(' · ');
-  $('#tTotal').textContent = money(d.totals.total);
-  $('#tPaid').textContent = money(d.totals.paid);
-  $('#tOut').textContent = money(d.totals.outstanding);
-  $('#tTax').textContent = money(d.totals.tax);
-  $('#tCount').textContent = d.totals.invoiceCount + ' invoice' + (d.totals.invoiceCount === 1 ? '' : 's') + (d.totals.processing ? ` · ${d.totals.processing} reading…` : '');
-  $('#tBar').style.width = d.totals.total ? Math.min(100, Math.max(0, d.totals.paid / d.totals.total * 100)) + '%' : '0';
-  if (d.inboxAddress) $('#inbox').textContent = d.inboxAddress;
-  else $('#emailRow').innerHTML = '<p style="margin:0">Email-in is not configured on the server (set INBOUND_BASE_ADDRESS or INBOUND_DOMAIN).</p>';
+const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.selected) || null;
 
-  const view = $('#view');
-  if (state.tab === 'invoices') view.innerHTML = renderInvoices(d.invoices);
-  else view.innerHTML = renderGroup(state.tab === 'supplier' ? d.bySupplier : d.byCategory, state.tab);
+function render() {
+  const j = state.data.job || {};
+  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number : '', j.job_title].filter(Boolean).join(' · ');
+  // Don't redraw a part of the screen while someone is typing in it.
+  const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
+  if (!typingIn($('#summary'))) renderSummary();
+  renderList();
+  if (!typingIn($('#detail'))) renderDetail();
+  renderPreview();
 }
 
+// ---------- Costs vs quoted price ----------
+function renderSummary() {
+  const t = state.data.totals;
+  const cats = state.data.byCategory.filter((c) => c.total > 0);
+  const hasQuote = t.quote != null;
+  const over = hasQuote && t.total > t.quote;
+  const scale = Math.max(t.quote || 0, t.total) || 1;
+  const segs = cats.map((c) => `<span title="${esc(CAT_LABEL[c.name] || c.name)}: ${money(c.total)}" style="width:${c.total / scale * 100}%;background:${CAT_COLOR[c.name] || '#64748b'}"></span>`).join('');
+  const mark = over ? `<i class="quote-mark" style="left:calc(${t.quote / scale * 100}% - 1px)" title="Quoted price ${money(t.quote)}"></i>` : '';
+
+  let quotePart;
+  if (state.editQuote || !hasQuote) {
+    quotePart = `<span class="quote-edit">${hasQuote ? '' : '<span class="muted">Quoted price</span>'}<input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640.00" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="primary" data-save-quote>Save</button>${state.editQuote ? '<button data-cancel-quote>Cancel</button>' : ''}</span>`;
+  } else {
+    const src = state.data.job.quote_source === 'manual' ? 'typed in' : 'from ServiceM8';
+    quotePart = `<small>of ${money(t.quote)} quoted</small> <button class="link" data-edit-quote title="Quoted price ${src}">edit</button>`;
+  }
+  const marginHtml = hasQuote
+    ? `<div class="s-label">${over ? 'Over the quote by' : 'Expected margin'}</div><div class="s-big ${over ? 'bad' : 'good'}">${money(Math.abs(t.margin))}${t.quote ? ` · ${Math.abs(t.marginPct)}%` : ''}</div>`
+    : `<div class="s-label">Expected margin</div><div class="muted">Add the quoted price (incl. GST) to see it</div>`;
+
+  $('#summary').innerHTML = `
+    <div>
+      <div class="s-top">
+        <div><div class="s-label">Costs so far${hasQuote ? ' vs quoted price' : ''} (incl. GST)</div><div class="s-big">${money(t.total)} ${quotePart}</div></div>
+        <div class="s-margin">${marginHtml}</div>
+      </div>
+      <div class="bar">${segs}${mark}</div>
+      <div class="s-foot">
+        <span>Paid <b style="color:var(--ok-ink)">${money(t.paid)}</b></span>
+        <span>To pay <b style="color:var(--warn)">${money(t.outstanding)}</b></span>
+        <span>GST incl. <b>${money(t.tax)}</b></span>
+        <span>${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</span>
+        ${hasQuote && !over ? '<span>Grey = left over from the quote</span>' : ''}${over ? '<span>Black line = quoted price</span>' : ''}
+      </div>
+    </div>
+    <div class="legend">${cats.length ? cats.map((c) => `<div><i style="background:${CAT_COLOR[c.name] || '#64748b'}"></i><span>${esc(CAT_LABEL[c.name] || c.name)}</span><span class="num">${money(c.total)}</span></div>`).join('') : '<div class="muted">Costs by type will show here.</div>'}</div>`;
+}
+
+// ---------- Invoice list ----------
 function statusPill(inv) {
-  if (inv.status === 'processing') return '<span class="pill proc"><span class="spin"></span> Reading…</span>';
+  if (inv.status === 'processing') return '<span class="pill proc"><span class="spin"></span> Reading</span>';
   if (inv.status === 'error') return '<span class="pill err">Needs attention</span>';
+  if (inv.duplicate_of) return '<span class="pill dup">Duplicate</span>';
   return { paid: '<span class="pill paid">Paid</span>', part: '<span class="pill part">Part paid</span>', unpaid: '<span class="pill unpaid">Unpaid</span>' }[inv.payment_state];
 }
 
-function renderInvoices(list) {
-  if (!list.length) return '<div class="empty">No invoices yet.<br>Email them to the address above or drop the files in.</div>';
-  return list.map((inv) => {
-    const open = state.open.has(inv.id);
+function renderList() {
+  const d = state.data;
+  $('#listHead').innerHTML = `<b>Invoices</b><span class="muted">${money(d.totals.outstanding)} to pay</span>`;
+  $('#list').innerHTML = d.invoices.length ? d.invoices.map((inv) => {
     const ready = inv.status === 'ready';
-    const title = ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice');
-    const meta = [
-      inv.invoice_number ? '#' + inv.invoice_number : '',
-      inv.invoice_date ? fmtDate(inv.invoice_date) : '',
-      inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '',
-    ].filter(Boolean).join(' · ');
-    const allPaid = inv.payment_state === 'paid';
-    return `
-    <article class="inv ${open ? 'open' : ''}" data-inv="${inv.id}">
-      <div class="inv-head" data-toggle="${inv.id}">
-        <span>${ready ? `<input type="checkbox" title="Mark whole invoice paid" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}>` : '<span class="chev">▸</span>'}</span>
-        <div>
-          <div class="who">${esc(title)} ${statusPill(inv)} <span class="pill src">${inv.source === 'email' ? 'Emailed' : 'Uploaded'}</span></div>
-          <div class="meta">${esc(meta)}${inv.status === 'error' ? esc(inv.error) : ''}</div>
-        </div>
-        <div class="amt">${ready ? money(inv.total) : ''}${ready && inv.payment_state === 'part' ? `<small>${money(inv.outstanding)} to pay</small>` : ''}</div>
-        <button class="x" data-ask-delete="${inv.id}" title="Remove invoice" aria-label="Remove invoice">✕</button>
-      </div>
-      ${state.confirmDel === inv.id ? `<div class="confirm-bar">Remove this invoice from the job?<span class="spacer"></span><button class="solid-danger" data-delete="${inv.id}">Remove</button><button data-cancel>Cancel</button></div>` : ''}
-      ${open ? renderInvoiceBody(inv) : ''}
-    </article>`;
-  }).join('');
+    const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || (inv.source === 'email' ? 'Emailed' : 'Uploaded');
+    return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
+      <div class="r1"><b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b><span class="num">${ready ? money(inv.total) : ''}</span></div>
+      <div class="r2"><span>${esc(sub)}</span>${statusPill(inv)}</div>
+    </div>`;
+  }).join('') : '<div class="panel empty">No invoices yet.</div>';
+
+  $('#emailBox').innerHTML = d.inboxAddress
+    ? `<span class="muted">Or email invoices to this job:</span><div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button data-copy>Copy</button></div>`
+    : '<span class="muted">Email-in is not set up on the server yet.</span>';
 }
 
-function renderInvoiceBody(inv) {
-  const fileUrl = `/api/invoices/${inv.id}/file?t=${encodeURIComponent(BOOT.token)}`;
-  let html = '<div class="inv-body">';
-  if (inv.duplicate_of) html += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
-  if (inv.status === 'error') html += `<div class="note bad">${esc(inv.error)}</div>`;
+// ---------- Selected invoice ----------
+function renderDetail() {
+  const inv = selectedInvoice();
+  const el = $('#detail');
+  if (!inv) { el.innerHTML = '<div class="empty">Drop an invoice on the left, or email it to this job.<br>It is read automatically and appears here.</div>'; return; }
+  const ready = inv.status === 'ready';
+  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', inv.source === 'email' ? 'Emailed' : 'Uploaded'].filter(Boolean).join(' · ');
+  const allPaid = inv.payment_state === 'paid';
+  let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))} ${statusPill(inv)}</h2><div class="muted">${esc(meta)}</div></div>
+    ${ready && inv.items.length ? `<button data-inv-paid="${inv.id}" data-value="${allPaid ? 'false' : 'true'}">${allPaid ? 'Mark unpaid' : 'Mark all paid'}</button>` : ''}</div>`;
+  if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice…</div>';
+  if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
+  if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
   if (inv.items.length) {
-    html += `<table><thead><tr><th style="width:28px">Paid</th><th>Item</th><th class="hide-sm" style="width:130px">Type</th><th class="num hide-sm">Qty</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
+    h += `<table><thead><tr><th style="width:30px">Paid</th><th>Item</th><th class="hide-sm" style="width:112px">Type</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
     for (const it of inv.items) {
-      html += `<tr class="${it.paid ? 'is-paid' : ''}">
+      const qty = it.quantity != null ? `Qty ${it.quantity}${it.unit ? ' ' + it.unit : ''}` : '';
+      h += `<tr class="${it.paid ? 'is-paid' : ''}">
         <td><input type="checkbox" data-item-paid="${it.id}" ${it.paid ? 'checked' : ''}></td>
-        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}"></td>
+        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}" title="${esc(qty)}"></td>
         <td class="hide-sm"><select data-item-cat="${it.id}">${BOOT.categories.map((c) => `<option value="${c}" ${c === it.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></td>
-        <td class="num hide-sm">${it.quantity != null ? esc(it.quantity) + (it.unit ? ' ' + esc(it.unit) : '') : ''}</td>
         <td class="num hide-sm"><input type="text" class="amount" inputmode="decimal" value="${(Number(it.line_total) || 0).toFixed(2)}" data-item-amt="${it.id}"></td>
-        <td class="num">${money(it.cost)}</td>
-      </tr>`;
+        <td class="num">${money(it.cost)}</td></tr>`;
     }
-    html += '</tbody></table>';
-    if (inv.subtotal != null || inv.tax != null) {
-      html += `<div class="meta" style="text-align:right;color:var(--muted);margin-top:6px">${inv.subtotal != null ? 'Subtotal ' + money(inv.subtotal) + ' · ' : ''}${inv.tax != null ? 'GST ' + money(inv.tax) + ' · ' : ''}<strong style="color:var(--ink)">Total ${money(inv.total)}</strong></div>`;
-    }
+    h += '</tbody></table>';
+    h += `<div class="d-total">${inv.subtotal != null ? 'Subtotal ' + money(inv.subtotal) + ' · ' : ''}${inv.tax != null ? 'GST ' + money(inv.tax) + ' · ' : ''}<b>Total ${money(inv.total)}</b>${inv.payment_state === 'part' ? ` · <span style="color:var(--warn)">${money(inv.outstanding)} to pay</span>` : ''}</div>`;
   }
-  if (inv.notes) html += `<div class="note">${esc(inv.notes)}</div>`;
-  if (inv.email_from) html += `<div class="meta" style="margin-top:8px;color:var(--muted)">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
-  html += `<div class="actions">
-      ${inv.file_path ? `<a class="btn" href="${fileUrl}" target="_blank" rel="noopener">View file</a>` : ''}
+  if (inv.notes) h += `<div class="note">${esc(inv.notes)}</div>`;
+  if (inv.email_from) h += `<div class="muted" style="margin-top:10px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
+  h += `<div class="actions">
+      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
       <button data-reread="${inv.id}">Read again</button>
-      ${inv.status === 'ready' && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
+      ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
       <span class="spacer"></span>
       <button class="danger link" data-ask-delete="${inv.id}">Remove</button>
     </div>`;
+  if (state.confirmDel === inv.id) h += `<div class="confirm-bar">Remove this invoice from the job?<span class="spacer"></span><button class="solid-danger" data-delete="${inv.id}">Remove</button><button data-cancel>Cancel</button></div>`;
   if (state.editing === inv.id) {
-    const d = state.draft;
-    html += `<form class="edit-form" data-edit-form="${inv.id}">
-      <label>Supplier<input name="supplier" value="${esc(d.supplier ?? inv.supplier ?? '')}"></label>
-      <label>Invoice number<input name="invoice_number" value="${esc(d.invoice_number ?? inv.invoice_number ?? '')}"></label>
-      <label>Total incl. GST<input name="total" inputmode="decimal" value="${esc(d.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+    const dr = state.draft;
+    h += `<form class="edit-form" data-edit-form="${inv.id}">
+      <label>Supplier<input name="supplier" value="${esc(dr.supplier ?? inv.supplier ?? '')}"></label>
+      <label>Invoice number<input name="invoice_number" value="${esc(dr.invoice_number ?? inv.invoice_number ?? '')}"></label>
+      <label>Total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
       <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
     </form>`;
   }
-  html += '</div>';
-  return html;
+  el.innerHTML = h;
 }
 
-function renderGroup(rows, kind) {
-  if (!rows.length) return '<div class="empty">Nothing to show yet.</div>';
-  const label = (n) => kind === 'category' ? (CAT_LABEL[n] || n) : n;
-  const total = rows.reduce((s, r) => s + r.total, 0);
-  return `<div class="box"><table><thead><tr><th>${kind === 'supplier' ? 'Supplier' : 'Type'}</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Still to pay</th><th class="num hide-sm">Share</th></tr></thead><tbody>
-    ${rows.map((r) => `<tr><td>${esc(label(r.name))}</td><td class="num">${money(r.total)}</td><td class="num" style="color:var(--ok)">${money(r.paid)}</td><td class="num" style="color:${r.outstanding > 0.004 ? 'var(--warn)' : 'var(--muted)'}">${money(r.outstanding)}</td><td class="num hide-sm">${total ? Math.round(r.total / total * 100) : 0}%</td></tr>`).join('')}
-    </tbody></table></div>`;
+// ---------- Original invoice (only reloads when a different file is selected) ----------
+function renderPreview() {
+  const inv = selectedInvoice();
+  const key = inv && inv.file_path ? String(inv.id) : 'none';
+  if (key === state.previewKey) return;
+  state.previewKey = key;
+  const el = $('#preview');
+  if (key === 'none') { el.innerHTML = '<div class="empty">The original invoice shows here.</div>'; return; }
+  const url = fileUrl(inv);
+  const mime = inv.mime_type || '';
+  const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
+  el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn" href="${url}" target="_blank" rel="noopener">Open</a></div>${body}`;
 }
 
-// ---------- events ----------
-$('#tabs').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-tab]'); if (!b) return;
-  state.tab = b.dataset.tab;
-  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
-  render();
-});
-
-$('#view').addEventListener('click', async (e) => {
-  const t = e.target;
-  if (t.matches('input, select, a, button')) {
-    if (t.dataset.reread) { await api(`/invoices/${t.dataset.reread}/reanalyze`, { method: 'POST' }).catch((x) => toast(x.message)); toast('Reading again…'); return load(); }
-    if (t.dataset.askDelete) { state.confirmDel = Number(t.dataset.askDelete); return render(); }
-    if (t.dataset.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
-    if (t.dataset.delete) {
-      const id = Number(t.dataset.delete);
-      try { await api(`/invoices/${id}`, { method: 'DELETE' }); toast('Invoice removed'); } catch (x) { toast(x.message); }
-      state.confirmDel = null; state.open.delete(id); return load();
+// ---------- Events ----------
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('button, [data-select]');
+  if (!t) return;
+  const ds = t.dataset;
+  try {
+    if (ds.select) { state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
+    if (ds.copy !== undefined) {
+      const text = $('#inbox').textContent;
+      try { await navigator.clipboard.writeText(text); }
+      catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
+      return toast('Email address copied');
     }
-    if (t.dataset.edit) { state.editing = Number(t.dataset.edit); state.draft = {}; return render(); }
-    return;
-  }
-  const head = t.closest('[data-toggle]');
-  if (head) { const id = Number(head.dataset.toggle); state.open.has(id) ? state.open.delete(id) : state.open.add(id); render(); }
+    if (ds.editQuote !== undefined) { state.editQuote = true; renderSummary(); return $('#quoteInput')?.focus(); }
+    if (ds.cancelQuote !== undefined) { state.editQuote = false; return renderSummary(); }
+    if (ds.saveQuote !== undefined) return saveQuote();
+    if (ds.reread) { await api(`/invoices/${ds.reread}/reanalyze`, { method: 'POST' }); toast('Reading again…'); return load(); }
+    if (ds.invPaid) { await api(`/invoices/${ds.invPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: ds.value === 'true' }) }); toast(ds.value === 'true' ? 'Invoice marked paid' : 'Invoice marked unpaid'); return load(); }
+    if (ds.askDelete) { state.confirmDel = Number(ds.askDelete); return renderDetail(); }
+    if (ds.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return renderDetail(); }
+    if (ds.delete) { await api(`/invoices/${ds.delete}`, { method: 'DELETE' }); toast('Invoice removed'); state.confirmDel = null; state.selected = null; return load(); }
+    if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
+  } catch (x) { toast(x.message); load(); }
 });
 
-$('#view').addEventListener('submit', async (e) => {
+async function saveQuote() {
+  const input = $('#quoteInput');
+  const v = (input?.value || '').trim();
+  try {
+    await api('/job', { method: 'PATCH', body: JSON.stringify({ quote_amount: v === '' ? null : v }) });
+    state.editQuote = false; toast(v === '' ? 'Quoted price cleared' : 'Quoted price saved');
+  } catch (x) { toast(x.message); }
+  input?.blur(); load();
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'quoteInput') { e.preventDefault(); saveQuote(); } });
+
+$('#detail').addEventListener('submit', async (e) => {
   const f = e.target.closest('form[data-edit-form]'); if (!f) return;
   e.preventDefault();
   const v = Object.fromEntries(new FormData(f));
@@ -296,31 +358,20 @@ $('#view').addEventListener('submit', async (e) => {
     await api(`/invoices/${f.dataset.editForm}`, { method: 'PATCH', body: JSON.stringify({ supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, '') }) });
     state.editing = null; state.draft = {}; toast('Saved');
   } catch (x) { toast(x.message); }
-  load();
+  document.activeElement?.blur(); load();
 });
-
-// Keep what's typed in the edit form if the list refreshes while you type.
-$('#view').addEventListener('input', (e) => { if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value; });
-
-$('#view').addEventListener('change', async (e) => {
-  if (e.target.closest('form[data-edit-form]')) return;
+$('#detail').addEventListener('input', (e) => { if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value; });
+$('#detail').addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.closest('form[data-edit-form]')) return;
   try {
-    if (t.dataset.invPaid) { await api(`/invoices/${t.dataset.invPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
-    else if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
+    if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
     else if (t.dataset.itemDesc) await api(`/items/${t.dataset.itemDesc}`, { method: 'PATCH', body: JSON.stringify({ description: t.value }) });
     else if (t.dataset.itemCat) await api(`/items/${t.dataset.itemCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) });
     else if (t.dataset.itemAmt) await api(`/items/${t.dataset.itemAmt}`, { method: 'PATCH', body: JSON.stringify({ line_total: t.value.replace(/[$,\s]/g, '') }) });
     else return;
   } catch (x) { toast(x.message); }
-  load();
-});
-
-$('#copyBtn').addEventListener('click', async () => {
-  const text = $('#inbox').textContent;
-  try { await navigator.clipboard.writeText(text); }
-  catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
-  toast('Email address copied');
+  t.blur(); load();
 });
 
 async function uploadFiles(files) {
@@ -328,7 +379,7 @@ async function uploadFiles(files) {
   const fd = new FormData();
   [...files].forEach((f) => fd.append('files', f));
   toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
-  try { await api('/invoices', { method: 'POST', body: fd }); } catch (x) { toast(x.message); }
+  try { const r = await api('/invoices', { method: 'POST', body: fd }); state.selected = r.created[0]; } catch (x) { toast(x.message); }
   load();
 }
 const drop = $('#drop');
@@ -338,7 +389,7 @@ $('#fileInput').addEventListener('change', (e) => { uploadFiles(e.target.files);
 drop.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
 
 if (BOOT.embedded && window.SMClient) {
-  try { window.SMClient.init().resizeWindow(1000, 760); } catch (e) { /* not inside ServiceM8 */ }
+  try { window.SMClient.init().resizeWindow(1300, 820); } catch (e) { /* not inside ServiceM8 */ }
 }
 load();
 </script>

@@ -6,7 +6,9 @@ One place for every supplier invoice on a job. For a garage door job, that's the
 - Each job gets its **own email address**. Forward invoices to it, or give it to suppliers.
 - You can also **drag and drop** PDFs or phone photos onto the card.
 - Claude **reads each invoice**: supplier, invoice number, dates, line items, GST and total.
-- Shows **total cost, paid, still to pay and GST** for the job, plus breakdowns by supplier and by type (materials, subcontractor, freight…).
+- **Compares costs against the quoted price**: costs so far, expected margin (turns red if you go over the quote) and a bar split by type. The quoted price is taken from the job in ServiceM8, or you can type it in.
+- **Split view**: invoice list on the left, the selected invoice's lines in the middle, and the original invoice on the right so you can check what was read.
+- Shows **total cost, paid, still to pay and GST** for the job.
 - Tick a whole invoice or single lines as **paid** (by hand). Receipts and invoices stamped PAID are ticked automatically.
 - Catches **duplicates**: if a supplier sends the same invoice twice, it's only counted once.
 - You can fix anything the reader got wrong: description, type, amount, supplier or total.

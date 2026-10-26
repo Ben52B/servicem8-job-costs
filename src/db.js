@@ -95,7 +95,16 @@ function openDb(dataDir) {
   const db = new DatabaseSync(path.join(dataDir, 'jobcosts.sqlite'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate(db);
   return createRepo(db, dataDir);
+}
+
+/** Add columns introduced after the first release to existing databases. */
+function migrate(db) {
+  const cols = db.prepare('PRAGMA table_info(jobs)').all().map((c) => c.name);
+  if (!cols.includes('quote_amount')) db.exec('ALTER TABLE jobs ADD COLUMN quote_amount REAL');
+  // 'servicem8' = taken from the job in ServiceM8, 'manual' = typed in on the card (never overwritten)
+  if (!cols.includes('quote_source')) db.exec('ALTER TABLE jobs ADD COLUMN quote_source TEXT');
 }
 
 function createRepo(db, dataDir) {
@@ -103,7 +112,7 @@ function createRepo(db, dataDir) {
     db,
     filesDir: path.join(dataDir, 'files'),
 
-    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null }) {
+    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null }) {
       let job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       if (!job) {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -122,7 +131,17 @@ function createRepo(db, dataDir) {
             account_uuid = COALESCE(?, account_uuid)
           WHERE job_uuid = ?`).run(jobNumber, jobTitle, accountUUID, jobUUID);
       }
+      if (quoteAmount != null && isFinite(quoteAmount)) {
+        db.prepare(`UPDATE jobs SET quote_amount = ?, quote_source = 'servicem8'
+          WHERE job_uuid = ? AND COALESCE(quote_source, '') != 'manual'`).run(round2(quoteAmount), jobUUID);
+      }
       return db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
+    },
+
+    /** Quoted price typed on the card. null clears it so ServiceM8's value is used again. */
+    setQuote(jobUUID, amount) {
+      if (amount == null) db.prepare('UPDATE jobs SET quote_amount = NULL, quote_source = NULL WHERE job_uuid = ?').run(jobUUID);
+      else db.prepare("UPDATE jobs SET quote_amount = ?, quote_source = 'manual' WHERE job_uuid = ?").run(round2(amount), jobUUID);
     },
 
     getJob(jobUUID) {
@@ -298,6 +317,10 @@ function createRepo(db, dataDir) {
         .map(([name, v]) => ({ name, total: round2(v.total), paid: round2(v.paid), outstanding: round2(v.total - v.paid) }))
         .sort((a, b) => b.total - a.total);
 
+      const quote = job && job.quote_amount != null ? job.quote_amount : null;
+      totals.quote = quote;
+      totals.margin = quote != null ? round2(quote - totals.total) : null;
+      totals.marginPct = quote ? Math.round((quote - totals.total) / quote * 1000) / 10 : null;
       return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory) };
     },
 

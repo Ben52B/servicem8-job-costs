@@ -52,6 +52,8 @@ async function fetchJob(jobUUID, accessToken) {
     return {
       jobNumber: job.generated_job_id ? String(job.generated_job_id) : null,
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
+      // Total of the job's billing lines (the quote / invoice amount) in ServiceM8.
+      quoteAmount: Number(job.total_invoice_amount) > 0 ? Number(job.total_invoice_amount) : null,
     };
   } catch {
     return null;

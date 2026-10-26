@@ -111,7 +111,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   // Local testing without ServiceM8.
   app.get('/dev/job/:jobUUID', (req, res) => {
     if (!config.devMode) return res.status(404).send('Not found');
-    const job = repo.ensureJob({ jobUUID: req.params.jobUUID, jobNumber: req.query.number || null, jobTitle: req.query.title || null });
+    const job = repo.ensureJob({ jobUUID: req.params.jobUUID, jobNumber: req.query.number || null, jobTitle: req.query.title || null,
+      quoteAmount: req.query.quote ? Number(req.query.quote) : null });
     renderCard(res, job, { embedded: false });
   });
 
@@ -123,6 +124,17 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     res.json({ ...summary, inboxAddress: inboxAddress(req.job.inbox_code, config) });
+  });
+
+  api.patch('/job', (req, res) => {
+    const { quote_amount } = req.body || {};
+    if (quote_amount === null || quote_amount === '') repo.setQuote(req.job.job_uuid, null);
+    else {
+      const q = Number(String(quote_amount).replace(/[$,\s]/g, ''));
+      if (!isFinite(q) || q < 0) return res.status(400).json({ error: 'Quoted price must be a number' });
+      repo.setQuote(req.job.job_uuid, q);
+    }
+    res.json({ ok: true });
   });
 
   api.post('/invoices', upload.array('files', 30), (req, res) => {
