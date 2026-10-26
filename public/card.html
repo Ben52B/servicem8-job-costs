@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs</title>
+<!--__SM8_SDK__-->
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1d2433; --muted: #667085; --line: #e4e7ec;
+    --accent: #2563eb; --accent-soft: #e8efff; --ok: #12805c; --ok-soft: #e3f6ee;
+    --warn: #b54708; --warn-soft: #fef0e1; --bad: #c4320a; --bad-soft: #fde8e4;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile.ok .value { color: var(--ok); } .tile.warn .value { color: var(--warn); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > div { height: 100%; background: var(--ok); }
+  .intake { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+  .box h2 { font-size: 13px; margin: 0 0 6px; }
+  .box p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+  .email-row { display: flex; gap: 6px; }
+  .email-row code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 13px; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); cursor: pointer; transition: .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 6px; padding: 6px 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+  button:hover, .btn:hover { border-color: #c9ced6; background: #fafbfc; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.link { border: 0; background: none; color: var(--accent); padding: 4px 6px; }
+  button.danger { color: var(--bad); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 10px; color: var(--muted); }
+  .tabs button.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .inv { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; }
+  .inv-head { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; }
+  .inv-head .who { font-weight: 600; }
+  .inv-head .meta { color: var(--muted); font-size: 12.5px; }
+  .inv-head .amt { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .inv-head .amt small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
+  .pill.paid { background: var(--ok-soft); color: var(--ok); } .pill.part { background: var(--warn-soft); color: var(--warn); }
+  .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: var(--accent); }
+  .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.src { background: var(--bg); color: var(--muted); font-weight: 500; }
+  .inv-body { border-top: 1px solid var(--line); padding: 8px 12px 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.is-paid td.desc { color: var(--muted); text-decoration: line-through; }
+  td input[type=text], td select { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 3px 4px; width: 100%; color: inherit; }
+  td input[type=text]:hover, td select:hover, td input[type=text]:focus, td select:focus { border-color: var(--line); background: #fff; outline: none; }
+  td input.amount { text-align: right; width: 90px; }
+  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--ok); cursor: pointer; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+  .actions .spacer { flex: 1; }
+  .note { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 13px; background: var(--warn-soft); color: var(--warn); }
+  .note.bad { background: var(--bad-soft); color: var(--bad); }
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; background: var(--card); border: 1px dashed var(--line); border-radius: var(--radius); }
+  .chev { color: var(--muted); transition: transform .15s; display: inline-block; }
+  .open .chev { transform: rotate(90deg); }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 640px) {
+    .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .intake { grid-template-columns: minmax(0, 1fr); }
+    .hide-sm { display: none; }
+    .email-row code { white-space: normal; word-break: break-all; }
+    .wrap { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Job Costs</h1>
+    <span class="sub" id="jobLabel"></span>
+  </header>
+
+  <section class="tiles">
+    <div class="tile"><div class="label">Total costs</div><div class="value" id="tTotal">–</div><div class="sub" style="color:var(--muted);font-size:12px" id="tCount"></div></div>
+    <div class="tile ok"><div class="label">Paid</div><div class="value" id="tPaid">–</div><div class="bar"><div id="tBar" style="width:0"></div></div></div>
+    <div class="tile warn"><div class="label">Still to pay</div><div class="value" id="tOut">–</div></div>
+    <div class="tile"><div class="label">GST included</div><div class="value" id="tTax">–</div></div>
+  </section>
+
+  <section class="intake">
+    <div class="box">
+      <h2>Email invoices to this job</h2>
+      <p>Forward supplier invoices here, or give this address to the supplier. PDFs and photos are read automatically.</p>
+      <div class="email-row" id="emailRow"><code id="inbox">Not set up yet</code><button id="copyBtn" type="button">Copy</button></div>
+    </div>
+    <div class="box">
+      <h2>Upload invoices</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden>
+        <strong>Drop PDFs or photos here</strong><br>or click to choose files
+      </label>
+    </div>
+  </section>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="invoices" class="active">Invoices</button>
+    <button data-tab="supplier">By supplier</button>
+    <button data-tab="category">By category</button>
+  </nav>
+  <main id="view"></main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const BOOT = /*__BOOT__*/null;
+const state = { data: null, tab: 'invoices', open: new Set(), pollTimer: null };
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other' };
+
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Request failed');
+  return body;
+}
+
+async function load() {
+  try {
+    state.data = await api('/job');
+    render();
+  } catch (e) { toast(e.message); }
+  clearTimeout(state.pollTimer);
+  if (state.data && state.data.totals.processing > 0) state.pollTimer = setTimeout(load, 3000);
+}
+
+function render() {
+  const d = state.data;
+  const j = d.job || {};
+  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number : '', j.job_title].filter(Boolean).join(' · ');
+  $('#tTotal').textContent = money(d.totals.total);
+  $('#tPaid').textContent = money(d.totals.paid);
+  $('#tOut').textContent = money(d.totals.outstanding);
+  $('#tTax').textContent = money(d.totals.tax);
+  $('#tCount').textContent = d.totals.invoiceCount + ' invoice' + (d.totals.invoiceCount === 1 ? '' : 's') + (d.totals.processing ? ` · ${d.totals.processing} reading…` : '');
+  $('#tBar').style.width = d.totals.total ? Math.min(100, Math.max(0, d.totals.paid / d.totals.total * 100)) + '%' : '0';
+  if (d.inboxAddress) $('#inbox').textContent = d.inboxAddress;
+  else $('#emailRow').innerHTML = '<p style="margin:0">Email-in is not configured on the server (set INBOUND_BASE_ADDRESS or INBOUND_DOMAIN).</p>';
+
+  const view = $('#view');
+  if (state.tab === 'invoices') view.innerHTML = renderInvoices(d.invoices);
+  else view.innerHTML = renderGroup(state.tab === 'supplier' ? d.bySupplier : d.byCategory, state.tab);
+}
+
+function statusPill(inv) {
+  if (inv.status === 'processing') return '<span class="pill proc"><span class="spin"></span> Reading…</span>';
+  if (inv.status === 'error') return '<span class="pill err">Needs attention</span>';
+  return { paid: '<span class="pill paid">Paid</span>', part: '<span class="pill part">Part paid</span>', unpaid: '<span class="pill unpaid">Unpaid</span>' }[inv.payment_state];
+}
+
+function renderInvoices(list) {
+  if (!list.length) return '<div class="empty">No invoices yet.<br>Email them to the address above or drop the files in.</div>';
+  return list.map((inv) => {
+    const open = state.open.has(inv.id);
+    const ready = inv.status === 'ready';
+    const title = ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice');
+    const meta = [
+      inv.invoice_number ? '#' + inv.invoice_number : '',
+      inv.invoice_date ? fmtDate(inv.invoice_date) : '',
+      inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '',
+    ].filter(Boolean).join(' · ');
+    const allPaid = inv.payment_state === 'paid';
+    return `
+    <article class="inv ${open ? 'open' : ''}" data-inv="${inv.id}">
+      <div class="inv-head" data-toggle="${inv.id}">
+        <span>${ready ? `<input type="checkbox" title="Mark whole invoice paid" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}>` : '<span class="chev">▸</span>'}</span>
+        <div>
+          <div class="who">${esc(title)} ${statusPill(inv)} <span class="pill src">${inv.source === 'email' ? 'Emailed' : 'Uploaded'}</span></div>
+          <div class="meta">${esc(meta)}${inv.status === 'error' ? esc(inv.error) : ''}</div>
+        </div>
+        <div class="amt">${ready ? money(inv.total) : ''}${ready && inv.payment_state === 'part' ? `<small>${money(inv.outstanding)} to pay</small>` : ''}</div>
+      </div>
+      ${open ? renderInvoiceBody(inv) : ''}
+    </article>`;
+  }).join('');
+}
+
+function renderInvoiceBody(inv) {
+  const fileUrl = `/api/invoices/${inv.id}/file?t=${encodeURIComponent(BOOT.token)}`;
+  let html = '<div class="inv-body">';
+  if (inv.duplicate_of) html += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
+  if (inv.status === 'error') html += `<div class="note bad">${esc(inv.error)}</div>`;
+  if (inv.items.length) {
+    html += `<table><thead><tr><th style="width:28px">Paid</th><th>Item</th><th class="hide-sm" style="width:130px">Type</th><th class="num hide-sm">Qty</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
+    for (const it of inv.items) {
+      html += `<tr class="${it.paid ? 'is-paid' : ''}">
+        <td><input type="checkbox" data-item-paid="${it.id}" ${it.paid ? 'checked' : ''}></td>
+        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}"></td>
+        <td class="hide-sm"><select data-item-cat="${it.id}">${BOOT.categories.map((c) => `<option value="${c}" ${c === it.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></td>
+        <td class="num hide-sm">${it.quantity != null ? esc(it.quantity) + (it.unit ? ' ' + esc(it.unit) : '') : ''}</td>
+        <td class="num hide-sm"><input type="text" class="amount" inputmode="decimal" value="${(Number(it.line_total) || 0).toFixed(2)}" data-item-amt="${it.id}"></td>
+        <td class="num">${money(it.cost)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    if (inv.subtotal != null || inv.tax != null) {
+      html += `<div class="meta" style="text-align:right;color:var(--muted);margin-top:6px">${inv.subtotal != null ? 'Subtotal ' + money(inv.subtotal) + ' · ' : ''}${inv.tax != null ? 'GST ' + money(inv.tax) + ' · ' : ''}<strong style="color:var(--ink)">Total ${money(inv.total)}</strong></div>`;
+    }
+  }
+  if (inv.notes) html += `<div class="note">${esc(inv.notes)}</div>`;
+  if (inv.email_from) html += `<div class="meta" style="margin-top:8px;color:var(--muted)">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
+  html += `<div class="actions">
+      ${inv.file_path ? `<a class="btn" href="${fileUrl}" target="_blank" rel="noopener">View file</a>` : ''}
+      <button data-reread="${inv.id}">Read again</button>
+      ${inv.status === 'ready' ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
+      <span class="spacer"></span>
+      <button class="danger link" data-delete="${inv.id}">Remove</button>
+    </div></div>`;
+  return html;
+}
+
+function renderGroup(rows, kind) {
+  if (!rows.length) return '<div class="empty">Nothing to show yet.</div>';
+  const label = (n) => kind === 'category' ? (CAT_LABEL[n] || n) : n;
+  const total = rows.reduce((s, r) => s + r.total, 0);
+  return `<div class="box"><table><thead><tr><th>${kind === 'supplier' ? 'Supplier' : 'Type'}</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Still to pay</th><th class="num hide-sm">Share</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(label(r.name))}</td><td class="num">${money(r.total)}</td><td class="num" style="color:var(--ok)">${money(r.paid)}</td><td class="num" style="color:${r.outstanding > 0.004 ? 'var(--warn)' : 'var(--muted)'}">${money(r.outstanding)}</td><td class="num hide-sm">${total ? Math.round(r.total / total * 100) : 0}%</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+// ---------- events ----------
+$('#tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]'); if (!b) return;
+  state.tab = b.dataset.tab;
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
+  render();
+});
+
+$('#view').addEventListener('click', async (e) => {
+  const t = e.target;
+  if (t.matches('input, select, a, button')) {
+    if (t.dataset.reread) { await api(`/invoices/${t.dataset.reread}/reanalyze`, { method: 'POST' }).catch((x) => toast(x.message)); toast('Reading again…'); return load(); }
+    if (t.dataset.delete) {
+      if (!confirm('Remove this invoice from the job?')) return;
+      await api(`/invoices/${t.dataset.delete}`, { method: 'DELETE' }).catch((x) => toast(x.message)); state.open.delete(Number(t.dataset.delete)); return load();
+    }
+    if (t.dataset.edit) {
+      const inv = state.data.invoices.find((i) => i.id === Number(t.dataset.edit));
+      const supplier = prompt('Supplier', inv.supplier || ''); if (supplier === null) return;
+      const number = prompt('Invoice number', inv.invoice_number || ''); if (number === null) return;
+      const total = prompt('Total including GST', inv.total ?? ''); if (total === null) return;
+      await api(`/invoices/${inv.id}`, { method: 'PATCH', body: JSON.stringify({ supplier, invoice_number: number, total: total.replace(/[$,\s]/g, '') }) }).catch((x) => toast(x.message));
+      return load();
+    }
+    return;
+  }
+  const head = t.closest('[data-toggle]');
+  if (head) { const id = Number(head.dataset.toggle); state.open.has(id) ? state.open.delete(id) : state.open.add(id); render(); }
+});
+
+$('#view').addEventListener('change', async (e) => {
+  const t = e.target;
+  try {
+    if (t.dataset.invPaid) { await api(`/invoices/${t.dataset.invPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
+    else if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
+    else if (t.dataset.itemDesc) await api(`/items/${t.dataset.itemDesc}`, { method: 'PATCH', body: JSON.stringify({ description: t.value }) });
+    else if (t.dataset.itemCat) await api(`/items/${t.dataset.itemCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) });
+    else if (t.dataset.itemAmt) await api(`/items/${t.dataset.itemAmt}`, { method: 'PATCH', body: JSON.stringify({ line_total: t.value.replace(/[$,\s]/g, '') }) });
+    else return;
+  } catch (x) { toast(x.message); }
+  load();
+});
+
+$('#copyBtn').addEventListener('click', async () => {
+  const text = $('#inbox').textContent;
+  try { await navigator.clipboard.writeText(text); }
+  catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
+  toast('Email address copied');
+});
+
+async function uploadFiles(files) {
+  if (!files.length) return;
+  const fd = new FormData();
+  [...files].forEach((f) => fd.append('files', f));
+  toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
+  try { await api('/invoices', { method: 'POST', body: fd }); } catch (x) { toast(x.message); }
+  load();
+}
+const drop = $('#drop');
+$('#fileInput').addEventListener('change', (e) => { uploadFiles(e.target.files); e.target.value = ''; });
+['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
+
+if (BOOT.embedded && window.SMClient) {
+  try { window.SMClient.init().resizeWindow(1000, 760); } catch (e) { /* not inside ServiceM8 */ }
+}
+load();
+</script>
+</body>
+</html>
