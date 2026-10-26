@@ -57,6 +57,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
 function friendlyError(e) {
   const status = e && e.status;
   if (status === 401) return 'Invoice reading is not set up (check ANTHROPIC_API_KEY).';
+  if (/credit balance/i.test(e.message || '')) return 'Your Claude API account is out of credit. Add credit at console.anthropic.com (Billing), then click "Read again".';
   if (status === 429 || status === 529 || status >= 500) return 'Invoice reader is busy right now. Click "Read again" in a minute.';
   return e.message || 'Could not read this invoice.';
 }
