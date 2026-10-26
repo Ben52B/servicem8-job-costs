@@ -7,7 +7,7 @@ One place for every supplier invoice on a job. For a garage door job, that's the
 - You can also **drag and drop** PDFs or phone photos onto the card.
 - Claude **reads each invoice**: supplier, invoice number, dates, line items, GST and total.
 - Shows **total cost, paid, still to pay and GST** for the job, plus breakdowns by supplier and by type (materials, subcontractor, freight…).
-- Tick a whole invoice or single lines as **paid**. Receipts and invoices stamped PAID are ticked automatically.
+- Tick a whole invoice or single lines as **paid** (by hand). Receipts and invoices stamped PAID are ticked automatically.
 - Catches **duplicates**: if a supplier sends the same invoice twice, it's only counted once.
 - You can fix anything the reader got wrong: description, type, amount, supplier or total.
 
@@ -104,8 +104,22 @@ npm run dev      # auto-restart on changes
 | `src/servicem8.js` | Verifies ServiceM8's signed request; looks up the job number |
 | `public/card.html` | The screen shown inside ServiceM8 |
 
-## Possible next steps
+## Later (not built yet)
 
-- Copy each invoice into the job's **Attachments** in ServiceM8, and post the cost total as a job note. This needs ServiceM8 OAuth.
+Paid status is ticked by hand on the card. That's intentional for now.
+
+### Split bulk invoices across jobs
+
+Some invoices are bulk stock purchases, e.g. one invoice for 10 motors. The idea:
+
+- Mark a line on an invoice as **stock** instead of charging it all to one job.
+- On a job's card, **take from stock**: pick the invoice line and how many (e.g. 1 motor). The job is charged 1 × the unit cost incl. GST.
+- The invoice line then shows **9 left**. Other jobs can only take from what's left, so you can't use the same motor twice.
+- A stock view lists every bulk line with how many were bought, used (and on which jobs) and remaining.
+- Cost totals stay correct: the bulk invoice isn't counted against any one job; each job only carries what it took.
+
+### Other ideas
+
 - Pull **paid status from Xero/MYOB** instead of ticking it by hand.
+- Copy each invoice into the job's **Attachments** in ServiceM8, and post the cost total as a job note. This needs ServiceM8 OAuth.
 - Show **profit**: compare costs against the job's quoted/invoiced amount from ServiceM8.
