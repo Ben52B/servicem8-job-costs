@@ -29,7 +29,7 @@ You need any Node.js 22.13+ host with HTTPS and a **persistent disk**, for examp
 
 ```bash
 cd servicem8-job-costs
-npm install
+npm ci                   # installs exact versions; use this instead of "npm install"
 cp .env.example .env     # fill it in (see below)
 npm start
 ```
