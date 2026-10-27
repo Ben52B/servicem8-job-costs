@@ -10,6 +10,7 @@
     --bg: #f5f6f8; --card: #fff; --ink: #1f2933; --muted: #7b8794; --line: #e4e7eb;
     --accent: #4a86e8; --accent-soft: #eaf1fd; --ok: #2e9e5b; --ok-ink: #17784a; --ok-soft: #e3f6ec;
     --warn: #b45309; --warn-soft: #fff1e0; --bad: #c2410c; --bad-soft: #fde8e4; --radius: 8px;
+    --mk: #be123c; --mk-soft: #ffe4e8; --mk-row: #fff6f7;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -43,6 +44,15 @@
   .bar .quote-mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--ink); border-radius: 2px; }
   .s-foot { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
   .s-foot b { color: var(--ink); font-weight: 600; }
+  .compare { border-collapse: collapse; margin: 10px 0 2px; width: auto; }
+  .compare th { font-weight: 500; padding: 2px 18px 2px 0; border: 0; font-size: 11.5px; }
+  .compare td { padding: 3px 18px 3px 0; border: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .compare td:first-child { font-size: 12.5px; color: var(--muted); }
+  .compare tr.actual td { font-weight: 700; font-size: 16px; }
+  .compare tr.actual td:first-child { font-size: 12.5px; color: var(--ink); }
+  .compare .good { color: var(--ok-ink); } .compare .bad { color: var(--bad); }
+  .screwup-line { display: inline-flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 4px; padding: 5px 9px; border-radius: 6px; background: var(--mk-soft); color: var(--mk); font-size: 12.5px; }
+  .screwup-line b { font-weight: 700; }
   .legend div { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
   .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
   .legend span:nth-child(2) { flex: 1; }
@@ -59,6 +69,7 @@
   .inv .r1 b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .inv .r2 { margin-top: 2px; font-size: 12px; color: var(--muted); }
   .inv .r2 span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inv .r2 > span:last-child { display: flex; gap: 4px; flex-shrink: 0; }
   .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
   .pill.paid { background: var(--ok-soft); color: var(--ok-ink); } .pill.part { background: var(--warn-soft); color: var(--warn); }
   .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: #2a5db0; }
@@ -76,6 +87,13 @@
   th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
   td { padding: 5px 4px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
   tr.is-paid td.desc input { color: var(--muted); text-decoration: line-through; }
+  tr.is-mistake td { background: var(--mk-row); }
+  .mk-link { border: 0; background: none; color: var(--muted); font-size: 11.5px; padding: 0 4px; opacity: .65; }
+  .mk-link:hover { color: var(--mk); opacity: 1; background: none; }
+  select.mk-select { width: auto !important; max-width: 100%; font-size: 11.5px !important; padding: 1px 4px !important; margin: 1px 0 0 2px; border: 1px solid #f3b4c0 !important; border-radius: 10px !important; background: var(--mk-soft) !important; color: var(--mk) !important; font-weight: 600; }
+  .pill.mk { background: var(--mk-soft); color: var(--mk); }
+  select.inv-mk { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 6px; background: #fff; color: var(--ink); max-width: 230px; }
+  header a.btn { margin-left: auto; }
   td input[type=text], td select { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 3px 4px; width: 100%; color: inherit; }
   td input[type=text]:hover, td select:hover, td input[type=text]:focus, td select:focus { border-color: var(--line); background: #fff; outline: none; }
   td input.amount { text-align: right; width: 76px; }
@@ -124,7 +142,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Job Costs</h1><span class="sub" id="jobLabel"></span></header>
+  <header><h1>Job Costs</h1><span class="sub" id="jobLabel"></span><a class="btn" id="reportsLink" target="_blank" rel="noopener">Reports ↗</a></header>
   <section class="panel summary" id="summary"></section>
   <section class="split">
     <aside>
@@ -144,7 +162,7 @@
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
+const state = { mkOpen: null, data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
@@ -187,33 +205,52 @@ function render() {
   renderPreview();
 }
 
-// ---------- Costs vs quoted price ----------
+// ---------- Costs vs quoted price, with and without screw-ups ----------
+const REASON_LABEL = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
+const MK_COLOR = '#be123c';
+
 function renderSummary() {
   const t = state.data.totals;
-  const cats = state.data.byCategory.filter((c) => c.total > 0);
   const hasQuote = t.quote != null;
   const over = hasQuote && t.total > t.quote;
+
+  // Bar: normal costs by type, then screw-ups in red.
+  const clean = {};
+  for (const inv of state.data.invoices) {
+    if (inv.status !== 'ready' || inv.duplicate_of) continue;
+    for (const it of inv.items) if (!it.mistake_reason) clean[it.category] = (clean[it.category] || 0) + it.cost;
+  }
+  const cats = Object.entries(clean).filter(([, v]) => v > 0.004).sort((x, y) => y[1] - x[1]);
   const scale = Math.max(t.quote || 0, t.total) || 1;
-  const segs = cats.map((c) => `<span title="${esc(CAT_LABEL[c.name] || c.name)}: ${money(c.total)}" style="width:${c.total / scale * 100}%;background:${CAT_COLOR[c.name] || '#64748b'}"></span>`).join('');
+  const segs = cats.map(([c, v]) => `<span title="${esc(CAT_LABEL[c] || c)}: ${money(v)}" style="width:${v / scale * 100}%;background:${CAT_COLOR[c] || '#64748b'}"></span>`).join('')
+    + (t.mistakes > 0 ? `<span title="Screw-ups: ${money(t.mistakes)}" style="width:${t.mistakes / scale * 100}%;background:repeating-linear-gradient(135deg,${MK_COLOR} 0 6px,#e11d48 6px 12px)"></span>` : '');
   const mark = over ? `<i class="quote-mark" style="left:calc(${t.quote / scale * 100}% - 1px)" title="Quoted price ${money(t.quote)}"></i>` : '';
 
   let quotePart;
   if (state.editQuote || !hasQuote) {
-    quotePart = `<span class="quote-edit">${hasQuote ? '' : '<span class="muted">Quoted price</span>'}<input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640.00" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="primary" data-save-quote>Save</button>${state.editQuote ? '<button data-cancel-quote>Cancel</button>' : ''}</span>`;
+    quotePart = `<span class="quote-edit"><span class="muted">Quoted price</span><input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640.00" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="primary" data-save-quote>Save</button>${state.editQuote ? '<button data-cancel-quote>Cancel</button>' : ''}</span>`;
   } else {
     const src = state.data.job.quote_source === 'manual' ? 'typed in' : 'from ServiceM8';
-    quotePart = `<small>of ${money(t.quote)} quoted</small> <button class="link" data-edit-quote title="Quoted price ${src}">edit</button>`;
+    quotePart = `<span class="muted">Quoted price</span> <b>${money(t.quote)}</b> <button class="link" data-edit-quote title="Quoted price ${src}">edit</button>`;
   }
-  const marginHtml = hasQuote
-    ? `<div class="s-label">${over ? 'Over the quote by' : 'Expected margin'}</div><div class="s-big ${over ? 'bad' : 'good'}">${money(Math.abs(t.margin))}${t.quote ? ` · ${Math.abs(t.marginPct)}%` : ''}</div>`
-    : `<div class="s-label">Expected margin</div><div class="muted">Add the quoted price (incl. GST) to see it</div>`;
+  const profitCell = (m, pct) => !hasQuote ? '<td class="muted">—</td><td class="muted">—</td>'
+    : `<td class="${m < 0 ? 'bad' : 'good'}">${m < 0 ? '−' : ''}${money(Math.abs(m))}</td><td class="${m < 0 ? 'bad' : 'good'}">${pct}%</td>`;
+  const hasMk = t.mistakes > 0;
+  const lostPts = hasQuote && t.quote ? Math.round(t.mistakes / t.quote * 1000) / 10 : null;
 
   $('#summary').innerHTML = `
     <div>
-      <div class="s-top">
-        <div><div class="s-label">Costs so far${hasQuote ? ' vs quoted price' : ''} (incl. GST)</div><div class="s-big">${money(t.total)} ${quotePart}</div></div>
-        <div class="s-margin">${marginHtml}</div>
-      </div>
+      <div class="s-top"><div>${quotePart}</div>
+        <div class="muted" style="font-size:12px">All amounts incl. GST</div></div>
+      <table class="compare">
+        <thead><tr><th></th><th class="muted">Costs</th><th class="muted">Profit</th><th class="muted">Margin</th></tr></thead>
+        <tbody>
+          <tr class="actual"><td>Actual</td><td>${money(t.total)}</td>${profitCell(t.margin, t.marginPct)}</tr>
+          ${hasMk ? `<tr><td>Without screw-ups</td><td>${money(t.cleanTotal)}</td>${profitCell(t.cleanMargin, t.cleanMarginPct)}</tr>` : ''}
+        </tbody>
+      </table>
+      ${!hasQuote ? '<div class="muted" style="font-size:12px">Add the quoted price to see profit and margin.</div>' : ''}
+      ${hasMk ? `<div class="screwup-line">⚠ <span>Screw-ups <b>${money(t.mistakes)}</b></span><span><b>${t.mistakePct}%</b> of costs</span>${lostPts != null ? `<span>cost you <b>${lostPts}</b> margin points</span>` : ''}<span>${state.data.byReason.map((r) => `${esc(REASON_LABEL[r.name] || r.name)} ${money(r.total)}`).join(' · ')}</span></div>` : ''}
       <div class="bar">${segs}${mark}</div>
       <div class="s-foot">
         <span>Paid <b style="color:var(--ok-ink)">${money(t.paid)}</b></span>
@@ -223,7 +260,9 @@ function renderSummary() {
         ${hasQuote && !over ? '<span>Grey = left over from the quote</span>' : ''}${over ? '<span>Black line = quoted price</span>' : ''}
       </div>
     </div>
-    <div class="legend">${cats.length ? cats.map((c) => `<div><i style="background:${CAT_COLOR[c.name] || '#64748b'}"></i><span>${esc(CAT_LABEL[c.name] || c.name)}</span><span class="num">${money(c.total)}</span></div>`).join('') : '<div class="muted">Costs by type will show here.</div>'}</div>`;
+    <div class="legend">${cats.length || hasMk ? cats.map(([c, v]) => `<div><i style="background:${CAT_COLOR[c] || '#64748b'}"></i><span>${esc(CAT_LABEL[c] || c)}</span><span class="num">${money(v)}</span></div>`).join('')
+      + (hasMk ? `<div style="color:var(--mk)"><i style="background:${MK_COLOR}"></i><span>Screw-ups</span><span class="num">${money(t.mistakes)}</span></div>` : '')
+      : '<div class="muted">Costs by type will show here.</div>'}</div>`;
 }
 
 // ---------- Invoice list ----------
@@ -242,7 +281,7 @@ function renderList() {
     const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || (inv.source === 'email' ? 'Emailed' : 'Uploaded');
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b><span class="num">${ready ? money(inv.total) : ''}</span></div>
-      <div class="r2"><span>${esc(sub)}</span>${statusPill(inv)}</div>
+      <div class="r2"><span>${esc(sub)}</span><span>${inv.mistake_state !== 'none' && inv.mistake_state ? '<span class="pill mk" title="Screw-up">⚠</span> ' : ''}${statusPill(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="panel empty">No invoices yet.</div>';
 
@@ -268,9 +307,14 @@ function renderDetail() {
     h += `<table><thead><tr><th style="width:30px">Paid</th><th>Item</th><th class="hide-sm" style="width:112px">Type</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
     for (const it of inv.items) {
       const qty = it.quantity != null ? `Qty ${it.quantity}${it.unit ? ' ' + it.unit : ''}` : '';
-      h += `<tr class="${it.paid ? 'is-paid' : ''}">
+      const mk = it.mistake_reason
+        ? `<select class="mk-select" data-item-mk="${it.id}" title="Screw-up reason"><option value="">✕ Not a screw-up</option>${BOOT.reasons.map((r) => `<option value="${r.code}" ${r.code === it.mistake_reason ? 'selected' : ''}>⚠ ${esc(r.label)}</option>`).join('')}</select>`
+        : state.mkOpen === it.id
+          ? `<select class="mk-select" data-item-mk="${it.id}" data-autofocus><option value="">Why was this a screw-up?</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}</select> <button class="mk-link" data-mk-cancel>cancel</button>`
+          : `<button class="mk-link" data-mk-open="${it.id}">⚠ Mark as screw-up</button>`;
+      h += `<tr class="${it.paid ? 'is-paid' : ''} ${it.mistake_reason ? 'is-mistake' : ''}">
         <td><input type="checkbox" data-item-paid="${it.id}" ${it.paid ? 'checked' : ''}></td>
-        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}" title="${esc(qty)}"></td>
+        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}" title="${esc(qty)}"><div>${mk}</div></td>
         <td class="hide-sm"><select data-item-cat="${it.id}">${BOOT.categories.map((c) => `<option value="${c}" ${c === it.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></td>
         <td class="num hide-sm"><input type="text" class="amount" inputmode="decimal" value="${(Number(it.line_total) || 0).toFixed(2)}" data-item-amt="${it.id}"></td>
         <td class="num">${money(it.cost)}</td></tr>`;
@@ -283,6 +327,7 @@ function renderDetail() {
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
       <button data-reread="${inv.id}">Read again</button>
+      ${ready && inv.items.length ? `<select class="inv-mk" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
       <span class="spacer"></span>
       <button class="danger link" data-ask-delete="${inv.id}">Remove</button>
@@ -336,6 +381,8 @@ document.addEventListener('click', async (e) => {
     if (ds.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return renderDetail(); }
     if (ds.delete) { await api(`/invoices/${ds.delete}`, { method: 'DELETE' }); toast('Invoice removed'); state.confirmDel = null; state.selected = null; return load(); }
     if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
+    if (ds.mkOpen) { state.mkOpen = Number(ds.mkOpen); renderDetail(); const sel = $('#detail [data-autofocus]'); sel?.focus(); try { sel?.showPicker(); } catch {} return; }
+    if (ds.mkCancel !== undefined) { state.mkOpen = null; return renderDetail(); }
   } catch (x) { toast(x.message); load(); }
 });
 
@@ -368,6 +415,12 @@ $('#detail').addEventListener('change', async (e) => {
     if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
     else if (t.dataset.itemDesc) await api(`/items/${t.dataset.itemDesc}`, { method: 'PATCH', body: JSON.stringify({ description: t.value }) });
     else if (t.dataset.itemCat) await api(`/items/${t.dataset.itemCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) });
+    else if (t.dataset.itemMk) { await api(`/items/${t.dataset.itemMk}`, { method: 'PATCH', body: JSON.stringify({ mistake_reason: t.value || null }) }); state.mkOpen = null; toast(t.value ? 'Tagged as screw-up' : 'Screw-up tag removed'); }
+    else if (t.dataset.invMk) {
+      if (t.value === '__') return;
+      await api(`/invoices/${t.dataset.invMk}`, { method: 'PATCH', body: JSON.stringify({ mistake_reason: t.value || null }) });
+      toast(t.value ? 'Whole invoice tagged as screw-up' : 'Screw-up tags cleared');
+    }
     else if (t.dataset.itemAmt) await api(`/items/${t.dataset.itemAmt}`, { method: 'PATCH', body: JSON.stringify({ line_total: t.value.replace(/[$,\s]/g, '') }) });
     else return;
   } catch (x) { toast(x.message); }
@@ -388,6 +441,7 @@ $('#fileInput').addEventListener('change', (e) => { uploadFiles(e.target.files);
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
 
+$('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 if (BOOT.embedded && window.SMClient) {
   try { window.SMClient.init().resizeWindow(1300, 820); } catch (e) { /* not inside ServiceM8 */ }
 }

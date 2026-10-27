@@ -9,6 +9,8 @@ One place for every supplier invoice on a job. For a garage door job, that's the
 - **Compares costs against the quoted price**: costs so far, expected margin (turns red if you go over the quote) and a bar split by type. The quoted price is taken from the job in ServiceM8, or you can type it in.
 - **Split view**: invoice list on the left, the selected invoice's lines in the middle, and the original invoice on the right so you can check what was read.
 - Shows **total cost, paid, still to pay and GST** for the job.
+- **Screw-up tags**: mark a line, or a whole invoice, as a screw-up and pick a reason from a fixed list (wrong measurement, wrong size, wrong colour…). The job then shows two sets of numbers: **actual** costs/profit, and **without screw-ups** (what the job should cost next time), plus how much the screw-ups cost as a % of costs and in margin points. The reason list is in `src/mistakes.js`.
+- **Reports** (button on the card): totals across all jobs for any date range: total costs, screw-ups ($ and % of costs), real profit vs profit without screw-ups, screw-ups by reason and by supplier, every job, and every screw-up line, which you can download as CSV.
 - Tick a whole invoice or single lines as **paid** (by hand). Receipts and invoices stamped PAID are ticked automatically.
 - Catches **duplicates**: if a supplier sends the same invoice twice, it's only counted once.
 - You can fix anything the reader got wrong: description, type, amount, supplier or total.

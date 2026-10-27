@@ -8,9 +8,19 @@ const jwt = require('jsonwebtoken');
 const { verifyEvent, fetchJob } = require('./servicem8');
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
+const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 
 const MAX_FILE_MB = 25;
 const CARD_HTML = fs.readFileSync(path.join(__dirname, '..', 'public', 'card.html'), 'utf8');
+const REPORT_HTML = fs.readFileSync(path.join(__dirname, '..', 'public', 'report.html'), 'utf8');
+
+/** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
+function parseReason(value) {
+  if (value === undefined) return { skip: true };
+  if (value === null || value === '') return { reason: null };
+  if (REASON_CODES.has(value)) return { reason: value };
+  return { error: 'Unknown screw-up reason' };
+}
 
 function safeName(name) {
   return String(name || 'file').replace(/[^\w.\- ]+/g, '_').slice(-120) || 'file';
@@ -51,6 +61,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
       token: sessionToken(job.job_uuid),
       embedded,
       categories: CATEGORIES,
+      reasons: MISTAKE_REASONS,
     };
     const html = CARD_HTML
       .replace('/*__BOOT__*/null', JSON.stringify(boot).replace(/</g, '\\u003c'))
@@ -106,6 +117,19 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
     const info = await fetchJobImpl(event.jobUUID, event.accessToken);
     const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(info || {}) });
     renderCard(res, job, { embedded: true });
+  });
+
+  // Reports page (opened from the card, uses the card's session).
+  app.get('/report', (req, res) => {
+    try {
+      const { jobUUID } = jwt.verify(String(req.query.t || ''), config.sessionSecret);
+      if (!repo.getJob(jobUUID)) throw new Error('unknown job');
+    } catch {
+      return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and click Reports again.</p>');
+    }
+    const boot = { token: String(req.query.t), reasons: MISTAKE_REASONS };
+    res.set('Cache-Control', 'no-store').type('html')
+      .send(REPORT_HTML.replace('/*__BOOT__*/null', JSON.stringify(boot).replace(/</g, '\\u003c')));
   });
 
   // Local testing without ServiceM8.
@@ -166,11 +190,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   api.patch('/invoices/:id', (req, res) => {
     const inv = ownInvoice(req, res);
     if (!inv) return;
-    const { paid, supplier, invoice_number, total } = req.body || {};
+    const { paid, supplier, invoice_number, total, mistake_reason } = req.body || {};
+    const m = parseReason(mistake_reason);
+    if (m.error) return res.status(400).json({ error: m.error });
+    const t = total === undefined || total === '' ? undefined : Number(total);
+    if (t !== undefined && !isFinite(t)) return res.status(400).json({ error: 'Total must be a number' });
     if (typeof paid === 'boolean') repo.setInvoicePaid(inv.id, paid);
-    if (supplier !== undefined || invoice_number !== undefined || total !== undefined) {
-      const t = total === undefined || total === '' ? undefined : Number(total);
-      if (t !== undefined && !isFinite(t)) return res.status(400).json({ error: 'Total must be a number' });
+    if (!m.skip) repo.setInvoiceMistake(inv.id, m.reason);
+    if (supplier !== undefined || invoice_number !== undefined || t !== undefined) {
       repo.updateInvoice(inv.id, { supplier, invoice_number, total: t });
     }
     res.json({ ok: true });
@@ -186,15 +213,24 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   api.patch('/items/:id', (req, res) => {
     const item = repo.getItem(Number(req.params.id));
     if (!item || item.job_uuid !== req.job.job_uuid) return res.status(404).json({ error: 'Not found' });
-    const { paid, description, category, line_total } = req.body || {};
-    if (typeof paid === 'boolean') repo.setItemPaid(item.id, paid);
+    const { paid, description, category, line_total, mistake_reason } = req.body || {};
     if (category !== undefined && !CATEGORIES.includes(category)) return res.status(400).json({ error: 'Unknown category' });
-    if (description !== undefined || category !== undefined || line_total !== undefined) {
-      const lt = line_total === undefined || line_total === '' ? undefined : Number(line_total);
-      if (lt !== undefined && !isFinite(lt)) return res.status(400).json({ error: 'Amount must be a number' });
+    const m = parseReason(mistake_reason);
+    if (m.error) return res.status(400).json({ error: m.error });
+    const lt = line_total === undefined || line_total === '' ? undefined : Number(line_total);
+    if (lt !== undefined && !isFinite(lt)) return res.status(400).json({ error: 'Amount must be a number' });
+    if (typeof paid === 'boolean') repo.setItemPaid(item.id, paid);
+    if (!m.skip) repo.setItemMistake(item.id, m.reason);
+    if (description !== undefined || category !== undefined || lt !== undefined) {
       repo.updateItem(item.id, { description, category, line_total: lt });
     }
     res.json({ ok: true });
+  });
+
+  // Reports across all jobs of the same ServiceM8 account as the job the card was opened from.
+  api.get('/report', (req, res) => {
+    const date = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    res.json(repo.getReport(req.job.account_uuid ?? null, { from: date(req.query.from), to: date(req.query.to) }));
   });
 
   app.use('/api', api);

@@ -206,3 +206,71 @@ test('quoted price comes from ServiceM8, can be overridden, and drives the margi
 
   assert.equal((await api(token, '/job', { method: 'PATCH', json: { quote_amount: 'abc' } })).status, 400);
 });
+
+test('screw-up tags: per line and whole invoice, two sets of totals, kept on re-read', async () => {
+  const token = await openCard('job-mk');
+  const fd = new FormData();
+  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
+  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'receipt.pdf');
+  await api(token, '/invoices', { method: 'POST', body: fd });
+  await processor.idle();
+
+  let job = await (await api(token, '/job')).json();
+  const door = job.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
+  const receipt = job.invoices.find((i) => i.supplier === 'Bunnings');
+  const motor = door.items.find((i) => i.description === 'Motor');
+
+  assert.equal((await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'made_up' } })).status, 400);
+  assert.equal((await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } })).status, 200);
+  assert.equal((await api(token, `/invoices/${receipt.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_colour' } })).status, 200);
+
+  job = await (await api(token, '/job')).json();
+  // quote 5000 (from fake ServiceM8); costs 3300 + 55; screw-ups: motor 990 + receipt 55
+  assert.equal(job.totals.total, 3355);
+  assert.equal(job.totals.mistakes, 1045);
+  assert.equal(job.totals.cleanTotal, 2310);
+  assert.equal(job.totals.margin, 1645);
+  assert.equal(job.totals.cleanMargin, 2690);
+  assert.equal(job.totals.mistakePct, 31.1);
+  assert.deepEqual(job.byReason.map((r) => [r.name, r.total, r.count]), [['wrong_size', 990, 1], ['wrong_colour', 55, 1]]);
+  assert.equal(job.invoices.find((i) => i.id === door.id).mistake_state, 'part');
+  assert.equal(job.invoices.find((i) => i.id === receipt.id).mistake_state, 'all');
+
+  // Reading the invoice again keeps the tag (and paid ticks)
+  await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { paid: true } });
+  await api(token, `/invoices/${door.id}/reanalyze`, { method: 'POST' });
+  await processor.idle();
+  job = await (await api(token, '/job')).json();
+  const motorAgain = job.invoices.find((i) => i.id === door.id).items.find((i) => i.description === 'Motor');
+  assert.equal(motorAgain.mistake_reason, 'wrong_size');
+  assert.equal(motorAgain.paid, true);
+
+  // Clearing
+  await api(token, `/invoices/${receipt.id}`, { method: 'PATCH', json: { mistake_reason: null } });
+  job = await (await api(token, '/job')).json();
+  assert.equal(job.totals.mistakes, 990);
+});
+
+test('reports add up screw-ups and profit across jobs of the same account only', async () => {
+  const token = await openCard('job-mk');
+  // A job in a different ServiceM8 account must never show up
+  repo.ensureJob({ jobUUID: 'other-account-job', accountUUID: 'acc-2', quoteAmount: 100 });
+  const other = repo.createInvoice({ jobUUID: 'other-account-job', source: 'upload', fileName: 'x.pdf', filePath: 'x', mimeType: 'application/pdf' });
+  repo.saveExtraction(other.id, { supplier_name: 'Elsewhere', total: 999, items: [{ description: 'Secret', category: 'materials', line_total: 999 }] });
+  repo.db.prepare("UPDATE items SET mistake_reason = 'other' WHERE invoice_id = ?").run(other.id);
+
+  const rep = await (await api(token, '/report')).json();
+  assert.ok(!rep.jobs.some((j) => j.job_uuid === 'other-account-job'));
+  assert.ok(!rep.mistakeItems.some((i) => i.description === 'Secret'));
+  const mkJob = rep.jobs.find((j) => j.job_uuid === 'job-mk');
+  assert.equal(mkJob.mistakes, 990);
+  assert.equal(rep.totals.mistakes, rep.jobs.reduce((s, j) => s + j.mistakes, 0));
+  assert.equal(rep.byReason[0].reason, 'wrong_size');
+  assert.equal(rep.totals.cleanProfit - rep.totals.profit, rep.jobs.filter((j) => j.quote != null).reduce((s, j) => s + j.mistakes, 0));
+
+  // Date filter (jobs by first invoice date) and the page itself
+  const none = await (await api(token, '/report?from=2099-01-01')).json();
+  assert.equal(none.totals.jobs, 0);
+  assert.equal((await fetch(`${base}/report?t=${token}`)).status, 200);
+  assert.equal((await fetch(`${base}/report?t=bad`)).status, 401);
+});

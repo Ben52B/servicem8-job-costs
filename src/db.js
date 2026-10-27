@@ -105,6 +105,10 @@ function migrate(db) {
   if (!cols.includes('quote_amount')) db.exec('ALTER TABLE jobs ADD COLUMN quote_amount REAL');
   // 'servicem8' = taken from the job in ServiceM8, 'manual' = typed in on the card (never overwritten)
   if (!cols.includes('quote_source')) db.exec('ALTER TABLE jobs ADD COLUMN quote_source TEXT');
+  const itemCols = db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
+  // Screw-up tag: a reason code from src/mistakes.js, or NULL when the line is not a mistake.
+  if (!itemCols.includes('mistake_reason')) db.exec('ALTER TABLE items ADD COLUMN mistake_reason TEXT');
+  if (!itemCols.includes('mistake_at')) db.exec('ALTER TABLE items ADD COLUMN mistake_at TEXT');
 }
 
 function createRepo(db, dataDir) {
@@ -184,6 +188,10 @@ function createRepo(db, dataDir) {
       const costs = allocateCosts(items, total);
       const alreadyPaid = x.payment_status === 'paid';
 
+      // Keep ticks and screw-up tags from an earlier reading of the same lines.
+      const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const before = new Map(db.prepare('SELECT * FROM items WHERE invoice_id = ?').all(id).map((o) => [norm(o.description), o]));
+
       db.exec('BEGIN');
       try {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
@@ -196,12 +204,15 @@ function createRepo(db, dataDir) {
         );
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
         const ins = db.prepare(`INSERT INTO items
-          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at, mistake_reason, mistake_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        const now = new Date().toISOString();
         items.forEach((it, i) => {
+          const old = before.get(norm(it.description));
+          const paid = alreadyPaid || !!(old && old.paid);
           ins.run(id, i, String(it.description).slice(0, 500), it.category || 'other',
             it.quantity ?? null, it.unit || null, it.unit_price ?? null, round2(it.line_total), costs[i],
-            alreadyPaid ? 1 : 0, alreadyPaid ? new Date().toISOString() : null);
+            paid ? 1 : 0, paid ? (old?.paid_at || now) : null, old?.mistake_reason || null, old?.mistake_at || null);
         });
         db.exec('COMMIT');
       } catch (e) {
@@ -231,6 +242,17 @@ function createRepo(db, dataDir) {
     setInvoicePaid(id, paid) {
       db.prepare('UPDATE items SET paid = ?, paid_at = ? WHERE invoice_id = ?')
         .run(paid ? 1 : 0, paid ? new Date().toISOString() : null, id);
+    },
+
+    /** Tag a line as a screw-up (reason code) or clear it (null). */
+    setItemMistake(id, reason) {
+      db.prepare('UPDATE items SET mistake_reason = ?, mistake_at = ? WHERE id = ?')
+        .run(reason || null, reason ? new Date().toISOString() : null, id);
+    },
+
+    setInvoiceMistake(id, reason) {
+      db.prepare('UPDATE items SET mistake_reason = ?, mistake_at = ? WHERE invoice_id = ?')
+        .run(reason || null, reason ? new Date().toISOString() : null, id);
     },
 
     /** Manual correction of a line; re-spreads the invoice total over the lines. */
@@ -268,7 +290,8 @@ function createRepo(db, dataDir) {
       const byInvoice = new Map(invoices.map((inv) => [inv.id, []]));
       for (const it of items) byInvoice.get(it.invoice_id)?.push({ ...it, paid: !!it.paid });
 
-      const totals = { total: 0, paid: 0, outstanding: 0, tax: 0, invoiceCount: 0, processing: 0, errors: 0 };
+      const totals = { total: 0, paid: 0, outstanding: 0, tax: 0, invoiceCount: 0, processing: 0, errors: 0, mistakes: 0 };
+      const byReason = {};
       const bySupplier = {};
       const byCategory = {};
       const seen = new Map();
@@ -294,6 +317,13 @@ function createRepo(db, dataDir) {
           bySupplier[s].total += total;
           bySupplier[s].paid += paid;
           for (const l of lines) {
+            if (l.mistake_reason) {
+              totals.mistakes += l.cost;
+              byReason[l.mistake_reason] = byReason[l.mistake_reason] || { total: 0, paid: 0, count: 0 };
+              byReason[l.mistake_reason].total += l.cost;
+              byReason[l.mistake_reason].count++;
+              if (l.paid) byReason[l.mistake_reason].paid += l.cost;
+            }
             byCategory[l.category] = byCategory[l.category] || { total: 0, paid: 0 };
             byCategory[l.category].total += l.cost;
             if (l.paid) byCategory[l.category].paid += l.cost;
@@ -304,6 +334,8 @@ function createRepo(db, dataDir) {
           items: lines,
           paid_amount: paid,
           outstanding: round2(total - paid),
+          mistake_amount: round2(lines.filter((l) => l.mistake_reason).reduce((s, l) => s + l.cost, 0)),
+          mistake_state: !lines.length || !lines.some((l) => l.mistake_reason) ? 'none' : lines.every((l) => l.mistake_reason) ? 'all' : 'part',
           payment_state: !lines.length ? 'unpaid' : lines.every((l) => l.paid) ? 'paid' : lines.some((l) => l.paid) ? 'part' : 'unpaid',
           duplicate_of: duplicateOf,
         };
@@ -314,14 +346,96 @@ function createRepo(db, dataDir) {
       totals.tax = round2(totals.tax);
       totals.outstanding = round2(totals.total - totals.paid);
       const roundMap = (m) => Object.entries(m)
-        .map(([name, v]) => ({ name, total: round2(v.total), paid: round2(v.paid), outstanding: round2(v.total - v.paid) }))
+        .map(([name, v]) => ({ name, total: round2(v.total), paid: round2(v.paid), outstanding: round2(v.total - v.paid), ...(v.count != null ? { count: v.count } : {}) }))
         .sort((a, b) => b.total - a.total);
 
       const quote = job && job.quote_amount != null ? job.quote_amount : null;
       totals.quote = quote;
       totals.margin = quote != null ? round2(quote - totals.total) : null;
       totals.marginPct = quote ? Math.round((quote - totals.total) / quote * 1000) / 10 : null;
-      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory) };
+      // "Should have cost": the same job done again without the screw-ups.
+      totals.mistakes = round2(totals.mistakes);
+      totals.cleanTotal = round2(totals.total - totals.mistakes);
+      totals.mistakePct = totals.total ? Math.round(totals.mistakes / totals.total * 1000) / 10 : 0;
+      totals.cleanMargin = quote != null ? round2(quote - totals.cleanTotal) : null;
+      totals.cleanMarginPct = quote ? Math.round((quote - totals.cleanTotal) / quote * 1000) / 10 : null;
+      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory), byReason: roundMap(byReason) };
+    },
+
+    /**
+     * Totals across every job of a ServiceM8 account, for the reports page.
+     * from/to (YYYY-MM-DD) filter jobs by the date of their first invoice.
+     */
+    getReport(accountUUID, { from = null, to = null } = {}) {
+      const jobs = db.prepare(`SELECT jobs.*, MIN(COALESCE(invoices.invoice_date, substr(invoices.created_at, 1, 10))) AS first_date
+          FROM jobs JOIN invoices ON invoices.job_uuid = jobs.job_uuid
+          WHERE jobs.account_uuid IS ? GROUP BY jobs.job_uuid ORDER BY first_date DESC`).all(accountUUID)
+        .filter((j) => (!from || j.first_date >= from) && (!to || j.first_date <= to));
+
+      const t = { jobs: 0, total: 0, mistakes: 0, quoted: 0, quotedJobs: 0, costsOnQuoted: 0, mistakesOnQuoted: 0 };
+      const reasons = {};
+      const suppliers = {};
+      const jobRows = [];
+      const mistakeItems = [];
+      for (const j of jobs) {
+        const s = repo.getJobSummary(j.job_uuid);
+        if (!s.totals.invoiceCount) continue;
+        t.jobs++;
+        t.total += s.totals.total;
+        t.mistakes += s.totals.mistakes;
+        if (s.totals.quote != null) {
+          t.quotedJobs++;
+          t.quoted += s.totals.quote;
+          t.costsOnQuoted += s.totals.total;
+          t.mistakesOnQuoted += s.totals.mistakes;
+        }
+        jobRows.push({
+          job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title, date: j.first_date,
+          quote: s.totals.quote, total: s.totals.total, mistakes: s.totals.mistakes, mistakePct: s.totals.mistakePct,
+          profit: s.totals.margin, profitPct: s.totals.marginPct, cleanProfit: s.totals.cleanMargin, cleanProfitPct: s.totals.cleanMarginPct,
+        });
+        for (const inv of s.invoices) {
+          if (inv.status !== 'ready' || inv.duplicate_of) continue;
+          for (const l of inv.items) {
+            if (!l.mistake_reason) continue;
+            reasons[l.mistake_reason] = reasons[l.mistake_reason] || { count: 0, total: 0, jobs: new Set() };
+            reasons[l.mistake_reason].count++;
+            reasons[l.mistake_reason].total += l.cost;
+            reasons[l.mistake_reason].jobs.add(j.job_uuid);
+            const sup = inv.supplier || 'Unknown supplier';
+            suppliers[sup] = suppliers[sup] || { count: 0, total: 0 };
+            suppliers[sup].count++;
+            suppliers[sup].total += l.cost;
+            mistakeItems.push({
+              date: inv.invoice_date || String(inv.created_at).slice(0, 10), job_number: j.job_number, job_title: j.job_title,
+              supplier: sup, invoice_number: inv.invoice_number, description: l.description, reason: l.mistake_reason, cost: l.cost, paid: l.paid,
+            });
+          }
+        }
+      }
+      const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 : null);
+      const totals = {
+        jobs: t.jobs,
+        total: round2(t.total),
+        mistakes: round2(t.mistakes),
+        mistakePct: pct(t.mistakes, t.total),
+        cleanTotal: round2(t.total - t.mistakes),
+        quotedJobs: t.quotedJobs,
+        quoted: round2(t.quoted),
+        profit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted) : null,
+        profitPct: pct(t.quoted - t.costsOnQuoted, t.quoted),
+        cleanProfit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted) : null,
+        cleanProfitPct: pct(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted, t.quoted),
+        jobsWithMistakes: jobRows.filter((r) => r.mistakes > 0).length,
+      };
+      return {
+        totals,
+        byReason: Object.entries(reasons).map(([reason, v]) => ({ reason, count: v.count, jobs: v.jobs.size, total: round2(v.total), pct: pct(v.total, t.mistakes) }))
+          .sort((a, b) => b.total - a.total),
+        bySupplier: Object.entries(suppliers).map(([name, v]) => ({ name, count: v.count, total: round2(v.total) })).sort((a, b) => b.total - a.total),
+        jobs: jobRows,
+        mistakeItems: mistakeItems.sort((a, b) => String(b.date).localeCompare(String(a.date))),
+      };
     },
 
     listStuckInvoices() {

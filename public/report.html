@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs Reports</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --ink: #1f2933; --muted: #7b8794; --line: #e4e7eb;
+    --accent: #4a86e8; --ok: #2e9e5b; --ok-ink: #17784a; --bad: #c2410c; --mk: #be123c; --mk-soft: #ffe4e8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 "Open Sans", "Segoe UI", -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  .range { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .range input { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 4px 6px; }
+  button { font: inherit; border: 1px solid #cfd5dc; background: #fff; color: var(--ink); border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+  button:hover { background: #f7f8fa; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .tile .l { color: var(--muted); font-size: 12px; }
+  .tile .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tile.mk { border-color: #f3b4c0; background: #fffafb; } .tile.mk .v { color: var(--mk); }
+  .good { color: var(--ok-ink); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 14px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .grid2 .panel { margin-bottom: 0; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; padding: 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 6px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .barcell { width: 32%; }
+  .hbar { height: 10px; border-radius: 5px; background: var(--mk); min-width: 2px; }
+  .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+  @media (max-width: 860px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid2 { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Job Costs Reports</h1>
+    <div class="range" id="range">
+      <button data-preset="month">This month</button>
+      <button data-preset="3m">Last 3 months</button>
+      <button data-preset="year">This year</button>
+      <button data-preset="all" class="on">All time</button>
+      <span class="muted">From</span><input type="date" id="from"><span class="muted">to</span><input type="date" id="to">
+    </div>
+  </header>
+  <div class="muted" style="margin:-6px 0 12px;font-size:12px">Jobs are counted by the date of their first invoice. All amounts incl. GST. Profit only counts jobs with a quoted price.</div>
+  <section class="tiles" id="tiles"></section>
+  <section class="grid2">
+    <div class="panel"><h2>Screw-ups by reason</h2><div id="reasons"></div></div>
+    <div class="panel"><h2>Screw-ups by supplier</h2><div id="suppliers"></div></div>
+  </section>
+  <section class="panel"><h2>Jobs</h2><div class="scroll" id="jobs"></div></section>
+  <section class="panel"><h2>Every screw-up <button id="csv">Download CSV</button></h2><div class="scroll" id="items"></div></section>
+</div>
+<script>
+const BOOT = /*__BOOT__*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const signed = (n) => (n < 0 ? '−' : '') + money(Math.abs(n));
+const pct = (p) => (p == null ? '—' : `${p}%`);
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
+let data = null;
+
+const iso = (d) => d.toISOString().slice(0, 10);
+function preset(p) {
+  const now = new Date();
+  let from = '';
+  if (p === 'month') from = iso(new Date(now.getFullYear(), now.getMonth(), 1));
+  if (p === '3m') from = iso(new Date(now.getFullYear(), now.getMonth() - 2, 1));
+  if (p === 'year') from = iso(new Date(now.getFullYear(), 0, 1));
+  $('#from').value = from; $('#to').value = '';
+  document.querySelectorAll('[data-preset]').forEach((b) => b.classList.toggle('on', b.dataset.preset === p));
+  load();
+}
+
+async function load() {
+  const q = new URLSearchParams();
+  if ($('#from').value) q.set('from', $('#from').value);
+  if ($('#to').value) q.set('to', $('#to').value);
+  const res = await fetch('/api/report?' + q, { headers: { Authorization: 'Bearer ' + BOOT.token } });
+  if (!res.ok) { document.body.innerHTML = '<p style="padding:20px">Session expired. Open Job Costs from a job in ServiceM8 and click Reports again.</p>'; return; }
+  data = await res.json();
+  render();
+}
+
+function render() {
+  const t = data.totals;
+  const lost = t.profit != null && t.cleanProfit != null ? Math.round((t.cleanProfitPct - t.profitPct) * 10) / 10 : null;
+  $('#tiles').innerHTML = `
+    <div class="tile"><div class="l">Total costs</div><div class="v">${money(t.total)}</div><div class="s">${t.jobs} job${t.jobs === 1 ? '' : 's'}</div></div>
+    <div class="tile mk"><div class="l">⚠ Screw-ups</div><div class="v">${money(t.mistakes)}</div><div class="s">${pct(t.mistakePct)} of costs · in ${t.jobsWithMistakes} job${t.jobsWithMistakes === 1 ? '' : 's'}</div></div>
+    <div class="tile"><div class="l">Real profit</div><div class="v ${t.profit < 0 ? 'bad' : 'good'}">${t.profit == null ? '—' : signed(t.profit)}</div><div class="s">${t.profit == null ? 'No jobs with a quoted price' : `${pct(t.profitPct)} margin · ${t.quotedJobs} quoted job${t.quotedJobs === 1 ? '' : 's'}`}</div></div>
+    <div class="tile"><div class="l">Profit without screw-ups</div><div class="v ${t.cleanProfit < 0 ? 'bad' : 'good'}">${t.cleanProfit == null ? '—' : signed(t.cleanProfit)}</div><div class="s">${t.cleanProfit == null ? '' : `${pct(t.cleanProfitPct)} margin${lost ? ` · screw-ups cost <b style="color:var(--mk)">${lost}</b> points` : ''}`}</div></div>`;
+
+  const maxR = Math.max(...data.byReason.map((r) => r.total), 0) || 1;
+  $('#reasons').innerHTML = data.byReason.length ? `<table><thead><tr><th>Reason</th><th class="num">Times</th><th class="num">Jobs</th><th class="num">Cost</th><th class="num">Share</th><th class="barcell"></th></tr></thead><tbody>
+    ${data.byReason.map((r) => `<tr><td>${esc(REASON[r.reason] || r.reason)}</td><td class="num">${r.count}</td><td class="num">${r.jobs}</td><td class="num">${money(r.total)}</td><td class="num">${pct(r.pct)}</td><td class="barcell"><div class="hbar" style="width:${r.total / maxR * 100}%"></div></td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No screw-ups in this period.</div>';
+
+  $('#suppliers').innerHTML = data.bySupplier.length ? `<table><thead><tr><th>Supplier</th><th class="num">Lines</th><th class="num">Cost</th></tr></thead><tbody>
+    ${data.bySupplier.map((s) => `<tr><td>${esc(s.name)}</td><td class="num">${s.count}</td><td class="num">${money(s.total)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No screw-ups in this period.</div>';
+
+  $('#jobs').innerHTML = data.jobs.length ? `<table><thead><tr><th>Job</th><th>Date</th><th class="num">Quoted</th><th class="num">Costs</th><th class="num">Screw-ups</th><th class="num">Real profit</th><th class="num">Margin</th><th class="num">Without screw-ups</th><th class="num">Margin</th></tr></thead><tbody>
+    ${data.jobs.map((j) => `<tr><td><b>${j.job_number ? '#' + esc(j.job_number) : '—'}</b> <span class="muted">${esc(j.job_title || '')}</span></td><td>${fmtDate(j.date)}</td>
+      <td class="num">${j.quote == null ? '—' : money(j.quote)}</td><td class="num">${money(j.total)}</td>
+      <td class="num" style="${j.mistakes > 0 ? 'color:var(--mk);font-weight:600' : 'color:var(--muted)'}">${j.mistakes > 0 ? `${money(j.mistakes)} · ${j.mistakePct}%` : '—'}</td>
+      <td class="num ${j.profit < 0 ? 'bad' : 'good'}">${j.profit == null ? '—' : signed(j.profit)}</td><td class="num">${pct(j.profitPct)}</td>
+      <td class="num">${j.cleanProfit == null ? '—' : signed(j.cleanProfit)}</td><td class="num">${pct(j.cleanProfitPct)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No jobs with invoices in this period.</div>';
+
+  $('#items').innerHTML = data.mistakeItems.length ? `<table><thead><tr><th>Date</th><th>Job</th><th>Supplier</th><th>Item</th><th>Reason</th><th class="num">Cost</th></tr></thead><tbody>
+    ${data.mistakeItems.map((i) => `<tr><td>${fmtDate(i.date)}</td><td>${i.job_number ? '#' + esc(i.job_number) : '—'}</td><td>${esc(i.supplier)}</td><td>${esc(i.description)}</td><td>${esc(REASON[i.reason] || i.reason)}</td><td class="num">${money(i.cost)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">No screw-ups in this period.</div>';
+}
+
+$('#csv').addEventListener('click', () => {
+  if (!data) return;
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const rows = [['Date', 'Job number', 'Job', 'Supplier', 'Invoice', 'Item', 'Reason', 'Cost incl GST', 'Paid']]
+    .concat(data.mistakeItems.map((i) => [i.date, i.job_number, i.job_title, i.supplier, i.invoice_number, i.description, REASON[i.reason] || i.reason, i.cost.toFixed(2), i.paid ? 'Yes' : 'No']));
+  const blob = new Blob([rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `screw-ups-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$('#range').addEventListener('click', (e) => { const b = e.target.closest('[data-preset]'); if (b) preset(b.dataset.preset); });
+['from', 'to'].forEach((id) => $('#' + id).addEventListener('change', () => { document.querySelectorAll('[data-preset]').forEach((b) => b.classList.remove('on')); load(); }));
+load();
+</script>
+</body>
+</html>
