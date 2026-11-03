@@ -202,6 +202,22 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
     res.status(201).json({ id: inv.id });
   });
 
+  // Found the paper invoice for one that was added by hand: attach it and read it.
+  api.post('/invoices/:id/file', upload.single('file'), (req, res) => {
+    const inv = ownInvoice(req, res);
+    if (!inv) return;
+    if (inv.file_path) return res.status(400).json({ error: 'This invoice already has a file' });
+    if (!req.file) return res.status(400).json({ error: 'No file received' });
+    const mimeType = guessMime(req.file.originalname, req.file.mimetype);
+    if (!isSupported(req.file.originalname, mimeType)) return res.status(400).json({ error: 'Unsupported file type. Use a PDF or a photo (JPG/PNG).' });
+    repo.attachFile(inv.id, {
+      fileName: req.file.originalname, mimeType,
+      filePath: saveFile(req.job.job_uuid, req.file.originalname, req.file.buffer),
+    });
+    processor.enqueue(inv.id);
+    res.json({ ok: true });
+  });
+
   api.post('/invoices', upload.array('files', 30), (req, res) => {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'No files received' });

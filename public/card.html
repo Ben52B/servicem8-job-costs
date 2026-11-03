@@ -171,6 +171,7 @@
         <strong>Drop invoices here</strong><br>or click to choose files
       </label>
       <button class="add-manual" data-add-manual>+ Add invoice by hand</button>
+      <input type="file" id="attachInput" accept="application/pdf,image/*" hidden>
       <div class="email" id="emailBox"></div>
     </aside>
     <main class="panel detail" id="detail"></main>
@@ -317,7 +318,7 @@ function renderDetail() {
   const el = $('#detail');
   if (!inv) { el.innerHTML = '<div class="empty">Drop an invoice on the left, or email it to this job.<br>It is read automatically and appears here.</div>'; return; }
   const ready = inv.status === 'ready';
-  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', SOURCE_LABEL[inv.source]].filter(Boolean).join(' · ');
+  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', (inv.attached_later ? 'Added by hand, file attached later' : SOURCE_LABEL[inv.source])].filter(Boolean).join(' · ');
   const allPaid = inv.payment_state === 'paid';
   let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))} ${statusPill(inv)}</h2><div class="muted">${esc(meta)}</div></div>
     ${ready && inv.items.length ? `<div class="d-controls">
@@ -327,6 +328,7 @@ function renderDetail() {
   if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice…</div>';
   if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
+  else if (inv.status === 'ready' && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
   if (inv.items.length) {
     h += `<table><thead><tr><th>Item</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
     for (const it of inv.items) {
@@ -348,7 +350,7 @@ function renderDetail() {
   if (inv.email_from) h += `<div class="muted" style="margin-top:10px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
-      ${inv.file_path ? `<button data-reread="${inv.id}">Read again</button>` : ''}
+      ${inv.file_path ? `<button data-reread="${inv.id}">Read again</button>` : `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>`}
       ${ready && inv.items.length ? `<select class="inv-mk" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
       <span class="spacer"></span>
@@ -443,7 +445,12 @@ function renderPreview() {
   if (key === state.previewKey) return;
   state.previewKey = key;
   const el = $('#preview');
-  if (key === 'none') { el.innerHTML = `<div class="empty">${inv && inv.source === 'manual' ? 'Added by hand – there is no invoice file.' : 'The original invoice shows here.'}</div>`; return; }
+  if (key === 'none') {
+    el.innerHTML = inv && inv.source === 'manual'
+      ? `<div class="empty">Added by hand – there is no invoice file.<br><br>Found the invoice? <button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button><br><span style="font-size:12px">It will be read and replace the details you typed.<br>Paid, type and screw-up tags are kept.</span></div>`
+      : '<div class="empty">The original invoice shows here.</div>';
+    return;
+  }
   const url = fileUrl(inv);
   const mime = inv.mime_type || '';
   const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
@@ -457,6 +464,7 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const ds = t.dataset;
   try {
+    if (ds.attach) { state.attachTo = Number(ds.attach); $('#attachInput').value = ''; $('#attachInput').click(); return; }
     if (ds.addManual !== undefined) { state.adding = true; state.manual = newManual(); renderManual(); $('#manualForm [name=supplier]').focus(); return; }
     if (ds.manualCancel !== undefined) { state.adding = false; state.manual = null; return render(); }
     if (ds.manualAddLine !== undefined) { readManual(); state.manual.items.push({ description: '', amount: '' }); renderManual(); $$('#manualForm .lines .row input[name=description]').pop()?.focus(); return; }
@@ -530,6 +538,18 @@ $('#list').addEventListener('change', async (e) => {
   if (!t.dataset.listPaid) return;
   try { await api(`/invoices/${t.dataset.listPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
   catch (x) { toast(x.message); }
+  load();
+});
+
+$('#attachInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file || !state.attachTo) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  toast('Attaching and reading the invoice…');
+  try { await api(`/invoices/${state.attachTo}/file`, { method: 'POST', body: fd }); state.previewKey = null; }
+  catch (x) { toast(x.message); }
+  state.attachTo = null; e.target.value = '';
   load();
 });
 

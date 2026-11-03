@@ -339,3 +339,42 @@ test('invoice added by hand: total only, or some lines plus "Other items (not li
   assert.equal((await api(token, `/invoices/${id}/reanalyze`, { method: 'POST' })).status, 400);
   assert.equal((await api(token, `/items/${b.items[0].id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } })).status, 200);
 });
+
+test('found the paper invoice: attach it to a hand-added one and it replaces the details', async () => {
+  const token = await openCard('job-attach');
+  const post = (body) => api(token, '/invoices/manual', { method: 'POST', json: body }).then((r) => r.json());
+  const attach = (id, name) => {
+    const fd = new FormData();
+    fd.append('file', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), name);
+    return api(token, `/invoices/${id}/file`, { method: 'POST', body: fd });
+  };
+
+  // Hand-added, paid, typed as subcontractor, whole invoice tagged as a screw-up
+  const { id } = await post({ supplier: 'Door Supplies', total: 3000, category: 'subcontractor', paid: true });
+  await api(token, `/invoices/${id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } });
+
+  assert.equal((await attach(id, 'door-invoice.pdf')).status, 200);
+  await processor.idle();
+  let job = await (await api(token, '/job')).json();
+  let inv = job.invoices.find((i) => i.id === id);
+  assert.equal(inv.supplier, 'Door Supplies Pty Ltd', 'details now come from the file');
+  assert.equal(inv.invoice_number, 'INV-100');
+  assert.equal(inv.total, 3300);
+  assert.equal(inv.items.length, 3);
+  assert.equal(inv.attached_later, 1);
+  assert.equal(inv.payment_state, 'paid', 'paid kept');
+  assert.equal(inv.category, 'subcontractor', 'type you chose kept');
+  assert.ok(inv.items.every((l) => l.mistake_reason === 'wrong_size'), 'whole-invoice screw-up kept');
+  assert.equal((await attach(id, 'door-invoice.pdf')).status, 400, 'only once');
+
+  // A file that can't be read keeps the hand-entered details counted
+  const second = await post({ supplier: 'Gate Co', total: 500 });
+  await attach(second.id, 'notinvoice.pdf');
+  await processor.idle();
+  job = await (await api(token, '/job')).json();
+  inv = job.invoices.find((i) => i.id === second.id);
+  assert.equal(inv.status, 'ready');
+  assert.match(inv.error, /does not look like an invoice/);
+  assert.equal(inv.total, 500);
+  assert.equal(job.totals.total, 3800);
+});

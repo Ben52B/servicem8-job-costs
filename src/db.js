@@ -123,6 +123,7 @@ function migrate(db) {
   if (!itemCols.includes('mistake_reason')) db.exec('ALTER TABLE items ADD COLUMN mistake_reason TEXT');
   if (!itemCols.includes('mistake_at')) db.exec('ALTER TABLE items ADD COLUMN mistake_at TEXT');
   const invCols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
+  if (!invCols.includes('attached_later')) db.exec('ALTER TABLE invoices ADD COLUMN attached_later INTEGER NOT NULL DEFAULT 0');
   if (!invCols.includes('category')) {
     // One type per invoice (Materials, Subcontractor…); category_manual = 1 when changed by hand.
     db.exec('ALTER TABLE invoices ADD COLUMN category TEXT');
@@ -198,7 +199,17 @@ function createRepo(db, dataDir) {
     },
 
     setInvoiceError(id, message) {
-      db.prepare("UPDATE invoices SET status = 'error', error = ? WHERE id = ?").run(String(message).slice(0, 500), id);
+      // If the invoice already has details (read before, or added by hand), keep them
+      // counted and just show the problem; otherwise it needs attention.
+      const hasItems = db.prepare('SELECT 1 FROM items WHERE invoice_id = ? LIMIT 1').get(id);
+      db.prepare('UPDATE invoices SET status = ?, error = ? WHERE id = ?')
+        .run(hasItems ? 'ready' : 'error', String(message).slice(0, 500), id);
+    },
+
+    /** Put a file on an invoice that was added by hand; it is then read like any other. */
+    attachFile(id, { fileName, filePath, mimeType }) {
+      db.prepare(`UPDATE invoices SET file_name = ?, file_path = ?, mime_type = ?, source = 'upload',
+          attached_later = 1 WHERE id = ?`).run(fileName, filePath, mimeType, id);
     },
 
     /** Save what Claude read from the document, replacing any earlier result. */
@@ -213,7 +224,14 @@ function createRepo(db, dataDir) {
 
       // Keep ticks and screw-up tags from an earlier reading of the same lines.
       const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-      const before = new Map(db.prepare('SELECT * FROM items WHERE invoice_id = ?').all(id).map((o) => [norm(o.description), o]));
+      const oldItems = db.prepare('SELECT * FROM items WHERE invoice_id = ?').all(id);
+      const before = new Map(oldItems.map((o) => [norm(o.description), o]));
+      // Settings made for the whole invoice carry over even if the lines are different now
+      // (e.g. a hand-entered invoice gets its real file).
+      const wasAllPaid = oldItems.length > 0 && oldItems.every((o) => o.paid);
+      const oldReasons = [...new Set(oldItems.map((o) => o.mistake_reason))];
+      const wholeReason = oldItems.length > 0 && oldReasons.length === 1 && oldReasons[0] ? oldReasons[0] : null;
+      const wholeReasonAt = wholeReason ? oldItems[0].mistake_at : null;
 
       db.exec('BEGIN');
       try {
@@ -233,10 +251,11 @@ function createRepo(db, dataDir) {
         const now = new Date().toISOString();
         items.forEach((it, i) => {
           const old = before.get(norm(it.description));
-          const paid = alreadyPaid || !!(old && old.paid);
+          const paid = alreadyPaid || wasAllPaid || !!(old && old.paid);
           ins.run(id, i, String(it.description).slice(0, 500), it.category || 'other',
             it.quantity ?? null, it.unit || null, it.unit_price ?? null, round2(it.line_total), costs[i],
-            paid ? 1 : 0, paid ? (old?.paid_at || now) : null, old?.mistake_reason || null, old?.mistake_at || null);
+            paid ? 1 : 0, paid ? (old?.paid_at || oldItems[0]?.paid_at || now) : null,
+            old?.mistake_reason || wholeReason, old?.mistake_at || wholeReasonAt);
         });
         db.exec('COMMIT');
       } catch (e) {
