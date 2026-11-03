@@ -378,3 +378,84 @@ test('found the paper invoice: attach it to a hand-added one and it replaces the
   assert.equal(inv.total, 500);
   assert.equal(job.totals.total, 3800);
 });
+
+test('split invoices: 10 motors on one invoice shared between jobs', async () => {
+  const jobA = await openCard('split-a');
+  const jobB = await openCard('split-b');
+  const jobC = await openCard('split-c');
+  const add = (token, body) => api(token, '/invoices/manual', { method: 'POST', json: body }).then((r) => r.json());
+  const summary = (token) => api(token, '/job').then((r) => r.json());
+  const share = (token, itemId, body) => api(token, `/items/${itemId}/share`, { method: 'PUT', json: body });
+
+  // Job A receives a stock invoice: 10 motors ($3,300 incl GST, $330 each) + delivery $110
+  const created = await add(jobA, { supplier: 'Merlin', invoice_number: 'M-1', total: 3410, items: [{ description: 'Motor', amount: 3300 }, { description: 'Delivery', amount: 110 }] });
+  assert.ok(created.id, JSON.stringify(created));
+  const { id } = created;
+  repo.db.prepare("UPDATE items SET quantity = 10, unit = 'ea' WHERE invoice_id = ? AND description = 'Motor'").run(id);
+  let a = await summary(jobA);
+  const motor = a.invoices[0].items.find((l) => l.description === 'Motor');
+  const delivery = a.invoices[0].items.find((l) => l.description === 'Delivery');
+
+  // Can't take from an invoice that isn't split
+  assert.equal((await share(jobB, motor.id, { quantity: 1 })).status, 400);
+  // Split: job A keeps everything until it reduces its share
+  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: true } })).status, 200);
+  a = await summary(jobA);
+  assert.equal(a.totals.total, 3410);
+  // Job A only used 1 motor and pays the delivery
+  assert.equal((await share(jobA, motor.id, { quantity: 1 })).status, 200);
+  a = await summary(jobA);
+  assert.equal(a.totals.total, 440);
+  assert.equal(a.invoices[0].not_assigned, 2970);
+
+  // Job B sees 9 left and takes 1; job C takes 8; nothing left to over-take
+  let avail = (await (await api(jobB, '/available')).json()).invoices;
+  assert.equal(avail[0].lines.find((l) => l.item_id === motor.id).left_quantity, 9);
+  assert.equal((await share(jobB, motor.id, { quantity: 1 })).status, 200);
+  assert.equal((await share(jobC, motor.id, { quantity: 8 })).status, 200);
+  const over = await share(jobC, motor.id, { quantity: 9 });
+  assert.equal(over.status, 400);
+  assert.match((await over.json()).error, /8 left/);
+  avail = (await (await api(jobB, '/available')).json()).invoices;
+  assert.ok(!avail.some((i) => i.lines.some((l) => l.item_id === motor.id)), 'motors all taken');
+
+  const b = await summary(jobB);
+  assert.equal(b.totals.total, 330);
+  assert.equal(b.invoices[0].foreign, true);
+  assert.deepEqual(b.invoices[0].items.map((l) => l.description), ['Motor'], 'only the lines this job took');
+  assert.equal(b.invoices[0].home_job_number, '1234');
+
+  // Paid is one tick for the supplier's bill, seen by every job
+  await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
+  assert.equal((await summary(jobB)).totals.paid, 330);
+  // Another job can tag its own share as a screw-up, but can't edit the invoice
+  assert.equal((await api(jobB, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_product' } })).status, 200);
+  assert.equal((await summary(jobB)).totals.mistakes, 330);
+  assert.equal((await summary(jobC)).totals.mistakes, 0, 'tag only on job B\'s share');
+  assert.equal((await api(jobB, `/invoices/${id}`, { method: 'PATCH', json: { total: 1 } })).status, 403);
+  assert.equal((await api(jobB, `/items/${delivery.id}/share`, { method: 'PUT', json: { amount: 999 } })).status, 400);
+
+  // Job A can't stop splitting or delete while others have shares
+  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: false } })).status, 409);
+  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'DELETE' })).status, 409);
+
+  // Reports: shares count on each job; nothing double counted
+  const rep = await (await api(jobA, '/report')).json();
+  const tot = (u) => rep.jobs.find((j) => j.job_uuid === u).total;
+  assert.equal(tot('split-a') + tot('split-b') + tot('split-c'), 3410);
+
+  // Give back; then A can stop splitting and gets everything again
+  await api(jobB, `/invoices/${id}`, { method: 'DELETE' });
+  await share(jobC, motor.id, { quantity: 0 });
+  assert.equal((await summary(jobB)).invoices.length, 0);
+  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: false } })).status, 200);
+  assert.equal((await summary(jobA)).totals.total, 3410);
+});
+
+test('the card and report page scripts have no syntax errors', () => {
+  for (const file of ['card.html', 'report.html']) {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
+    const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
+    assert.doesNotThrow(() => new Function(js), file);
+  }
+});

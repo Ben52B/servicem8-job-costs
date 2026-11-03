@@ -55,6 +55,7 @@
   </header>
   <div class="muted" style="margin:-6px 0 12px;font-size:12px">Jobs are counted by the date of their first invoice. All amounts incl. GST. Profit only counts jobs with a quoted price.</div>
   <section class="tiles" id="tiles"></section>
+  <div id="notAssigned" class="muted" style="margin:-4px 0 12px;font-size:12.5px"></div>
   <section class="grid2">
     <div class="panel"><h2>Screw-ups by reason</h2><div id="reasons"></div></div>
     <div class="panel"><h2>Screw-ups by supplier</h2><div id="suppliers"></div></div>
@@ -104,6 +105,7 @@ function render() {
     <div class="tile"><div class="l">Real profit</div><div class="v ${t.profit < 0 ? 'bad' : 'good'}">${t.profit == null ? '—' : signed(t.profit)}</div><div class="s">${t.profit == null ? 'No jobs with a quoted price' : `${pct(t.profitPct)} margin · ${t.quotedJobs} quoted job${t.quotedJobs === 1 ? '' : 's'}`}</div></div>
     <div class="tile"><div class="l">Profit without screw-ups</div><div class="v ${t.cleanProfit < 0 ? 'bad' : 'good'}">${t.cleanProfit == null ? '—' : signed(t.cleanProfit)}</div><div class="s">${t.cleanProfit == null ? '' : `${pct(t.cleanProfitPct)} margin${lost ? ` · screw-ups cost <b style="color:var(--mk)">${lost}</b> points` : ''}`}</div></div>`;
 
+  $('#notAssigned').innerHTML = t.notAssigned > 0.004 ? `⇄ <b>${money(t.notAssigned)}</b> of split invoices isn't assigned to any job yet (e.g. stock still on the shelf). It isn't counted in any job above.` : '';
   const maxR = Math.max(...data.byReason.map((r) => r.total), 0) || 1;
   $('#reasons').innerHTML = data.byReason.length ? `<table><thead><tr><th>Reason</th><th class="num">Times</th><th class="num">Jobs</th><th class="num">Cost</th><th class="num">Share</th><th class="barcell"></th></tr></thead><tbody>
     ${data.byReason.map((r) => `<tr><td>${esc(REASON[r.reason] || r.reason)}</td><td class="num">${r.count}</td><td class="num">${r.jobs}</td><td class="num">${money(r.total)}</td><td class="num">${pct(r.pct)}</td><td class="barcell"><div class="hbar" style="width:${r.total / maxR * 100}%"></div></td></tr>`).join('')}

@@ -73,19 +73,31 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   function requireSession(req, res, next) {
     const header = req.get('authorization') || '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.t;
+    let job = null;
     try {
       const { jobUUID } = jwt.verify(String(token || ''), config.sessionSecret);
-      req.job = repo.getJob(jobUUID);
-      if (!req.job) throw new Error('unknown job');
-      next();
-    } catch {
-      res.status(401).json({ error: 'Session expired. Close and reopen Job Costs from the job card.' });
-    }
+      job = repo.getJob(jobUUID);
+    } catch { /* bad or expired token */ }
+    if (!job) return res.status(401).json({ error: 'Session expired. Close and reopen Job Costs from the job card.' });
+    req.job = job;
+    next(); // outside the try, so a bug in a route isn't reported as an expired session
   }
 
   function ownInvoice(req, res) {
     const inv = repo.getInvoice(Number(req.params.id));
     if (!inv || inv.job_uuid !== req.job.job_uuid) { res.status(404).json({ error: 'Not found' }); return null; }
+    return inv;
+  }
+
+  const sameAccount = (req, invoiceId) => (repo.invoiceAccount(invoiceId) ?? null) === (req.job.account_uuid ?? null);
+  const hasShareIn = (req, invoiceId) => repo.db.prepare(`SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id
+    WHERE items.invoice_id = ? AND allocations.job_uuid = ? LIMIT 1`).get(invoiceId, req.job.job_uuid);
+
+  /** This job's own invoice, or another job's split invoice this job has a share of. */
+  function visibleInvoice(req, res) {
+    const inv = repo.getInvoice(Number(req.params.id));
+    const ok = inv && (inv.job_uuid === req.job.job_uuid || (inv.split && sameAccount(req, inv.id) && hasShareIn(req, inv.id)));
+    if (!ok) { res.status(404).json({ error: 'Not found' }); return null; }
     return inv;
   }
 
@@ -228,7 +240,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   });
 
   api.get('/invoices/:id/file', (req, res) => {
-    const inv = ownInvoice(req, res);
+    const inv = visibleInvoice(req, res);
     if (!inv) return;
     if (!inv.file_path) return res.status(404).json({ error: 'No file' });
     res.type(inv.mime_type || 'application/octet-stream');
@@ -246,16 +258,34 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   });
 
   api.patch('/invoices/:id', (req, res) => {
-    const inv = ownInvoice(req, res);
+    const inv = visibleInvoice(req, res);
     if (!inv) return;
-    const { paid, supplier, invoice_number, total, mistake_reason, category } = req.body || {};
+    const { paid, supplier, invoice_number, total, mistake_reason, category, split } = req.body || {};
+    const own = inv.job_uuid === req.job.job_uuid;
+    // Another job's invoice: this job may only change paid and its own screw-up tags.
+    if (!own && (supplier !== undefined || invoice_number !== undefined || total !== undefined || category !== undefined || split !== undefined)) {
+      return res.status(403).json({ error: 'Change this on the job the invoice belongs to' });
+    }
+    if (typeof split === 'boolean') {
+      if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+      try { repo.setSplit(inv.id, split); } catch (e) {
+        if (e.status === 409) {
+          const jobs = repo.otherJobsOnInvoice(inv.id).map((j) => (j.job_number ? '#' + j.job_number : 'another job')).join(', ');
+          return res.status(409).json({ error: `Other jobs have part of this invoice (${jobs}). They need to give it back first.` });
+        }
+        throw e;
+      }
+    }
     const m = parseReason(mistake_reason);
     if (m.error) return res.status(400).json({ error: m.error });
     if (category !== undefined && !CATEGORIES.includes(category)) return res.status(400).json({ error: 'Unknown type' });
     const t = total === undefined || total === '' ? undefined : Number(total);
     if (t !== undefined && !isFinite(t)) return res.status(400).json({ error: 'Total must be a number' });
     if (typeof paid === 'boolean') repo.setInvoicePaid(inv.id, paid);
-    if (!m.skip) repo.setInvoiceMistake(inv.id, m.reason);
+    if (!m.skip) {
+      if (repo.getInvoice(inv.id).split) repo.setInvoiceShareMistake(inv.id, req.job.job_uuid, m.reason);
+      else repo.setInvoiceMistake(inv.id, m.reason);
+    }
     if (category !== undefined) repo.setInvoiceCategory(inv.id, category);
     if (supplier !== undefined || invoice_number !== undefined || t !== undefined) {
       repo.updateInvoice(inv.id, { supplier, invoice_number, total: t });
@@ -264,16 +294,67 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   });
 
   api.delete('/invoices/:id', (req, res) => {
-    const inv = ownInvoice(req, res);
+    const inv = visibleInvoice(req, res);
     if (!inv) return;
+    // On another job's invoice, "remove" gives this job's share back.
+    if (inv.job_uuid !== req.job.job_uuid) { repo.giveBack(inv.id, req.job.job_uuid); return res.json({ ok: true, gaveBack: true }); }
+    const others = repo.otherJobsOnInvoice(inv.id);
+    if (others.length) {
+      return res.status(409).json({ error: `Other jobs have part of this invoice (${others.map((j) => (j.job_number ? '#' + j.job_number : 'another job')).join(', ')}). They need to give it back first.` });
+    }
     repo.deleteInvoice(inv.id);
     res.json({ ok: true });
   });
 
+  // How much of a line this job gets, from a split invoice of this job or another job.
+  // Body: { quantity } for lines with a quantity, or { amount } in dollars (incl. GST).
+  api.put('/items/:id/share', (req, res) => {
+    const item = repo.getItem(Number(req.params.id));
+    const inv = item && repo.getInvoice(item.invoice_id);
+    if (!inv || !sameAccount(req, inv.id)) return res.status(404).json({ error: 'Not found' });
+    if (!inv.split) return res.status(400).json({ error: 'Split this invoice first (on the job it belongs to)' });
+    const n = (v) => (v === undefined || v === null || v === '' ? null : Number(String(v).replace(/[$,\s]/g, '')));
+    const qty = n(req.body?.quantity);
+    const amount = n(req.body?.amount);
+    let fraction;
+    if (qty != null && Number(item.quantity) > 0) fraction = qty / Number(item.quantity);
+    else if (amount != null) fraction = item.cost ? amount / item.cost : 0;
+    else return res.status(400).json({ error: 'Enter a quantity or an amount' });
+    if (!isFinite(fraction)) return res.status(400).json({ error: 'Enter a number' });
+    try {
+      repo.setShare(item.id, req.job.job_uuid, fraction);
+    } catch (e) {
+      if (e.status !== 400) throw e;
+      const q = Number(item.quantity) > 0 ? Number(item.quantity) : null;
+      const left = q ? `${Math.round(e.left * q * 1000) / 1000} left` : `$${(e.left * item.cost).toFixed(2)} left`;
+      return res.status(400).json({ error: `${e.message} (${left})` });
+    }
+    res.json({ ok: true });
+  });
+
+  // Lines of split invoices that other jobs can still take from.
+  api.get('/available', (req, res) => {
+    res.json({ invoices: repo.getAvailable(req.job.account_uuid ?? null, req.job.job_uuid) });
+  });
+
   api.patch('/items/:id', (req, res) => {
     const item = repo.getItem(Number(req.params.id));
-    if (!item || item.job_uuid !== req.job.job_uuid) return res.status(404).json({ error: 'Not found' });
+    const inv = item && repo.getInvoice(item.invoice_id);
+    const share = inv && inv.split ? repo.getShare(item.id, req.job.job_uuid) : null;
+    const own = item && item.job_uuid === req.job.job_uuid;
+    if (!item || (!own && !(inv.split && share && sameAccount(req, inv.id)))) return res.status(404).json({ error: 'Not found' });
     const { paid, description, category, line_total, mistake_reason } = req.body || {};
+    if (!own && (paid !== undefined || description !== undefined || category !== undefined || line_total !== undefined)) {
+      return res.status(403).json({ error: 'Change this on the job the invoice belongs to' });
+    }
+    // On a split invoice the screw-up tag belongs to this job's share of the line.
+    if (inv.split && mistake_reason !== undefined) {
+      const m = parseReason(mistake_reason);
+      if (m.error) return res.status(400).json({ error: m.error });
+      if (!share) return res.status(400).json({ error: 'This job has none of this line' });
+      repo.setShareMistake(item.id, req.job.job_uuid, m.reason);
+      return res.json({ ok: true });
+    }
     if (category !== undefined && !CATEGORIES.includes(category)) return res.status(400).json({ error: 'Unknown category' });
     const m = parseReason(mistake_reason);
     if (m.error) return res.status(400).json({ error: m.error });

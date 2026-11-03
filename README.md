@@ -13,6 +13,7 @@ One place for every supplier invoice on a job. For a garage door job, that's the
 - **Screw-up tags**: mark a line, or a whole invoice, as a screw-up and pick a reason from a fixed list (wrong measurement, wrong size, wrong colour…). The job then shows two sets of numbers: **actual** costs/profit, and **without screw-ups** (what the job should cost next time), plus how much the screw-ups cost as a % of costs and in margin points. The reason list is in `src/mistakes.js`.
 - **Reports** (button on the card): totals across all jobs for any date range: total costs, screw-ups ($ and % of costs), real profit vs profit without screw-ups, screw-ups by reason and by supplier, every job, and every screw-up line, which you can download as CSV.
 - Tick each invoice as **paid** (by hand), straight from the invoice list or the invoice itself. Receipts and invoices stamped PAID are ticked automatically.
+- **Split an invoice across jobs** when only part of it is for this job (e.g. 10 motors bought for stock). Click **Split across jobs** on the job it came in on and set how much this job gets: a quantity ("1 of 10") or a $ amount. Other jobs click **Take from another invoice** to take some of what's left; nobody can take more than is left. Paid stays one tick for the whole supplier bill; each job's totals, screw-ups and reports count only its share. Reports show what's not assigned to any job yet.
 - Each invoice has **one type** (Materials, Subcontractor…), worked out from its main items. Delivery and fees count with the goods they came with, so a gate supplier's delivery is Materials. You can change the type per invoice.
 - Catches **duplicates**: if a supplier sends the same invoice twice, it's only counted once.
 - You can fix anything the reader got wrong: description, type, amount, supplier or total.
@@ -114,7 +115,7 @@ npm run dev      # auto-restart on changes
 
 Paid status is ticked by hand on the card. That's intentional for now.
 
-### Split bulk invoices across jobs
+### Split bulk invoices across jobs (built)
 
 Some invoices are bulk stock purchases, e.g. one invoice for 10 motors. The idea:
 
