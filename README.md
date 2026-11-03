@@ -38,16 +38,18 @@ How costs are counted: invoices belong to the business; each line is shared out 
 
 ## Setup
 
-### 1. Host the app
+### 1. Host the app (Render)
 
-You need any Node.js 22.13+ host with HTTPS and a **persistent disk**, for example Render, Railway, Fly.io or a small VPS. The database and invoice files live in `DATA_DIR`.
+The repo includes `render.yaml`, so Render sets everything up:
 
-```bash
-cd servicem8-job-costs
-npm ci                   # installs exact versions; use this instead of "npm install"
-cp .env.example .env     # fill it in (see below)
-npm start
-```
+1. Sign up at <https://render.com> with your GitHub account and allow it to see the `servicem8-job-costs` repo.
+2. **New → Blueprint**, pick the repo. Render reads `render.yaml`: an always-on Node server in Singapore with a 1 GB disk for the database and invoice files.
+3. Paste in `ANTHROPIC_API_KEY`. `SERVICEM8_APP_SECRET` and `INBOUND_BASE_ADDRESS` can be left empty and filled in later (Dashboard → job-costs → Environment). The session and email secrets are generated for you.
+4. Click **Apply**. After a few minutes, `https://<name>.onrender.com` shows "Job Costs add-on for ServiceM8 is running."
+
+Every push to `main` on GitHub redeploys automatically. The app uses Render's address automatically, so `PUBLIC_URL` isn't needed.
+
+Running it anywhere else: any Node.js 22.13+ host with HTTPS and a persistent disk; set `DATA_DIR` to the disk and `PUBLIC_URL` to the app's address, then `npm ci && npm start`.
 
 ### 2. Get a Claude API key
 

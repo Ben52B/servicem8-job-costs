@@ -6,7 +6,8 @@ const list = (v) => String(v || '').split(',').map((x) => x.trim().toLowerCase()
 
 const config = {
   port: Number(process.env.PORT || 3000),
-  publicUrl: (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, ''),
+  // On Render, RENDER_EXTERNAL_URL is set automatically to the app's https address.
+  publicUrl: (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000').replace(/\/$/, ''),
   dataDir: path.resolve(process.env.DATA_DIR || './data'),
   sessionSecret: process.env.SESSION_SECRET || '',
   servicem8AppSecret: process.env.SERVICEM8_APP_SECRET || '',

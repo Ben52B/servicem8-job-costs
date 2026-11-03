@@ -1,0 +1,43 @@
+# Render setup ("Blueprint"). In Render: New -> Blueprint -> pick this repo.
+# Render installs and starts the app, and redeploys it whenever main changes on GitHub.
+services:
+  - type: web
+    name: job-costs
+    runtime: node
+    plan: starter            # smallest always-on plan; the free plan has no disk and goes to sleep
+    region: singapore        # closest Render region to Australia
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    disk:                    # keeps the database and invoice files between restarts and updates
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /var/data
+      - key: DEV_MODE
+        value: "false"
+      - key: CLAUDE_MODEL
+        value: claude-opus-5-5
+      - key: CLAUDE_EFFORT
+        value: medium
+      - key: STOCK_JOB_CLIENTS
+        value: Door Image
+      - key: STOCK_JOB_CATEGORIES
+        value: Internal
+      # Made up by Render automatically:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: INBOUND_SECRET
+        generateValue: true
+      # You paste these in (Render asks when you create it; they can be filled in later):
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SERVICEM8_APP_SECRET
+        sync: false
+      - key: INBOUND_BASE_ADDRESS
+        sync: false
