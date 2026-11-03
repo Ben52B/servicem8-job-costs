@@ -190,13 +190,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   api.patch('/invoices/:id', (req, res) => {
     const inv = ownInvoice(req, res);
     if (!inv) return;
-    const { paid, supplier, invoice_number, total, mistake_reason } = req.body || {};
+    const { paid, supplier, invoice_number, total, mistake_reason, category } = req.body || {};
     const m = parseReason(mistake_reason);
     if (m.error) return res.status(400).json({ error: m.error });
+    if (category !== undefined && !CATEGORIES.includes(category)) return res.status(400).json({ error: 'Unknown type' });
     const t = total === undefined || total === '' ? undefined : Number(total);
     if (t !== undefined && !isFinite(t)) return res.status(400).json({ error: 'Total must be a number' });
     if (typeof paid === 'boolean') repo.setInvoicePaid(inv.id, paid);
     if (!m.skip) repo.setInvoiceMistake(inv.id, m.reason);
+    if (category !== undefined) repo.setInvoiceCategory(inv.id, category);
     if (supplier !== undefined || invoice_number !== undefined || t !== undefined) {
       repo.updateInvoice(inv.id, { supplier, invoice_number, total: t });
     }

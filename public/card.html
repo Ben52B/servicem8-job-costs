@@ -66,6 +66,11 @@
   .inv:hover { border-color: #c5ccd4; }
   .inv.sel { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   .inv .r1, .inv .r2 { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .inv .r1 .who { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .paid-toggle { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 10px; background: #fff; cursor: pointer; font-weight: 600; white-space: nowrap; }
+  .paid-toggle.on { background: var(--ok-soft); border-color: #9fd8b8; color: var(--ok-ink); }
+  .d-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  select.inv-cat { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 6px; background: #fff; color: var(--ink); }
   .inv .r1 b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .inv .r2 { margin-top: 2px; font-size: 12px; color: var(--muted); }
   .inv .r2 span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -218,7 +223,8 @@ function renderSummary() {
   const clean = {};
   for (const inv of state.data.invoices) {
     if (inv.status !== 'ready' || inv.duplicate_of) continue;
-    for (const it of inv.items) if (!it.mistake_reason) clean[it.category] = (clean[it.category] || 0) + it.cost;
+    const cat = inv.category || 'materials';
+    for (const it of inv.items) if (!it.mistake_reason) clean[cat] = (clean[cat] || 0) + it.cost;
   }
   const cats = Object.entries(clean).filter(([, v]) => v > 0.004).sort((x, y) => y[1] - x[1]);
   const scale = Math.max(t.quote || 0, t.total) || 1;
@@ -280,7 +286,7 @@ function renderList() {
     const ready = inv.status === 'ready';
     const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || (inv.source === 'email' ? 'Emailed' : 'Uploaded');
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
-      <div class="r1"><b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b><span class="num">${ready ? money(inv.total) : ''}</span></div>
+      <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><span class="num">${ready ? money(inv.total) : ''}</span></div>
       <div class="r2"><span>${esc(sub)}</span><span>${inv.mistake_state !== 'none' && inv.mistake_state ? '<span class="pill mk" title="Screw-up">⚠</span> ' : ''}${statusPill(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="panel empty">No invoices yet.</div>';
@@ -299,12 +305,15 @@ function renderDetail() {
   const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', inv.source === 'email' ? 'Emailed' : 'Uploaded'].filter(Boolean).join(' · ');
   const allPaid = inv.payment_state === 'paid';
   let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))} ${statusPill(inv)}</h2><div class="muted">${esc(meta)}</div></div>
-    ${ready && inv.items.length ? `<button data-inv-paid="${inv.id}" data-value="${allPaid ? 'false' : 'true'}">${allPaid ? 'Mark unpaid' : 'Mark all paid'}</button>` : ''}</div>`;
+    ${ready && inv.items.length ? `<div class="d-controls">
+      <select class="inv-cat" data-inv-cat="${inv.id}" title="Type of cost for the whole invoice">${BOOT.categories.map((c) => `<option value="${c}" ${c === (inv.category || 'materials') ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select>
+      <label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid-cb="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label>
+    </div>` : ''}</div>`;
   if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice…</div>';
   if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
   if (inv.items.length) {
-    h += `<table><thead><tr><th style="width:30px">Paid</th><th>Item</th><th class="hide-sm" style="width:112px">Type</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
+    h += `<table><thead><tr><th>Item</th><th class="num hide-sm">On invoice</th><th class="num">Cost to job</th></tr></thead><tbody>`;
     for (const it of inv.items) {
       const qty = it.quantity != null ? `Qty ${it.quantity}${it.unit ? ' ' + it.unit : ''}` : '';
       const mk = it.mistake_reason
@@ -312,10 +321,8 @@ function renderDetail() {
         : state.mkOpen === it.id
           ? `<select class="mk-select" data-item-mk="${it.id}" data-autofocus><option value="">Why was this a screw-up?</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}</select> <button class="mk-link" data-mk-cancel>cancel</button>`
           : `<button class="mk-link" data-mk-open="${it.id}">⚠ Mark as screw-up</button>`;
-      h += `<tr class="${it.paid ? 'is-paid' : ''} ${it.mistake_reason ? 'is-mistake' : ''}">
-        <td><input type="checkbox" data-item-paid="${it.id}" ${it.paid ? 'checked' : ''}></td>
+      h += `<tr class="${it.mistake_reason ? 'is-mistake' : ''}">
         <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}" title="${esc(qty)}"><div>${mk}</div></td>
-        <td class="hide-sm"><select data-item-cat="${it.id}">${BOOT.categories.map((c) => `<option value="${c}" ${c === it.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></td>
         <td class="num hide-sm"><input type="text" class="amount" inputmode="decimal" value="${(Number(it.line_total) || 0).toFixed(2)}" data-item-amt="${it.id}"></td>
         <td class="num">${money(it.cost)}</td></tr>`;
     }
@@ -361,6 +368,7 @@ function renderPreview() {
 
 // ---------- Events ----------
 document.addEventListener('click', async (e) => {
+  if (e.target.matches('input[data-list-paid]')) return; // handled by the change event
   const t = e.target.closest('button, [data-select]');
   if (!t) return;
   const ds = t.dataset;
@@ -415,6 +423,8 @@ $('#detail').addEventListener('change', async (e) => {
     if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
     else if (t.dataset.itemDesc) await api(`/items/${t.dataset.itemDesc}`, { method: 'PATCH', body: JSON.stringify({ description: t.value }) });
     else if (t.dataset.itemCat) await api(`/items/${t.dataset.itemCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) });
+    else if (t.dataset.invPaidCb) { await api(`/invoices/${t.dataset.invPaidCb}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
+    else if (t.dataset.invCat) { await api(`/invoices/${t.dataset.invCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) }); toast('Type changed to ' + (CAT_LABEL[t.value] || t.value)); }
     else if (t.dataset.itemMk) { await api(`/items/${t.dataset.itemMk}`, { method: 'PATCH', body: JSON.stringify({ mistake_reason: t.value || null }) }); state.mkOpen = null; toast(t.value ? 'Tagged as screw-up' : 'Screw-up tag removed'); }
     else if (t.dataset.invMk) {
       if (t.value === '__') return;
@@ -425,6 +435,14 @@ $('#detail').addEventListener('change', async (e) => {
     else return;
   } catch (x) { toast(x.message); }
   t.blur(); load();
+});
+
+$('#list').addEventListener('change', async (e) => {
+  const t = e.target;
+  if (!t.dataset.listPaid) return;
+  try { await api(`/invoices/${t.dataset.listPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
+  catch (x) { toast(x.message); }
+  load();
 });
 
 async function uploadFiles(files) {

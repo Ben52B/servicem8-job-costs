@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 
-const { openDb, allocateCosts } = require('../src/db');
+const { openDb, allocateCosts, invoiceCategory } = require('../src/db');
 const { createProcessor } = require('../src/processor');
 const { createApp } = require('../src/app');
 const { codesFromAddresses, inboxAddress } = require('../src/inbound');
@@ -112,7 +112,9 @@ test('upload, read, mark paid, and totals', async () => {
   await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { paid: true } });
   job = await (await api(token, '/job')).json();
   assert.equal(job.totals.outstanding, 0);
-  assert.deepEqual(job.byCategory.map((c) => c.name).sort(), ['freight', 'materials']);
+  // Delivery on a materials invoice counts as materials, not freight
+  assert.deepEqual(job.byCategory.map((c) => c.name), ['materials']);
+  assert.equal(job.invoices.find((i) => i.id === inv.id).category, 'materials');
 
   // Fix an amount by hand: invoice total stays, costs re-spread
   await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { line_total: '1000' } });
@@ -273,4 +275,31 @@ test('reports add up screw-ups and profit across jobs of the same account only',
   assert.equal(none.totals.jobs, 0);
   assert.equal((await fetch(`${base}/report?t=${token}`)).status, 200);
   assert.equal((await fetch(`${base}/report?t=bad`)).status, 401);
+});
+
+test('one type per invoice: delivery and fees follow the goods; changing it by hand sticks', async () => {
+  assert.equal(invoiceCategory([{ category: 'materials', line_total: 900 }, { category: 'freight', line_total: 120 }, { category: 'fees', line_total: 30 }]), 'materials');
+  assert.equal(invoiceCategory([{ category: 'subcontractor', line_total: 600 }, { category: 'fees', line_total: 110 }]), 'subcontractor');
+  assert.equal(invoiceCategory([{ category: 'freight', line_total: 80 }]), 'freight'); // a courier-only invoice
+
+  const token = await openCard('job-cat');
+  const fd = new FormData();
+  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
+  await api(token, '/invoices', { method: 'POST', body: fd });
+  await processor.idle();
+  let job = await (await api(token, '/job')).json();
+  const inv = job.invoices[0];
+  assert.equal((await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { category: 'nonsense' } })).status, 400);
+  await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { category: 'subcontractor' } });
+  await api(token, `/invoices/${inv.id}/reanalyze`, { method: 'POST' });
+  await processor.idle();
+  job = await (await api(token, '/job')).json();
+  assert.equal(job.invoices[0].category, 'subcontractor');
+  assert.deepEqual(job.byCategory.map((c) => [c.name, c.total]), [['subcontractor', 3300]]);
+
+  // Paid is set once for the whole invoice
+  await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { paid: true } });
+  job = await (await api(token, '/job')).json();
+  assert.equal(job.invoices[0].payment_state, 'paid');
+  assert.equal(job.totals.outstanding, 0);
 });

@@ -69,6 +69,19 @@ function newInboxCode(len = 8) {
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 /**
+ * One type for the whole invoice, from its main items. Delivery and fees ride along
+ * with the goods they came with (a gate supplier's delivery counts as Materials);
+ * they only count as their own type when that's all the invoice is.
+ */
+function invoiceCategory(items) {
+  const sums = {};
+  for (const it of items) sums[it.category || 'other'] = (sums[it.category || 'other'] || 0) + Math.abs(Number(it.line_total) || 0);
+  const main = Object.entries(sums).filter(([c]) => c !== 'freight' && c !== 'fees' && c !== 'other');
+  const pick = (main.length ? main : Object.entries(sums)).sort((a, b) => b[1] - a[1])[0];
+  return pick ? pick[0] : 'materials';
+}
+
+/**
  * Spread the invoice total across its lines so that line costs always add up to
  * the amount actually owed (handles tax, freight, rounding and discounts).
  */
@@ -109,6 +122,16 @@ function migrate(db) {
   // Screw-up tag: a reason code from src/mistakes.js, or NULL when the line is not a mistake.
   if (!itemCols.includes('mistake_reason')) db.exec('ALTER TABLE items ADD COLUMN mistake_reason TEXT');
   if (!itemCols.includes('mistake_at')) db.exec('ALTER TABLE items ADD COLUMN mistake_at TEXT');
+  const invCols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
+  if (!invCols.includes('category')) {
+    // One type per invoice (Materials, Subcontractor…); category_manual = 1 when changed by hand.
+    db.exec('ALTER TABLE invoices ADD COLUMN category TEXT');
+    db.exec('ALTER TABLE invoices ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0');
+    const upd = db.prepare('UPDATE invoices SET category = ? WHERE id = ?');
+    for (const inv of db.prepare("SELECT id FROM invoices WHERE status = 'ready'").all()) {
+      upd.run(invoiceCategory(db.prepare('SELECT category, line_total FROM items WHERE invoice_id = ?').all(inv.id)), inv.id);
+    }
+  }
 }
 
 function createRepo(db, dataDir) {
@@ -196,11 +219,12 @@ function createRepo(db, dataDir) {
       try {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
             document_type = ?, supplier = ?, supplier_abn = ?, invoice_number = ?, invoice_date = ?,
-            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?
+            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?,
+            category = CASE WHEN category_manual = 1 THEN category ELSE ? END
           WHERE id = ?`).run(
           x.document_type || null, x.supplier_name || null, x.supplier_abn || null, x.invoice_number || null,
           x.invoice_date || null, x.due_date || null, x.currency || null,
-          x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null, id,
+          x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null, invoiceCategory(items), id,
         );
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
         const ins = db.prepare(`INSERT INTO items
@@ -266,6 +290,11 @@ function createRepo(db, dataDir) {
     },
 
     /** Manual correction of the header fields of an invoice. */
+    /** Change the invoice's type by hand; kept when the invoice is read again. */
+    setInvoiceCategory(id, category) {
+      db.prepare('UPDATE invoices SET category = ?, category_manual = 1 WHERE id = ?').run(category, id);
+    },
+
     updateInvoice(id, { supplier, invoice_number, total }) {
       db.prepare(`UPDATE invoices SET supplier = COALESCE(?, supplier), invoice_number = COALESCE(?, invoice_number),
           total = COALESCE(?, total) WHERE id = ?`)
@@ -324,9 +353,10 @@ function createRepo(db, dataDir) {
               byReason[l.mistake_reason].count++;
               if (l.paid) byReason[l.mistake_reason].paid += l.cost;
             }
-            byCategory[l.category] = byCategory[l.category] || { total: 0, paid: 0 };
-            byCategory[l.category].total += l.cost;
-            if (l.paid) byCategory[l.category].paid += l.cost;
+            const cat = inv.category || 'materials';
+            byCategory[cat] = byCategory[cat] || { total: 0, paid: 0 };
+            byCategory[cat].total += l.cost;
+            if (l.paid) byCategory[cat].paid += l.cost;
           }
         }
         return {
@@ -445,4 +475,4 @@ function createRepo(db, dataDir) {
   return repo;
 }
 
-module.exports = { openDb, allocateCosts, newInboxCode, round2 };
+module.exports = { openDb, allocateCosts, newInboxCode, round2, invoiceCategory };
