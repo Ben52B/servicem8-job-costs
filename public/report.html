@@ -4,32 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Costs Reports</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #f5f6f8; --card: #fff; --ink: #1f2933; --muted: #7b8794; --line: #e4e7eb;
-    --accent: #4a86e8; --ok: #2e9e5b; --ok-ink: #17784a; --bad: #c2410c; --mk: #be123c; --mk-soft: #ffe4e8;
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9;
+    --accent: #10b981; --ok: #10b981; --ok-ink: #059669; --bad: #be123c; --mk: #f43f5e; --mk-soft: #ffe4e6;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 "Open Sans", "Segoe UI", -apple-system, Roboto, Helvetica, Arial, sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
   .wrap { max-width: 1200px; margin: 0 auto; padding: 16px; }
   header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
-  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  header h1 { font-size: 22px; font-weight: 800; margin: 0 12px 0 0; }
   .range { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .range input { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 4px 6px; }
-  button { font: inherit; border: 1px solid #cfd5dc; background: #fff; color: var(--ink); border-radius: 4px; padding: 5px 10px; cursor: pointer; }
+  .range input { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 5px 8px; }
+  button { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; }
   button:hover { background: #f7f8fa; }
   button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(16,40,34,.06); }
+  .tile:first-child { background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: 0; } .tile:first-child .l, .tile:first-child .s { color: rgba(255,255,255,.85); }
   .tile .l { color: var(--muted); font-size: 12px; }
-  .tile .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .v { font-size: 26px; font-weight: 800; letter-spacing: -.5px; font-variant-numeric: tabular-nums; margin-top: 2px; }
   .tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .tile.mk { border-color: #f3b4c0; background: #fffafb; } .tile.mk .v { color: var(--mk); }
+  .tile.mk { border-color: #fecdd3; background: #fff6f7; } .tile.mk .v { color: var(--mk); }
   .good { color: var(--ok-ink); } .bad { color: var(--bad); } .muted { color: var(--muted); }
   .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 14px; }
-  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(16,40,34,.06); }
   .grid2 .panel { margin-bottom: 0; }
-  .panel h2 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .panel h2 { font-size: 15px; font-weight: 800; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; padding: 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -105,7 +108,7 @@ function render() {
     <div class="tile"><div class="l">Real profit</div><div class="v ${t.profit < 0 ? 'bad' : 'good'}">${t.profit == null ? '—' : signed(t.profit)}</div><div class="s">${t.profit == null ? 'No jobs with a quoted price' : `${pct(t.profitPct)} margin · ${t.quotedJobs} quoted job${t.quotedJobs === 1 ? '' : 's'}`}</div></div>
     <div class="tile"><div class="l">Profit without screw-ups</div><div class="v ${t.cleanProfit < 0 ? 'bad' : 'good'}">${t.cleanProfit == null ? '—' : signed(t.cleanProfit)}</div><div class="s">${t.cleanProfit == null ? '' : `${pct(t.cleanProfitPct)} margin${lost ? ` · screw-ups cost <b style="color:var(--mk)">${lost}</b> points` : ''}`}</div></div>`;
 
-  $('#notAssigned').innerHTML = t.notAssigned > 0.004 ? `⇄ <b>${money(t.notAssigned)}</b> of split invoices isn't assigned to any job yet (e.g. stock still on the shelf). It isn't counted in any job above.` : '';
+  $('#notAssigned').innerHTML = t.notAssigned > 0.004 ? `⇄ <b>${money(t.notAssigned)}</b> of invoices isn't on any job yet (stock and leftovers, see the Inbox). It isn't counted in any job above.` : '';
   const maxR = Math.max(...data.byReason.map((r) => r.total), 0) || 1;
   $('#reasons').innerHTML = data.byReason.length ? `<table><thead><tr><th>Reason</th><th class="num">Times</th><th class="num">Jobs</th><th class="num">Cost</th><th class="num">Share</th><th class="barcell"></th></tr></thead><tbody>
     ${data.byReason.map((r) => `<tr><td>${esc(REASON[r.reason] || r.reason)}</td><td class="num">${r.count}</td><td class="num">${r.jobs}</td><td class="num">${money(r.total)}</td><td class="num">${pct(r.pct)}</td><td class="barcell"><div class="hbar" style="width:${r.total / maxR * 100}%"></div></td></tr>`).join('')}

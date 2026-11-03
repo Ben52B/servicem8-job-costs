@@ -4,215 +4,253 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Job Costs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <!--__SM8_SDK__-->
 <style>
   :root {
-    --bg: #f5f6f8; --card: #fff; --ink: #1f2933; --muted: #7b8794; --line: #e4e7eb;
-    --accent: #4a86e8; --accent-soft: #eaf1fd; --ok: #2e9e5b; --ok-ink: #17784a; --ok-soft: #e3f6ec;
-    --warn: #b45309; --warn-soft: #fff1e0; --bad: #c2410c; --bad-soft: #fde8e4; --radius: 8px;
-    --mk: #be123c; --mk-soft: #ffe4e8; --mk-row: #fff6f7;
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1;
+    --ok: #15803d; --ok-soft: #dcfce7; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316; --sun-soft: #fff7ed;
+    --radius: 16px; --shadow: 0 1px 3px rgba(16, 40, 34, .06);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 "Open Sans", "Segoe UI", -apple-system, Roboto, Helvetica, Arial, sans-serif; }
-  .wrap { padding: 14px; max-width: 1400px; margin: 0 auto; }
-  header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-  header h1 { font-size: 17px; margin: 0; }
-  header .sub { color: var(--muted); }
-  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
-  button, .btn { font: inherit; border: 1px solid #cfd5dc; background: #fff; color: var(--ink); border-radius: 4px; padding: 5px 10px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  button:hover, .btn:hover { background: #f7f8fa; }
-  button.primary { background: var(--ok); border-color: var(--ok); color: #fff; }
-  button.link { border: 0; background: none; color: var(--accent); padding: 2px 4px; }
-  button.danger { color: var(--bad); }
-  button.solid-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { padding: 16px 18px; max-width: 1440px; margin: 0 auto; }
   .muted { color: var(--muted); }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 
-  /* ---- Quote vs costs ---- */
-  .summary { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 18px; padding: 14px 16px; margin-bottom: 12px; }
-  .s-top { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
-  .s-label { color: var(--muted); font-size: 12px; }
-  .s-big { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .s-big small { font-size: 14px; font-weight: 400; color: var(--muted); }
-  .s-big button.link { font-size: 13px; font-weight: 400; vertical-align: 2px; }
-  .s-margin { text-align: right; }
-  .s-margin .s-big.good { color: var(--ok-ink); } .s-margin .s-big.bad { color: var(--bad); }
-  .bar { position: relative; display: flex; height: 16px; border-radius: 8px; background: #eceff3; margin: 10px 0 6px; }
-  .bar > span { height: 100%; }
-  .bar > span:first-child { border-radius: 8px 0 0 8px; }
-  .bar .quote-mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--ink); border-radius: 2px; }
-  .s-foot { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
-  .s-foot b { color: var(--ink); font-weight: 600; }
-  .compare { border-collapse: collapse; margin: 10px 0 2px; width: auto; }
-  .compare th { font-weight: 500; padding: 2px 18px 2px 0; border: 0; font-size: 11.5px; }
-  .compare td { padding: 3px 18px 3px 0; border: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
-  .compare td:first-child { font-size: 12.5px; color: var(--muted); }
-  .compare tr.actual td { font-weight: 700; font-size: 16px; }
-  .compare tr.actual td:first-child { font-size: 12.5px; color: var(--ink); }
-  .compare .good { color: var(--ok-ink); } .compare .bad { color: var(--bad); }
-  .screwup-line { display: inline-flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-top: 4px; padding: 5px 9px; border-radius: 6px; background: var(--mk-soft); color: var(--mk); font-size: 12.5px; }
-  .screwup-line b { font-weight: 700; }
-  .legend div { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-  .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-  .legend span:nth-child(2) { flex: 1; }
-  .quote-edit { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 400; }
-  .quote-edit input { font: inherit; width: 120px; border: 1px solid #cfd5dc; border-radius: 4px; padding: 4px 6px; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 7px 13px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button:hover, .btn:hover { border-color: #b8cbc5; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.primary:hover { background: var(--brand-dark); }
+  button.link { border: 0; background: none; color: var(--brand-dark); padding: 2px 4px; box-shadow: none; }
+  button.danger { color: var(--bad); }
+  button.solid-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button.small, .btn.small { padding: 4px 9px; font-size: 12px; border-radius: 8px; }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-materials { background: #e0f2fe; color: #0369a1; } .c-subcontractor { background: #ede9fe; color: #6d28d9; } .c-labour { background: #ccfbf1; color: #0f766e; }
+  .c-equipment_hire { background: #ffedd5; color: #c2410c; } .c-freight { background: #cffafe; color: #0e7490; } .c-fees, .c-other, .c-mixed { background: #f1f5f9; color: #475569; }
+  .c-paid { background: var(--ok-soft); color: var(--ok); } .c-part { background: var(--warn-soft); color: var(--warn); } .c-unpaid { background: var(--bad-soft); color: var(--bad); }
+  .c-mk { background: var(--bad-soft); color: var(--bad); } .c-stock { background: var(--warn-soft); color: var(--warn); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* ---- Split view ---- */
-  .split { display: grid; grid-template-columns: 260px minmax(0, 1fr) minmax(300px, 32%); gap: 12px; align-items: start; }
-  .list-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12.5px; }
-  .inv { padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 6px; background: var(--card); cursor: pointer; }
-  .inv:hover { border-color: #c5ccd4; }
-  .inv.sel { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  /* header */
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 20px; font-weight: 800; }
+  header .sub { color: var(--muted); }
+  header .sp { flex: 1; }
+
+  /* suggestions */
+  .suggest { background: linear-gradient(135deg, #fff7ed, #fffbeb); border: 1px solid #fed7aa; border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
+  .suggest .h { font-weight: 700; display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 10px; align-items: center; background: #fff; border: 1px solid #fde4c8; border-radius: 12px; padding: 8px 10px; margin-top: 6px; }
+  .srow .why { font-size: 12px; color: var(--muted); }
+
+  /* totals */
+  .kpis { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+  .kpi { padding: 14px 16px; }
+  .kpi .l { font-size: 12px; font-weight: 700; color: var(--muted); }
+  .kpi .v { font-size: 26px; font-weight: 800; letter-spacing: -.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .kpi .v.good { color: var(--brand-dark); } .kpi .v.bad { color: var(--bad); } .kpi .v.warn { color: var(--warn); }
+  .kpi.hero { background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: 0; box-shadow: 0 6px 18px rgba(5, 150, 105, .25); }
+  .kpi.hero.over { background: linear-gradient(135deg, #f43f5e, #be123c); box-shadow: 0 6px 18px rgba(190, 18, 60, .25); }
+  .kpi.hero .l, .kpi.hero .s { color: rgba(255, 255, 255, .85); }
+  .kpi.hero button.link { color: #fff; text-decoration: underline; font-weight: 600; }
+  .quote-edit { display: flex; gap: 6px; margin-top: 8px; }
+  .quote-edit input { font: inherit; width: 120px; border: 0; border-radius: 8px; padding: 6px 8px; }
+  .quote-edit button { background: rgba(255, 255, 255, .2); border-color: rgba(255, 255, 255, .5); color: #fff; box-shadow: none; }
+  .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 10px; background: var(--line2); }
+  .bar span { height: 100%; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+  /* columns */
+  .cols { display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(300px, 32%); gap: 14px; align-items: start; }
+  .list-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .list-head b { font-size: 14px; }
+  .add-btn { width: 100%; justify-content: center; padding: 11px; font-size: 14px; margin-bottom: 12px; }
+  .inv { padding: 10px 12px; margin-bottom: 8px; cursor: pointer; border-radius: 14px; border: 1px solid var(--line); background: #fff; box-shadow: var(--shadow); }
+  .inv:hover { border-color: #b8cbc5; }
+  .inv.sel { border: 2px solid var(--brand); padding: 9px 11px; box-shadow: 0 4px 14px rgba(16, 185, 129, .15); }
   .inv .r1, .inv .r2 { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-  .inv .r1 .who { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .paid-toggle { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 10px; background: #fff; cursor: pointer; font-weight: 600; white-space: nowrap; }
-  .paid-toggle.on { background: var(--ok-soft); border-color: #9fd8b8; color: var(--ok-ink); }
+  .inv .who { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .inv .who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inv .r2 { margin-top: 4px; font-size: 12px; }
+  .inv .r2 .meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .inv .r2 .chips { display: flex; gap: 4px; flex-shrink: 0; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); cursor: pointer; flex-shrink: 0; }
+  .dropzone-hint { text-align: center; font-size: 12px; color: var(--muted); padding: 10px; border: 2px dashed var(--line); border-radius: 14px; margin-top: 4px; }
+  aside.over .dropzone-hint { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-dark); }
+  .emailbox { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .emailbox .row { display: flex; gap: 6px; margin-top: 4px; }
+  .emailbox code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 11.5px; color: var(--ink); }
+
+  .detail { padding: 16px; min-height: 320px; }
+  .d-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .d-head h2 { margin: 0; font-size: 18px; font-weight: 800; }
   .d-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  select.inv-cat { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 6px; background: #fff; color: var(--ink); }
-  .inv .r1 b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .inv .r2 { margin-top: 2px; font-size: 12px; color: var(--muted); }
-  .inv .r2 span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .inv .r2 > span:last-child { display: flex; gap: 4px; flex-shrink: 0; }
-  .pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
-  .pill.paid { background: var(--ok-soft); color: var(--ok-ink); } .pill.part { background: var(--warn-soft); color: var(--warn); }
-  .pill.unpaid { background: var(--bad-soft); color: var(--bad); } .pill.proc { background: var(--accent-soft); color: #2a5db0; }
-  .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.dup { background: #eef0f3; color: var(--muted); }
-  .drop { display: block; border: 2px dashed #cfd5dc; border-radius: var(--radius); padding: 12px; text-align: center; color: var(--muted); cursor: pointer; margin-top: 8px; }
-  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: #2a5db0; }
-  .add-manual { width: 100%; justify-content: center; margin-top: 6px; color: #2a5db0; }
-  .pill.shared { background: #ede9fe; color: #5b21b6; }
-  .split-bar { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: #f3f0ff; color: #4c1d95; font-size: 12.5px; }
-  .split-bar .spacer { flex: 1; }
+  select.pill-select { font: inherit; font-weight: 600; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); }
+  .paid-toggle { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 12px; background: #fff; cursor: pointer; font-weight: 700; }
+  .paid-toggle.on { background: var(--ok-soft); border-color: #a7e3bd; color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 600; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px 6px; border-bottom: 1px solid var(--line2); vertical-align: top; }
+  tr.is-mistake td { background: #fff6f7; }
+  td input[type=text] { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 3px 6px; width: 100%; color: inherit; }
+  td input[type=text]:hover, td input[type=text]:focus { border-color: var(--line); background: #fff; outline: none; }
+  td.desc input[type=text] { font-weight: 700; }
   .share { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .share input { width: 64px !important; text-align: right; border: 1px solid #cfd5dc !important; background: #fff !important; }
-  .share-note { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: normal; }
-  tr.not-mine td { color: var(--muted); }
-  .take h2 { font-size: 16px; margin: 0 0 2px; }
-  .take .grp { border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; overflow: hidden; }
-  .take .grp-h { padding: 8px 10px; background: var(--bg); font-size: 12.5px; }
-  .take .ln { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 7px 10px; border-top: 1px solid #f0f2f5; }
-  .take .ln input { font: inherit; width: 72px; text-align: right; border: 1px solid #cfd5dc; border-radius: 4px; padding: 4px 6px; }
-  .manual h2 { font-size: 16px; margin: 0 0 2px; }
-  .manual .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-  .manual label.f { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
-  .manual input[type=text], .manual input[type=date], .manual select { font: inherit; color: var(--ink); border: 1px solid #cfd5dc; border-radius: 4px; padding: 6px 8px; width: 100%; background: #fff; }
+  .share input { width: 64px !important; text-align: right; border: 1px solid #d6e2de !important; background: #fff !important; }
+  .line-tags { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 4px 0 0 4px; }
+  .line-tags select { font: inherit; font-size: 11px; font-weight: 700; border-radius: 20px; padding: 1px 6px; border: 1px solid transparent; cursor: pointer; }
+  .line-tags select.mk { background: var(--bad-soft); color: var(--bad); border-color: #fecdd3; }
+  .mk-link { border: 0; background: none; color: var(--muted); font-size: 11.5px; padding: 0 4px; box-shadow: none; font-weight: 600; }
+  .mk-link:hover { color: var(--bad); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin: 5px 0 0 4px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.me { background: var(--brand); color: #fff; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .d-total { text-align: right; color: var(--muted); margin-top: 10px; }
+  .d-total b { color: var(--ink); }
+  .others { margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: var(--line2); }
+  .others .o { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+  .others .o:first-of-type { border-top: 0; }
+  .note { margin-top: 10px; padding: 9px 12px; border-radius: 12px; font-size: 12.5px; background: var(--warn-soft); color: var(--warn); }
+  .note.bad { background: var(--bad-soft); color: var(--bad); }
+  .note.info { background: var(--brand-soft); color: var(--brand-dark); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+  .actions .spacer { flex: 1; }
+  .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; background: var(--bad-soft); color: var(--bad); border-radius: 12px; font-weight: 600; }
+  .confirm-bar .spacer { flex: 1; }
+  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 12px; background: var(--line2); border-radius: 12px; }
+  .edit-form label, .manual label.f { font-size: 12px; color: var(--muted); display: grid; gap: 3px; font-weight: 600; }
+  .edit-form input, .manual input[type=text], .manual input[type=date], .manual select, .modal select, .modal input[type=text] { font: inherit; border: 1px solid #d6e2de; border-radius: 8px; padding: 6px 8px; width: 100%; background: #fff; color: var(--ink); }
+  .edit-form .btns { display: flex; gap: 6px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 14px; }
+
+  .preview { height: calc(100vh - 230px); min-height: 440px; display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 10px; background: #eef3f1; }
+  .preview .p-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); background: #fff; }
+  .preview .p-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview iframe { flex: 1; border: 0; width: 100%; background: #525659; }
+  .preview .img { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
+  .preview .img img { max-width: 100%; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, .12); }
+
+  /* Add costs window */
+  .overlay { position: fixed; inset: 0; background: rgba(13, 43, 36, .45); display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 20; overflow: auto; }
+  .modal { width: min(920px, 100%); padding: 18px 20px; border-radius: 20px; background: #fff; box-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+  .modal h2 { margin: 0; font-size: 20px; font-weight: 800; }
+  .m-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .tabs { display: flex; gap: 6px; margin: 14px 0 12px; flex-wrap: wrap; }
+  .tabs button { border-radius: 10px; background: var(--line2); color: #4b6b63; border-color: transparent; box-shadow: none; }
+  .tabs button.on { background: var(--brand); color: #fff; }
+  .pick { padding: 12px 14px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 14px; }
+  .pick .top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .pick .t { font-weight: 700; }
+  .pick .sub { font-size: 12px; color: var(--muted); }
+  .take { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .take select { width: auto !important; }
+  .take input { width: 66px !important; text-align: right; }
+  .pick .lines { margin-top: 8px; border-top: 1px solid var(--line2); }
+  .pick .ln { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line2); }
+  .pick .ln:first-child { border-top: 0; }
+  .search { width: 100%; font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+  .bigdrop { display: block; text-align: center; border: 2px dashed #b8cbc5; border-radius: 16px; padding: 40px 20px; color: var(--muted); cursor: pointer; }
+  .bigdrop:hover, .bigdrop.over { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-dark); }
+  .bigdrop b { display: block; font-size: 16px; color: var(--ink); margin: 6px 0 2px; }
+  .manual .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .manual .checks { display: flex; gap: 18px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .manual .checks label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-  .manual .lines { margin-top: 14px; }
+  .manual .checks label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; font-weight: 600; }
   .manual .lines .row { display: grid; grid-template-columns: minmax(0, 1fr) 120px 28px; gap: 6px; margin-top: 6px; }
   .manual .lines .row input.amt { text-align: right; }
   .manual .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .manual .hint.bad { color: var(--bad); }
-  @media (max-width: 760px) { .manual .grid { grid-template-columns: minmax(0, 1fr); } }
-  .email { margin-top: 8px; }
-  .email .row { display: flex; gap: 6px; margin-top: 4px; }
-  .email code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 7px; font-size: 11.5px; }
 
-  .detail { padding: 14px; min-height: 300px; }
-  .d-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
-  .d-head h2 { font-size: 16px; margin: 0; }
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line); }
-  td { padding: 5px 4px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
-  tr.is-paid td.desc input { color: var(--muted); text-decoration: line-through; }
-  tr.is-mistake td { background: var(--mk-row); }
-  .mk-link { border: 0; background: none; color: var(--muted); font-size: 11.5px; padding: 0 4px; opacity: .65; }
-  .mk-link:hover { color: var(--mk); opacity: 1; background: none; }
-  select.mk-select { width: auto !important; max-width: 100%; font-size: 11.5px !important; padding: 1px 4px !important; margin: 1px 0 0 2px; border: 1px solid #f3b4c0 !important; border-radius: 10px !important; background: var(--mk-soft) !important; color: var(--mk) !important; font-weight: 600; }
-  .pill.mk { background: var(--mk-soft); color: var(--mk); }
-  select.inv-mk { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 6px; background: #fff; color: var(--ink); max-width: 230px; }
-  header a.btn { margin-left: auto; }
-  td input[type=text], td select { font: inherit; border: 1px solid transparent; background: transparent; border-radius: 4px; padding: 3px 4px; width: 100%; color: inherit; }
-  td input[type=text]:hover, td select:hover, td input[type=text]:focus, td select:focus { border-color: var(--line); background: #fff; outline: none; }
-  td input.amount { text-align: right; width: 76px; }
-  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--ok); cursor: pointer; }
-  .d-total { text-align: right; color: var(--muted); margin-top: 8px; }
-  .d-total b { color: var(--ink); }
-  .note { margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12.5px; background: var(--warn-soft); color: var(--warn); }
-  .note.bad { background: var(--bad-soft); color: var(--bad); }
-  .note.info { background: var(--accent-soft); color: #2a5db0; }
-  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; align-items: center; }
-  .actions .spacer { flex: 1; }
-  .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; background: var(--bad-soft); color: var(--bad); border-radius: 6px; font-weight: 500; }
-  .confirm-bar .spacer { flex: 1; }
-  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 6px; }
-  .edit-form label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
-  .edit-form input { font: inherit; border: 1px solid #cfd5dc; border-radius: 4px; padding: 5px 7px; width: 100%; }
-  .edit-form .btns { display: flex; gap: 6px; }
-
-  .preview { height: calc(100vh - 210px); min-height: 420px; display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 10px; }
-  .preview .p-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-  .preview .p-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .preview iframe { flex: 1; border: 0; width: 100%; background: #525659; }
-  .preview .img { flex: 1; overflow: auto; background: #525659; display: flex; align-items: flex-start; justify-content: center; padding: 10px; }
-  .preview .img img { max-width: 100%; background: #fff; }
-  .empty { text-align: center; color: var(--muted); padding: 40px 14px; }
-  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; z-index: 10; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; z-index: 30; }
   .toast.show { opacity: 1; }
-  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
   .only-sm { display: none !important; }
 
-  @media (max-width: 1100px) {
-    .split { grid-template-columns: 260px minmax(0, 1fr); }
+  @media (max-width: 1150px) {
+    .cols { grid-template-columns: 260px minmax(0, 1fr); }
     .preview { display: none; }
     .only-sm { display: inline-flex !important; }
   }
-  @media (max-width: 760px) {
+  @media (max-width: 780px) {
     .wrap { padding: 10px; }
-    .summary { grid-template-columns: minmax(0, 1fr); }
-    .split { grid-template-columns: minmax(0, 1fr); }
+    .kpis { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    .srow { grid-template-columns: minmax(0, 1fr); }
+    .edit-form, .manual .grid { grid-template-columns: minmax(0, 1fr); }
+    .pick .top, .pick .ln { grid-template-columns: minmax(0, 1fr); }
+    .take { justify-content: flex-start; }
     .hide-sm { display: none; }
-    .edit-form { grid-template-columns: minmax(0, 1fr); }
-    .s-margin { text-align: left; }
   }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Job Costs</h1><span class="sub" id="jobLabel"></span><a class="btn" id="reportsLink" target="_blank" rel="noopener">Reports ↗</a></header>
-  <section class="panel summary" id="summary"></section>
-  <section class="split">
-    <aside>
-      <div class="list-head" id="listHead"></div>
+  <header>
+    <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
+    <a class="btn" id="inboxLink" target="_blank" rel="noopener">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
+    <a class="btn" id="reportsLink" target="_blank" rel="noopener">📊 Reports</a>
+  </header>
+  <section id="suggest"></section>
+  <section class="kpis" id="kpis"></section>
+  <section class="cols">
+    <aside id="aside">
+      <button class="primary add-btn" data-add>＋ Add costs</button>
+      <div class="list-head"><b>Costs on this job</b><span class="muted" id="listToPay"></span></div>
       <div id="list"></div>
-      <label class="drop" id="drop">
-        <input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden>
-        <strong>Drop invoices here</strong><br>or click to choose files
-      </label>
-      <button class="add-manual" data-add-manual>+ Add invoice by hand</button>
-      <button class="add-manual" data-take-open>⇄ Take from another invoice</button>
+      <div class="dropzone-hint">or drop invoice files here</div>
+      <div class="emailbox" id="emailBox"></div>
       <input type="file" id="attachInput" accept="application/pdf,image/*" hidden>
-      <div class="email" id="emailBox"></div>
     </aside>
-    <main class="panel detail" id="detail"></main>
-    <section class="panel preview" id="preview"></section>
+    <main class="card detail" id="detail"></main>
+    <section class="card preview" id="preview"></section>
   </section>
 </div>
+<div id="modalRoot"></div>
 <div class="toast" id="toast"></div>
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { taking: false, available: null, adding: false, manual: null, mkOpen: null, data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
-const $ = (s) => document.querySelector(s);
+const state = { data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null,
+  mkOpen: null, forceDetail: false, modal: null, attachTo: null };
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const money0 = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
+const signed = (n) => (n < 0 ? '−' : '') + money0(Math.abs(n));
 const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
-const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other' };
-const CAT_COLOR = { materials: '#4a86e8', subcontractor: '#7c3aed', labour: '#0d9488', equipment_hire: '#d97706', freight: '#0891b2', fees: '#94a3b8', other: '#64748b' };
-const fileUrl = (inv) => `/api/invoices/${inv.id}/file?t=${encodeURIComponent(BOOT.token)}`;
+const num = (v) => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return String(v ?? '').trim() === '' || !isFinite(n) ? null : n; };
+const qty = (n) => String(+(+n).toFixed(3));
+const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other', mixed: 'Mixed' };
+const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14b8a6', equipment_hire: '#f97316', freight: '#06b6d4', fees: '#94a3b8', other: '#64748b' };
+const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
+const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand' };
+const fileUrl = (id) => `/api/invoices/${id}/file?t=${encodeURIComponent(BOOT.token)}`;
+const catOptions = (sel) => BOOT.categories.map((c) => `<option value="${c}" ${c === sel ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('');
+const reasonOptions = (sel, empty = 'No screw-up') => `<option value="">${empty}</option>` + BOOT.reasons.map((r) => `<option value="${r.code}" ${r.code === sel ? 'selected' : ''}>⚠ ${esc(r.label)}</option>`).join('');
 
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2200); }
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
 
 async function api(path, opts = {}) {
   const isJson = opts.body && !(opts.body instanceof FormData);
   const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(isJson ? { 'Content-Type': 'application/json' } : {}) } });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || 'Request failed');
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
   return body;
 }
+const post = (p, body) => api(p, { method: 'POST', body: JSON.stringify(body || {}) });
+const patch = (p, body) => api(p, { method: 'PATCH', body: JSON.stringify(body) });
 
 async function load() {
   try {
@@ -230,235 +268,250 @@ const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.se
 function render() {
   const j = state.data.job || {};
   $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number : '', j.job_title].filter(Boolean).join(' · ');
-  // Don't redraw a part of the screen while someone is typing in it.
+  const badge = $('#inboxBadge');
+  badge.hidden = !state.data.inboxCount; badge.textContent = state.data.inboxCount || '';
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
-  if (!typingIn($('#summary'))) renderSummary();
+  renderSuggestions();
+  if (!typingIn($('#kpis'))) renderKpis();
   renderList();
-  if (state.taking) { if (!$('#takePanel')) renderTake(); }
-  else if (state.adding) { if (!$('#manualForm')) renderManual(); }
-  else if (state.forceDetail || !typingIn($('#detail'))) { state.forceDetail = false; renderDetail(); }
+  if (state.forceDetail || !typingIn($('#detail'))) { state.forceDetail = false; renderDetail(); }
   renderPreview();
 }
 
-// ---------- Costs vs quoted price, with and without screw-ups ----------
-const REASON_LABEL = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
-const MK_COLOR = '#be123c';
+// ---------- Suggestions: one click to add ----------
+function renderSuggestions() {
+  const s = state.data.suggestions || [];
+  $('#suggest').innerHTML = !s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this job <span class="badge">${s.length}</span></div>
+    ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total)}</span>
+      <div class="why">${esc(x.reason || '')}</div></div>
+      <span class="chip c-${esc(x.category || 'materials')}">${esc(CAT_LABEL[x.category] || 'Materials')}</span>
+      <button class="primary small" data-accept="${x.id}">✓ Add to this job</button><button class="small" data-dismiss="${x.id}">Not this job</button></div>`).join('')}</div>`;
+}
 
-function renderSummary() {
+// ---------- Totals ----------
+function renderKpis() {
   const t = state.data.totals;
   const hasQuote = t.quote != null;
-  const over = hasQuote && t.total > t.quote;
-
-  // Bar: normal costs by type, then screw-ups in red.
+  const over = hasQuote && t.margin < 0;
   const clean = {};
   for (const inv of state.data.invoices) {
     if (inv.status !== 'ready' || inv.duplicate_of) continue;
-    const cat = inv.category || 'materials';
-    for (const it of inv.items) if (!it.mistake_reason) clean[cat] = (clean[cat] || 0) + it.cost;
+    for (const it of inv.items) if (!it.mistake_reason) clean[it.category] = (clean[it.category] || 0) + it.cost;
   }
-  const cats = Object.entries(clean).filter(([, v]) => v > 0.004).sort((x, y) => y[1] - x[1]);
-  const scale = Math.max(t.quote || 0, t.total) || 1;
-  const segs = cats.map(([c, v]) => `<span title="${esc(CAT_LABEL[c] || c)}: ${money(v)}" style="width:${v / scale * 100}%;background:${CAT_COLOR[c] || '#64748b'}"></span>`).join('')
-    + (t.mistakes > 0 ? `<span title="Screw-ups: ${money(t.mistakes)}" style="width:${t.mistakes / scale * 100}%;background:repeating-linear-gradient(135deg,${MK_COLOR} 0 6px,#e11d48 6px 12px)"></span>` : '');
-  const mark = over ? `<i class="quote-mark" style="left:calc(${t.quote / scale * 100}% - 1px)" title="Quoted price ${money(t.quote)}"></i>` : '';
+  const cats = Object.entries(clean).filter(([, v]) => v > 0.004).sort((a, b) => b[1] - a[1]);
+  const scale = t.total || 1;
+  const bar = cats.map(([c, v]) => `<span title="${esc(CAT_LABEL[c] || c)} ${money(v)}" style="width:${v / scale * 100}%;background:${CAT_COLOR[c] || '#64748b'}"></span>`).join('')
+    + (t.mistakes > 0 ? `<span title="Screw-ups ${money(t.mistakes)}" style="width:${t.mistakes / scale * 100}%;background:repeating-linear-gradient(135deg,#f43f5e 0 5px,#be123c 5px 10px)"></span>` : '');
+  const legend = cats.map(([c, v]) => `<span><i style="background:${CAT_COLOR[c] || '#64748b'}"></i>${esc(CAT_LABEL[c] || c)} ${money0(v)}</span>`).join('')
+    + (t.mistakes > 0 ? `<span style="color:var(--bad)"><i style="background:#f43f5e"></i>Screw-ups ${money0(t.mistakes)}</span>` : '');
 
-  let quotePart;
-  if (state.editQuote || !hasQuote) {
-    quotePart = `<span class="quote-edit"><span class="muted">Quoted price</span><input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640.00" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="primary" data-save-quote>Save</button>${state.editQuote ? '<button data-cancel-quote>Cancel</button>' : ''}</span>`;
+  let hero;
+  if (!hasQuote || state.editQuote) {
+    hero = `<div class="kpi hero"><div class="l">${hasQuote ? 'Quoted price' : 'Profit so far'}</div>
+      ${hasQuote ? '' : '<div class="s">Add the quoted price (incl. GST) to see profit</div>'}
+      <div class="quote-edit"><input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="small" data-save-quote>Save</button>${state.editQuote ? '<button class="small" data-cancel-quote>Cancel</button>' : ''}</div></div>`;
   } else {
     const src = state.data.job.quote_source === 'manual' ? 'typed in' : 'from ServiceM8';
-    quotePart = `<span class="muted">Quoted price</span> <b>${money(t.quote)}</b> <button class="link" data-edit-quote title="Quoted price ${src}">edit</button>`;
+    hero = `<div class="kpi hero ${over ? 'over' : ''}"><div class="l">${over ? 'Over the quote by' : 'Profit so far'}</div>
+      <div class="v">${money0(Math.abs(t.margin))}</div>
+      <div class="s">${t.marginPct}% margin · quoted ${money0(t.quote)} <button class="link small" data-edit-quote title="Quoted price ${src}">edit</button></div></div>`;
   }
-  const profitCell = (m, pct) => !hasQuote ? '<td class="muted">—</td><td class="muted">—</td>'
-    : `<td class="${m < 0 ? 'bad' : 'good'}">${m < 0 ? '−' : ''}${money(Math.abs(m))}</td><td class="${m < 0 ? 'bad' : 'good'}">${pct}%</td>`;
-  const hasMk = t.mistakes > 0;
-  const lostPts = hasQuote && t.quote ? Math.round(t.mistakes / t.quote * 1000) / 10 : null;
-
-  $('#summary').innerHTML = `
-    <div>
-      <div class="s-top"><div>${quotePart}</div>
-        <div class="muted" style="font-size:12px">All amounts incl. GST</div></div>
-      <table class="compare">
-        <thead><tr><th></th><th class="muted">Costs</th><th class="muted">Profit</th><th class="muted">Margin</th></tr></thead>
-        <tbody>
-          <tr class="actual"><td>Actual</td><td>${money(t.total)}</td>${profitCell(t.margin, t.marginPct)}</tr>
-          ${hasMk ? `<tr><td>Without screw-ups</td><td>${money(t.cleanTotal)}</td>${profitCell(t.cleanMargin, t.cleanMarginPct)}</tr>` : ''}
-        </tbody>
-      </table>
-      ${!hasQuote ? '<div class="muted" style="font-size:12px">Add the quoted price to see profit and margin.</div>' : ''}
-      ${hasMk ? `<div class="screwup-line">⚠ <span>Screw-ups <b>${money(t.mistakes)}</b></span><span><b>${t.mistakePct}%</b> of costs</span>${lostPts != null ? `<span>cost you <b>${lostPts}</b> margin points</span>` : ''}<span>${state.data.byReason.map((r) => `${esc(REASON_LABEL[r.name] || r.name)} ${money(r.total)}`).join(' · ')}</span></div>` : ''}
-      <div class="bar">${segs}${mark}</div>
-      <div class="s-foot">
-        <span>Paid <b style="color:var(--ok-ink)">${money(t.paid)}</b></span>
-        <span>To pay <b style="color:var(--warn)">${money(t.outstanding)}</b></span>
-        <span>GST incl. <b>${money(t.tax)}</b></span>
-        <span>${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</span>
-        ${hasQuote && !over ? '<span>Grey = left over from the quote</span>' : ''}${over ? '<span>Black line = quoted price</span>' : ''}
-      </div>
-    </div>
-    <div class="legend">${cats.length || hasMk ? cats.map(([c, v]) => `<div><i style="background:${CAT_COLOR[c] || '#64748b'}"></i><span>${esc(CAT_LABEL[c] || c)}</span><span class="num">${money(v)}</span></div>`).join('')
-      + (hasMk ? `<div style="color:var(--mk)"><i style="background:${MK_COLOR}"></i><span>Screw-ups</span><span class="num">${money(t.mistakes)}</span></div>` : '')
-      : '<div class="muted">Costs by type will show here.</div>'}</div>`;
+  const lost = hasQuote && t.quote ? Math.round(t.mistakes / t.quote * 1000) / 10 : null;
+  $('#kpis').innerHTML = `${hero}
+    <div class="kpi card"><div class="l">Costs</div><div class="v">${money0(t.total)}</div><div class="bar">${bar}</div><div class="legend">${legend || '<span>Add costs to see them by type</span>'}</div></div>
+    <div class="kpi card"><div class="l">Paid</div><div class="v good">${money0(t.paid)}</div><div class="s">${t.outstanding > 0.004 ? `<b style="color:var(--warn)">${money(t.outstanding)}</b> still to pay` : 'Nothing to pay'} · ${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</div></div>
+    <div class="kpi card"><div class="l">⚠ Screw-ups</div><div class="v ${t.mistakes > 0 ? 'bad' : ''}">${money0(t.mistakes)}</div>
+      <div class="s">${t.mistakes > 0 ? `${t.mistakePct}% of costs${lost != null ? ` · cost ${lost} margin pts` : ''}<br>Without them: ${hasQuote ? `${signed(t.cleanMargin)} profit · ${t.cleanMarginPct}%` : money0(t.cleanTotal) + ' costs'}` : 'None on this job 🎉'}</div></div>`;
 }
 
-// ---------- Invoice list ----------
-function statusPill(inv) {
-  if (inv.status === 'processing') return '<span class="pill proc"><span class="spin"></span> Reading</span>';
-  if (inv.status === 'error') return '<span class="pill err">Needs attention</span>';
-  if (inv.duplicate_of) return '<span class="pill dup">Duplicate</span>';
-  return { paid: '<span class="pill paid">Paid</span>', part: '<span class="pill part">Part paid</span>', unpaid: '<span class="pill unpaid">Unpaid</span>' }[inv.payment_state];
+// ---------- List ----------
+function statusChip(inv) {
+  if (inv.status === 'processing') return '<span class="chip c-proc"><span class="spin"></span> Reading</span>';
+  if (inv.status === 'error') return '<span class="chip c-err">Needs attention</span>';
+  if (inv.duplicate_of) return '<span class="chip c-dup">Duplicate</span>';
+  return { paid: '<span class="chip c-paid">Paid</span>', part: '<span class="chip c-part">Part paid</span>', unpaid: '<span class="chip c-unpaid">Unpaid</span>' }[inv.payment_state];
 }
 
 function renderList() {
   const d = state.data;
-  $('#listHead').innerHTML = `<b>Invoices</b><span class="muted">${money(d.totals.outstanding)} to pay</span>`;
+  $('#listToPay').textContent = d.totals.outstanding > 0.004 ? `${money(d.totals.outstanding)} to pay` : '';
   $('#list').innerHTML = d.invoices.length ? d.invoices.map((inv) => {
     const ready = inv.status === 'ready';
-    const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source];
+    const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
-      <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><span class="num">${ready ? money(inv.job_total) : ''}</span></div>
-      <div class="r2"><span>${inv.foreign ? `<span class="pill shared" title="Part of an invoice on another job">From #${esc(inv.home_job_number || '?')}</span> ` : inv.split ? '<span class="pill shared" title="Split across jobs">Split</span> ' : ''}${esc(sub)}</span><span>${inv.mistake_state !== 'none' && inv.mistake_state ? '<span class="pill mk" title="Screw-up">⚠</span> ' : ''}${statusPill(inv)}</span></div>
+      <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
     </div>`;
-  }).join('') : '<div class="panel empty">No invoices yet.</div>';
-
+  }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   $('#emailBox').innerHTML = d.inboxAddress
-    ? `<span class="muted">Or email invoices to this job:</span><div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button data-copy>Copy</button></div>`
-    : '<span class="muted">Email-in is not set up on the server yet.</span>';
+    ? `Email invoices for any job to:<div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button class="small" data-copy>Copy</button></div>`
+    : 'Email-in is not set up on the server yet.';
 }
 
 // ---------- Selected invoice ----------
+function traceChips(trace, withLeft = true) {
+  const unit = (j) => (trace.quantity ? `×${qty(j.quantity)}` : money0(j.amount));
+  return `<div class="trace">${trace.jobs.map((j) => `<span class="${j.this_job ? 'me' : ''}" title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${unit(j)}${j.this_job ? ' (this job)' : ''}</span>`).join('')}${withLeft && trace.left > 1e-6 ? `<span class="left">${trace.quantity ? `${qty(trace.left_quantity)} of ${qty(trace.quantity)} left` : `${money(trace.left_amount)} left`}</span>` : ''}</div>`;
+}
+
 function renderDetail() {
   const inv = selectedInvoice();
   const el = $('#detail');
-  if (!inv) { el.innerHTML = '<div class="empty">Drop an invoice on the left, or email it to this job.<br>It is read automatically and appears here.</div>'; return; }
+  if (!inv) { el.innerHTML = '<div class="empty"><div style="font-size:34px">🧾</div><b>No costs on this job yet</b><br>Click <b>＋ Add costs</b>: pick invoices that came in by email, upload a file, or type one in.</div>'; return; }
   const ready = inv.status === 'ready';
-  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', (inv.attached_later ? 'Added by hand, file attached later' : SOURCE_LABEL[inv.source])].filter(Boolean).join(' · ');
+  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', inv.attached_later ? 'Added by hand, file attached later' : SOURCE_LABEL[inv.source]].filter(Boolean).join(' · ');
   const allPaid = inv.payment_state === 'paid';
-  const own = !inv.foreign;
-  let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))} ${statusPill(inv)}</h2><div class="muted">${esc(meta)}</div></div>
+  let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</h2><div class="muted">${esc(meta)}</div></div>
     ${ready && inv.items.length ? `<div class="d-controls">
-      ${own ? `<select class="inv-cat" data-inv-cat="${inv.id}" title="Type of cost for the whole invoice">${BOOT.categories.map((c) => `<option value="${c}" ${c === (inv.category || 'materials') ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select>` : `<span class="muted">${esc(CAT_LABEL[inv.category] || 'Materials')}</span>`}
-      <label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid-cb="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label>
+      <select class="pill-select" data-inv-cat="${inv.id}" title="Type for everything on this job">${inv.category === 'mixed' ? '<option value="" selected>Mixed types</option>' : ''}${catOptions(inv.category)}</select>
+      <label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label>
     </div>` : ''}</div>`;
-  if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice…</div>';
+  if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice… it goes on this job when it’s done.</div>';
   if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
-  else if (inv.status === 'ready' && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
-  if (inv.foreign) {
-    h += `<div class="split-bar">⇄ Part of an invoice on <b>Job #${esc(inv.home_job_number || '?')}</b>${inv.home_job_title ? ' · ' + esc(inv.home_job_title) : ''}<span>This job: <b>${money(inv.job_total)}</b> of ${money(inv.total)}</span><span>Paid is for the whole invoice.</span></div>`;
-  } else if (inv.split) {
-    const others = inv.other_jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ');
-    h += `<div class="split-bar">⇄ Split across jobs<span>This job: <b>${money(inv.job_total)}</b> of ${money(inv.total)}</span>${others ? `<span>Also on ${others}</span>` : ''}${inv.not_assigned > 0.004 ? `<span>Not assigned yet: <b>${money(inv.not_assigned)}</b></span>` : ''}<span class="spacer"></span>${others ? '' : `<button data-split-off="${inv.id}">Stop splitting</button>`}</div>`;
-  }
+  else if (ready && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
+  if (inv.other_jobs.length) h += `<div class="note info">Shared invoice: also on ${inv.other_jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ')}. This job: <b>${money(inv.job_total)}</b> of ${money(inv.total)}. Paid is for the whole invoice.</div>`;
+
   if (inv.items.length) {
-    const splitView = inv.split;
-    h += `<table><thead><tr><th>Item</th>${splitView ? '<th class="num">For this job</th>' : '<th class="num hide-sm">On invoice</th>'}<th class="num">Cost to job</th></tr></thead><tbody>`;
+    h += `<table><thead><tr><th>Item</th><th class="num">This job</th><th class="num">Cost</th></tr></thead><tbody>`;
     for (const it of inv.items) {
-      const qty = it.quantity != null ? `Qty ${it.quantity}${it.unit ? ' ' + it.unit : ''}` : '';
+      const q = it.trace.quantity;
+      const input = q
+        ? `<span class="share"><input type="text" inputmode="decimal" data-share-qty="${it.id}" value="${qty(it.share_quantity)}"> of ${qty(q)}${it.unit ? ' ' + esc(it.unit) : ''}</span>`
+        : `<span class="share">$<input type="text" inputmode="decimal" data-share-amt="${it.id}" value="${(it.cost || 0).toFixed(2)}"></span>`;
       const mk = it.mistake_reason
-        ? `<select class="mk-select" data-item-mk="${it.id}" title="Screw-up reason"><option value="">✕ Not a screw-up</option>${BOOT.reasons.map((r) => `<option value="${r.code}" ${r.code === it.mistake_reason ? 'selected' : ''}>⚠ ${esc(r.label)}</option>`).join('')}</select>`
+        ? `<select class="mk" data-item-mk="${it.id}" title="Screw-up reason">${reasonOptions(it.mistake_reason, '✕ Not a screw-up')}</select>`
         : state.mkOpen === it.id
-          ? `<select class="mk-select" data-item-mk="${it.id}" data-autofocus><option value="">Why was this a screw-up?</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}</select> <button class="mk-link" data-mk-cancel>cancel</button>`
-          : `<button class="mk-link" data-mk-open="${it.id}">⚠ Mark as screw-up</button>`;
-      const mine = !splitView || it.share > 0;
-      let middle;
-      if (splitView) {
-        const q = it.quantity > 0;
-        const input = q
-          ? `<span class="share"><input type="text" inputmode="decimal" data-share-qty="${it.id}" value="${+(it.share_quantity || 0)}"> of ${+it.quantity}${it.unit ? ' ' + esc(it.unit) : ''}</span>`
-          : `<span class="share">$<input type="text" inputmode="decimal" data-share-amt="${it.id}" value="${(it.cost || 0).toFixed(2)}"> of ${money(it.line_cost)}</span>`;
-        const notes = [it.left > 1e-6 ? (q ? `${+it.left_quantity} left` : `${money(it.line_cost * it.left)} left`) : '',
-          ...it.others.map((o) => `#${esc(o.job_number || '?')}: ${o.quantity != null ? +o.quantity : money(it.line_cost * o.share)}`)].filter(Boolean).join(' · ');
-        middle = `<td class="num">${input}${notes ? `<div class="share-note">${notes}</div>` : ''}</td>`;
-      } else {
-        middle = `<td class="num hide-sm"><input type="text" class="amount" inputmode="decimal" value="${(Number(it.line_total) || 0).toFixed(2)}" data-item-amt="${it.id}"></td>`;
-      }
-      const descCell = own
-        ? `<input type="text" value="${esc(it.description)}" data-item-desc="${it.id}" title="${esc(qty)}">`
-        : `<div style="padding:3px 4px">${esc(it.description)}</div>`;
-      h += `<tr class="${it.mistake_reason ? 'is-mistake' : ''} ${mine ? '' : 'not-mine'}">
-        <td class="desc">${descCell}<div>${mine ? mk : '<span class="share-note">Not for this job</span>'}</div></td>
-        ${middle}
-        <td class="num">${money(it.cost)}</td></tr>`;
+          ? `<select class="mk" data-item-mk="${it.id}" data-autofocus>${reasonOptions('', 'Why was it a screw-up?')}</select> <button class="mk-link" data-mk-cancel>cancel</button>`
+          : `<button class="mk-link" data-mk-open="${it.id}">⚠ Screw-up?</button>`;
+      h += `<tr class="${it.mistake_reason ? 'is-mistake' : ''}">
+        <td class="desc"><input type="text" value="${esc(it.description)}" data-item-desc="${it.id}">
+          <div class="line-tags"><select class="c-${esc(it.category)}" data-item-cat="${it.id}" title="Type">${catOptions(it.category)}</select>${mk}</div>
+          ${it.trace.jobs.length > 1 || it.trace.left > 1e-6 ? traceChips(it.trace) : ''}</td>
+        <td class="num">${input}</td>
+        <td class="num"><b>${money(it.cost)}</b></td></tr>`;
     }
     h += '</tbody></table>';
-    h += `<div class="d-total">${inv.subtotal != null ? 'Subtotal ' + money(inv.subtotal) + ' · ' : ''}${inv.tax != null ? 'GST ' + money(inv.tax) + ' · ' : ''}<b>Total ${money(inv.total)}</b>${inv.split ? ` · <b>This job ${money(inv.job_total)}</b>` : ''}${inv.payment_state === 'part' ? ` · <span style="color:var(--warn)">${money(inv.outstanding)} to pay</span>` : ''}</div>`;
+    h += `<div class="d-total">${inv.tax != null ? 'Invoice GST ' + money(inv.tax) + ' · ' : ''}Invoice total ${money(inv.total)}${inv.job_total !== inv.total ? ` · <b>This job ${money(inv.job_total)}</b>` : ''}</div>`;
+  }
+  if (inv.other_lines.length) {
+    h += `<div class="others"><b>Other lines on this invoice</b>${inv.other_lines.map((o) => `<div class="o"><div>${esc(o.description)} <span class="muted">${money(o.line_cost)}</span>${traceChips(o.trace)}</div>
+      ${o.trace.left > 1e-6 ? `<button class="small" data-add-rest="${o.id}" data-qty="${o.trace.quantity ? 1 : ''}" data-left="${o.trace.quantity ? o.trace.left_quantity : o.trace.left_amount}">＋ Add to this job</button>` : ''}</div>`).join('')}</div>`;
   }
   if (inv.notes) h += `<div class="note">${esc(inv.notes)}</div>`;
-  if (inv.email_from) h += `<div class="muted" style="margin-top:10px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
+  if (inv.email_from) h += `<div class="muted" style="margin-top:10px;font-size:12px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
-      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
-      ${!own ? '' : inv.file_path ? `<button data-reread="${inv.id}">Read again</button>` : `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>`}
-      ${own && ready && !inv.split && inv.items.length && !inv.duplicate_of ? `<button data-split-on="${inv.id}" title="Only part of this invoice is for this job">⇄ Split across jobs</button>` : ''}
-      ${ready && inv.items.length ? `<select class="inv-mk" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
-      ${own && ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
+      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv.id)}" target="_blank" rel="noopener">View invoice</a>` : ''}
+      ${inv.file_path ? `<button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
+      ${ready && inv.items.length ? `<select class="pill-select" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
+      ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
       <span class="spacer"></span>
-      <button class="danger link" data-ask-delete="${inv.id}">${own ? 'Remove' : `Give back to #${esc(inv.home_job_number || '?')}`}</button>
+      <button class="danger link" data-ask-delete="${inv.id}">Remove from job</button>
     </div>`;
   if (state.confirmDel === inv.id) {
-    h += own
-      ? `<div class="confirm-bar">Remove this invoice from the job?<span class="spacer"></span><button class="solid-danger" data-delete="${inv.id}">Remove</button><button data-cancel>Cancel</button></div>`
-      : `<div class="confirm-bar">Give this job's share back? It becomes available to other jobs again.<span class="spacer"></span><button class="solid-danger" data-delete="${inv.id}">Give back</button><button data-cancel>Cancel</button></div>`;
+    h += `<div class="confirm-bar">Take this ${inv.other_jobs.length ? 'job’s share' : 'invoice'} off the job? It goes back to “Not assigned yet”.<span class="spacer"></span>
+      <button class="solid-danger" data-delete="${inv.id}">Remove from job</button>${inv.other_jobs.length ? '' : `<button class="danger" data-delete-all="${inv.id}">Delete invoice</button>`}<button data-cancel>Cancel</button></div>`;
   }
   if (state.editing === inv.id) {
     const dr = state.draft;
     h += `<form class="edit-form" data-edit-form="${inv.id}">
       <label>Supplier<input name="supplier" value="${esc(dr.supplier ?? inv.supplier ?? '')}"></label>
       <label>Invoice number<input name="invoice_number" value="${esc(dr.invoice_number ?? inv.invoice_number ?? '')}"></label>
-      <label>Total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <label>Invoice total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
       <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
     </form>`;
   }
   el.innerHTML = h;
 }
 
-// ---------- Take a share of another invoice (e.g. 1 of 10 motors) ----------
-async function openTake() {
-  state.taking = true; state.adding = false; state.available = null;
-  renderTake();
-  try { state.available = (await api('/available')).invoices; } catch (x) { toast(x.message); state.available = []; }
-  renderTake();
-}
-
-function renderTake() {
-  const list = state.available;
-  let h = `<div class="take" id="takePanel"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><h2>Take from another invoice</h2>
-    <div class="muted">Lines from split invoices that still have something left. Only what you take is charged to this job.</div></div><button data-take-close>Close</button></div>`;
-  if (!list) h += '<div class="empty"><span class="spin"></span></div>';
-  else if (!list.length) h += `<div class="empty">Nothing available.<br><br>To share an invoice, open it on the job it came in on and click <b>⇄ Split across jobs</b>,<br>then lower that job's share. What's left shows up here.</div>`;
-  else {
-    for (const g of list) {
-      h += `<div class="grp"><div class="grp-h"><b>${esc(g.supplier || 'Unknown supplier')}</b>${g.invoice_number ? ' #' + esc(g.invoice_number) : ''}${g.invoice_date ? ' · ' + fmtDate(g.invoice_date) : ''} · on Job #${esc(g.home_job_number || '?')}</div>`;
-      for (const l of g.lines) {
-        const q = l.quantity != null;
-        h += `<div class="ln"><div>${esc(l.description)}<div class="share-note">${q ? `${+l.left_quantity} of ${+l.quantity}${l.unit ? ' ' + esc(l.unit) : ''} left · ${money(l.unit_cost)} each` : `${money(l.left_amount)} left of ${money(l.cost)}`}${l.mine_fraction > 0 ? ' · this job already has some' : ''}</div></div>
-          <span class="share">${q ? '' : '$'}<input type="text" inputmode="decimal" id="take-${l.item_id}" value="${q ? Math.min(1, l.left_quantity) : l.left_amount.toFixed(2)}">${q && l.unit ? ' ' + esc(l.unit) : ''}</span>
-          <button class="primary" data-take="${l.item_id}" data-take-qty="${q ? 1 : ''}" data-take-invoice="${g.invoice_id}" data-take-mine="${l.mine_fraction}" data-take-total="${q ? l.quantity : l.cost}">Take</button></div>`;
-      }
-      h += '</div>';
-    }
+// ---------- Original invoice (only reloads when a different file is selected) ----------
+function renderPreview() {
+  const inv = selectedInvoice();
+  const key = inv && inv.file_path ? String(inv.id) : 'none:' + (inv?.id ?? '');
+  if (key === state.previewKey) return;
+  state.previewKey = key;
+  const el = $('#preview');
+  if (!inv || !inv.file_path) {
+    el.innerHTML = inv && inv.source === 'manual'
+      ? `<div class="empty">Added by hand – there is no invoice file.<br><br>Found the invoice? <button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button><br><span style="font-size:12px">It will be read and replace the details you typed.</span></div>`
+      : '<div class="empty">The original invoice shows here.</div>';
+    return;
   }
-  $('#detail').innerHTML = h + '</div>';
+  const url = fileUrl(inv.id);
+  const mime = inv.mime_type || '';
+  const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
+  el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn small" href="${url}" target="_blank" rel="noopener">Open</a></div>${body}`;
 }
 
-// ---------- Add an invoice by hand (lost paperwork etc.) ----------
-const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand' };
-const $$ = (sel) => [...document.querySelectorAll(sel)];
-const num = (v) => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return String(v ?? '').trim() === '' || !isFinite(n) ? null : n; };
-const newManual = () => ({ supplier: '', invoice_number: '', invoice_date: new Date().toLocaleDateString('en-CA'), category: 'materials', total: '', includes_gst: true, paid: false, items: [] });
+// ---------- Add costs window ----------
+async function openAdd(tab = 'pick') {
+  state.modal = { tab, list: null, search: '', expanded: new Set(), manual: newManual() };
+  renderModal();
+  if (tab === 'pick') loadUnassigned();
+}
+async function loadUnassigned() {
+  try { state.modal.list = (await api('/unassigned')).invoices.filter((i) => !i.duplicate_of); } catch (x) { toast(x.message); state.modal.list = []; }
+  if (state.modal) renderModal();
+}
+function closeModal() { state.modal = null; $('#modalRoot').innerHTML = ''; }
 
+function renderModal() {
+  const m = state.modal;
+  if (!m) return;
+  const count = m.list ? m.list.length : '…';
+  let body = '';
+  if (m.tab === 'pick') body = renderPick();
+  if (m.tab === 'upload') body = `<label class="bigdrop" id="bigdrop"><input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden><div style="font-size:30px">⬆</div><b>Drop invoice files here</b>or click to choose PDFs or photos.<br>They're read automatically and go on this job.</label>`;
+  if (m.tab === 'type') body = renderManual();
+  $('#modalRoot').innerHTML = `<div class="overlay" data-overlay><div class="modal" role="dialog" aria-label="Add costs">
+    <div class="m-head"><div><h2>Add costs to Job #${esc(state.data.job.job_number || '')}</h2><div class="muted">Pick from invoices not assigned to a job yet, upload a file, or type one in.</div></div><button data-close>✕</button></div>
+    <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button></div>
+    <div id="modalBody">${body}</div></div></div>`;
+  if (m.tab === 'upload') wireDrop($('#bigdrop'), (files) => { closeModal(); uploadFiles(files); });
+  if (m.tab === 'pick') { const s = $('#pickSearch'); if (s) { s.value = m.search; s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
+}
+
+function renderPick() {
+  const m = state.modal;
+  if (!m.list) return '<div class="empty"><span class="spin"></span></div>';
+  if (!m.list.length) return `<div class="empty"><div style="font-size:30px">✅</div><b>Everything is assigned.</b><br>Invoices emailed to the business address, and stock left over, show up here.</div>`;
+  const q = m.search.trim().toLowerCase();
+  const list = m.list.filter((i) => !q || [i.supplier, i.invoice_number, ...i.lines.map((l) => l.description)].join(' ').toLowerCase().includes(q));
+  const jobNo = state.data.job.job_number;
+  const lineRow = (l) => {
+    const qn = l.quantity != null;
+    const def = qn ? qty(Math.min(1, l.trace.left_quantity)) : l.trace.left_amount.toFixed(2);
+    return `<div class="ln"><div><b>${esc(l.description)}</b><div class="sub">${qn ? `${money(l.unit_cost)} each` : `${money(l.trace.left_amount)} left of ${money(l.cost)}`}</div>${traceChips(l.trace)}</div>
+      <div class="take">${qn ? '' : '$'}<input type="text" inputmode="decimal" id="q-${l.item_id}" value="${def}">${qn && l.unit ? esc(l.unit) : ''}
+        <select id="c-${l.item_id}">${catOptions('materials')}</select><select id="m-${l.item_id}">${reasonOptions('')}</select>
+        <button class="primary small" data-take="${l.item_id}" data-isqty="${qn ? 1 : ''}">Add</button></div></div>`;
+  };
+  return `<input class="search" id="pickSearch" placeholder="Search supplier, invoice number or item…">` + list.map((i) => {
+    const sugg = i.suggestion ? `<div class="trace"><span class="left">💡 Suggested for #${esc(i.suggestion.job_number || '?')}${i.suggestion.reason ? ' – ' + esc(i.suggestion.reason) : ''}</span></div>` : '';
+    const head = `<div class="t">${esc(i.supplier || 'Unknown supplier')} ${i.untouched ? '<span class="chip c-materials">Whole invoice</span>' : '<span class="chip c-stock">Part left</span>'}${i.kept_as_stock ? ' <span class="chip c-stock">Stock</span>' : ''}</div>
+      <div class="sub">${[i.invoice_number ? '#' + esc(i.invoice_number) : '', i.invoice_date ? fmtDate(i.invoice_date) : '', money(i.total), `${i.lines.length} line${i.lines.length === 1 ? '' : 's'}${i.untouched ? '' : ' with something left'}`].filter(Boolean).join(' · ')}</div>${sugg}`;
+    const expanded = !i.untouched || m.expanded.has(i.id);
+    return `<div class="pick"><div class="top"><div>${head}</div>
+      ${i.untouched ? `<div class="take"><select id="ic-${i.id}">${catOptions(i.category || 'materials')}</select><select id="im-${i.id}">${reasonOptions('')}</select>
+        <button class="primary small" data-take-all="${i.id}">Add whole invoice${i.suggestion && i.suggestion.job_number === jobNo ? ' ✓' : ''}</button>
+        <button class="small" data-expand="${i.id}">${expanded ? 'Hide lines' : 'Pick lines…'}</button></div>` : ''}</div>
+      ${expanded ? `<div class="lines">${i.lines.map(lineRow).join('')}</div>` : ''}</div>`;
+  }).join('') + (list.length ? '' : '<div class="empty">Nothing matches.</div>');
+}
+
+// Typed-in invoice (lost paperwork)
+const newManual = () => ({ supplier: '', invoice_number: '', invoice_date: new Date().toLocaleDateString('en-CA'), category: 'materials', mistake_reason: '', total: '', includes_gst: true, paid: false, items: [] });
 function readManual() {
   const f = $('#manualForm'); if (!f) return;
-  const m = state.manual;
-  for (const k of ['supplier', 'invoice_number', 'invoice_date', 'category', 'total']) m[k] = f.elements[k].value;
+  const m = state.modal.manual;
+  for (const k of ['supplier', 'invoice_number', 'invoice_date', 'category', 'mistake_reason', 'total']) m[k] = f.elements[k].value;
   m.includes_gst = f.elements.includes_gst.checked;
   m.paid = f.elements.paid.checked;
-  m.items = $$('#manualForm .lines .row').map((r) => ({ description: r.querySelector('[name=description]').value, amount: r.querySelector('[name=amount]').value }));
+  m.items = $$('#manualForm .lines .row').map((r) => ({ description: $('[name=description]', r).value, amount: $('[name=amount]', r).value }));
 }
-
 function manualHint() {
-  const m = state.manual;
-  const listed = m.items.reduce((sum, l) => sum + (num(l.amount) || 0), 0);
+  const m = state.modal.manual;
+  const listed = m.items.reduce((s, l) => s + (num(l.amount) || 0), 0);
   const total = num(m.total);
   if (!m.items.some((l) => num(l.amount) != null)) return { text: total ? `Saved as one line: “Invoice from ${m.supplier || 'supplier'}” ${money(total)}.` : 'Enter the total. Lines are optional.' };
   if (total == null) return { text: `Total will be ${money(listed)} (the lines added up).` };
@@ -466,200 +519,180 @@ function manualHint() {
   if (total - listed > 0.005) return { text: `Lines add up to ${money(listed)}. The other ${money(total - listed)} will show as “Other items (not listed)”.` };
   return { text: 'The lines match the total.' };
 }
-
 function renderManual() {
-  const m = state.manual;
+  const m = state.modal.manual;
   const hint = manualHint();
-  $('#detail').innerHTML = `<form class="manual" id="manualForm" autocomplete="off">
-    <h2>Add invoice by hand</h2>
-    <div class="muted">For an invoice you don't have a file for. Enter what you know; lines are optional.</div>
+  return `<form class="manual" id="manualForm" autocomplete="off">
+    <div class="muted" style="margin-bottom:10px">For an invoice you don't have a file for. Enter what you know; lines are optional. You can attach the file later.</div>
     <div class="grid">
       <label class="f">Supplier *<input type="text" name="supplier" value="${esc(m.supplier)}" placeholder="e.g. Gliderol"></label>
       <label class="f">Invoice number<input type="text" name="invoice_number" value="${esc(m.invoice_number)}" placeholder="if you know it"></label>
       <label class="f">Date<input type="date" name="invoice_date" value="${esc(m.invoice_date)}"></label>
-      <label class="f">Type<select name="category">${BOOT.categories.map((c) => `<option value="${c}" ${c === m.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></label>
+      <label class="f">Type<select name="category">${catOptions(m.category)}</select></label>
+      <label class="f">Screw-up?<select name="mistake_reason">${reasonOptions(m.mistake_reason)}</select></label>
       <label class="f">Total incl. GST *<input type="text" name="total" inputmode="decimal" value="${esc(m.total)}" placeholder="e.g. 1100.00"></label>
     </div>
-    <div class="checks">
-      <label><input type="checkbox" name="includes_gst" ${m.includes_gst ? 'checked' : ''}> Includes GST</label>
-      <label><input type="checkbox" name="paid" ${m.paid ? 'checked' : ''}> Already paid</label>
-    </div>
-    <div class="lines"><b>Lines</b> <span class="muted">(optional, amounts incl. GST)</span>
-      ${m.items.map((l, i) => `<div class="row"><input type="text" name="description" value="${esc(l.description)}" placeholder="e.g. Gate 3.6m"><input type="text" class="amt" name="amount" inputmode="decimal" value="${esc(l.amount)}" placeholder="0.00"><button type="button" class="link" data-manual-remove-line="${i}" title="Remove line">✕</button></div>`).join('')}
-      <div style="margin-top:8px"><button type="button" data-manual-add-line>+ Add line</button></div>
+    <div class="checks"><label><input type="checkbox" name="includes_gst" ${m.includes_gst ? 'checked' : ''}> Includes GST</label><label><input type="checkbox" name="paid" ${m.paid ? 'checked' : ''}> Already paid</label></div>
+    <div class="lines" style="margin-top:14px"><b>Lines</b> <span class="muted">(optional, amounts incl. GST)</span>
+      ${m.items.map((l, i) => `<div class="row"><input type="text" name="description" value="${esc(l.description)}" placeholder="e.g. Gate 3.6m"><input type="text" class="amt" name="amount" inputmode="decimal" value="${esc(l.amount)}" placeholder="0.00"><button type="button" class="link" data-remove-line="${i}" title="Remove line">✕</button></div>`).join('')}
+      <div style="margin-top:8px"><button type="button" class="small" data-add-line>＋ Add line</button></div>
       <div class="hint ${hint.bad ? 'bad' : ''}" id="manualHint">${esc(hint.text)}</div>
     </div>
-    <div class="actions"><button type="submit" class="primary">Save invoice</button><button type="button" data-manual-cancel>Cancel</button></div>
+    <div class="actions"><button type="submit" class="primary">Save to this job</button><button type="button" data-close>Cancel</button></div>
   </form>`;
-}
-
-$('#detail').addEventListener('input', (e) => {
-  if (!e.target.closest('#manualForm')) return;
-  readManual();
-  const h = manualHint(); const el = $('#manualHint');
-  if (el) { el.textContent = h.text; el.classList.toggle('bad', !!h.bad); }
-});
-$('#detail').addEventListener('submit', async (e) => {
-  if (e.target.id !== 'manualForm') return;
-  e.preventDefault();
-  readManual();
-  try {
-    const r = await api('/invoices/manual', { method: 'POST', body: JSON.stringify(state.manual) });
-    state.adding = false; state.manual = null; state.selected = r.id; toast('Invoice added');
-  } catch (x) { return toast(x.message); }
-  load();
-});
-
-// ---------- Original invoice (only reloads when a different file is selected) ----------
-function renderPreview() {
-  const inv = selectedInvoice();
-  const key = inv && inv.file_path ? String(inv.id) : 'none';
-  if (key === state.previewKey) return;
-  state.previewKey = key;
-  const el = $('#preview');
-  if (key === 'none') {
-    el.innerHTML = inv && inv.source === 'manual'
-      ? `<div class="empty">Added by hand – there is no invoice file.<br><br>Found the invoice? <button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button><br><span style="font-size:12px">It will be read and replace the details you typed.<br>Paid, type and screw-up tags are kept.</span></div>`
-      : '<div class="empty">The original invoice shows here.</div>';
-    return;
-  }
-  const url = fileUrl(inv);
-  const mime = inv.mime_type || '';
-  const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
-  el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn" href="${url}" target="_blank" rel="noopener">Open</a></div>${body}`;
 }
 
 // ---------- Events ----------
 document.addEventListener('click', async (e) => {
-  if (e.target.matches('input[data-list-paid]')) return; // handled by the change event
+  if (e.target.matches('input[data-list-paid]')) return; // handled by change
+  if (e.target.matches('[data-overlay]')) return closeModal();
   const t = e.target.closest('button, [data-select]');
   if (!t) return;
   const ds = t.dataset;
   try {
-    if (ds.takeOpen !== undefined) return openTake();
-    if (ds.takeClose !== undefined) { state.taking = false; return render(); }
-    if (ds.take) {
-      const v = num($('#take-' + ds.take)?.value);
-      if (!v || v <= 0) return toast('Enter how much to take');
-      // Adds to what this job already has of that line.
-      const already = Number(ds.takeMine) * Number(ds.takeTotal);
-      const body = ds.takeQty ? { quantity: already + v } : { amount: already + v };
-      await api(`/items/${ds.take}/share`, { method: 'PUT', body: JSON.stringify(body) });
-      toast('Added to this job'); state.taking = false; state.selected = Number(ds.takeInvoice); state.previewKey = null;
-      return load();
+    if (ds.select) { state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; return render(); }
+    if (ds.add !== undefined) return openAdd('pick');
+    if (ds.close !== undefined) return closeModal();
+    if (ds.tab) { state.modal.tab = ds.tab; renderModal(); if (ds.tab === 'pick' && !state.modal.list) loadUnassigned(); return; }
+    if (ds.expand) { const s = state.modal.expanded; const id = Number(ds.expand); s.has(id) ? s.delete(id) : s.add(id); return renderModal(); }
+    if (ds.takeAll) {
+      const id = Number(ds.takeAll);
+      await post('/assign', { invoice_id: id, category: $('#ic-' + id).value, mistake_reason: $('#im-' + id).value || undefined });
+      closeModal(); toast('Added to this job'); state.selected = id; state.previewKey = null; return load();
     }
-    if (ds.splitOn) { await api(`/invoices/${ds.splitOn}`, { method: 'PATCH', body: JSON.stringify({ split: true }) }); toast("Split on: lower this job's share on each line"); return load(); }
-    if (ds.splitOff) { await api(`/invoices/${ds.splitOff}`, { method: 'PATCH', body: JSON.stringify({ split: false }) }); toast('Splitting stopped: the whole invoice is on this job'); return load(); }
-    if (ds.attach) { state.attachTo = Number(ds.attach); $('#attachInput').value = ''; $('#attachInput').click(); return; }
-    if (ds.addManual !== undefined) { state.adding = true; state.manual = newManual(); renderManual(); $('#manualForm [name=supplier]').focus(); return; }
-    if (ds.manualCancel !== undefined) { state.adding = false; state.manual = null; return render(); }
-    if (ds.manualAddLine !== undefined) { readManual(); state.manual.items.push({ description: '', amount: '' }); renderManual(); $$('#manualForm .lines .row input[name=description]').pop()?.focus(); return; }
-    if (ds.manualRemoveLine) { readManual(); state.manual.items.splice(Number(ds.manualRemoveLine), 1); return renderManual(); }
-    if (ds.select) { state.adding = false; state.taking = false; state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
+    if (ds.take) {
+      const v = num($('#q-' + ds.take).value);
+      if (!v || v <= 0) return toast('Enter how much to add');
+      const r = await post('/assign', { item_id: Number(ds.take), [ds.isqty ? 'quantity' : 'amount']: v, category: $('#c-' + ds.take).value, mistake_reason: $('#m-' + ds.take).value || undefined });
+      closeModal(); toast('Added to this job'); state.selected = r.invoice_id; state.previewKey = null; return load();
+    }
+    if (ds.addRest) {
+      const v = Number(ds.left);
+      await post('/assign', { item_id: Number(ds.addRest), [ds.qty ? 'quantity' : 'amount']: ds.qty ? Math.min(1, v) : v });
+      toast('Added to this job'); state.forceDetail = true; return load();
+    }
+    if (ds.addLine !== undefined) { readManual(); state.modal.manual.items.push({ description: '', amount: '' }); renderModal(); $$('#manualForm .lines .row [name=description]').pop()?.focus(); return; }
+    if (ds.removeLine) { readManual(); state.modal.manual.items.splice(Number(ds.removeLine), 1); return renderModal(); }
+    if (ds.accept) { await post(`/suggestions/${ds.accept}/accept`); toast('Added to this job'); state.selected = Number(ds.accept); state.previewKey = null; return load(); }
+    if (ds.dismiss) { await post(`/suggestions/${ds.dismiss}/dismiss`); toast('OK – it stays in the Inbox'); return load(); }
     if (ds.copy !== undefined) {
       const text = $('#inbox').textContent;
-      try { await navigator.clipboard.writeText(text); }
-      catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
+      try { await navigator.clipboard.writeText(text); } catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
       return toast('Email address copied');
     }
-    if (ds.editQuote !== undefined) { state.editQuote = true; renderSummary(); return $('#quoteInput')?.focus(); }
-    if (ds.cancelQuote !== undefined) { state.editQuote = false; return renderSummary(); }
+    if (ds.editQuote !== undefined) { state.editQuote = true; renderKpis(); return $('#quoteInput')?.focus(); }
+    if (ds.cancelQuote !== undefined) { state.editQuote = false; return renderKpis(); }
     if (ds.saveQuote !== undefined) return saveQuote();
-    if (ds.reread) { await api(`/invoices/${ds.reread}/reanalyze`, { method: 'POST' }); toast('Reading again…'); return load(); }
-    if (ds.invPaid) { await api(`/invoices/${ds.invPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: ds.value === 'true' }) }); toast(ds.value === 'true' ? 'Invoice marked paid' : 'Invoice marked unpaid'); return load(); }
+    if (ds.reread) { await post(`/invoices/${ds.reread}/reanalyze`); toast('Reading again…'); return load(); }
+    if (ds.attach) { state.attachTo = Number(ds.attach); $('#attachInput').value = ''; return $('#attachInput').click(); }
     if (ds.askDelete) { state.confirmDel = Number(ds.askDelete); return renderDetail(); }
     if (ds.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return renderDetail(); }
-    if (ds.delete) { const r = await api(`/invoices/${ds.delete}`, { method: 'DELETE' }); toast(r.gaveBack ? 'Given back' : 'Invoice removed'); state.confirmDel = null; state.selected = null; return load(); }
+    if (ds.delete) { await api(`/invoices/${ds.delete}`, { method: 'DELETE' }); toast('Taken off this job – it’s back in “Not assigned yet”'); state.confirmDel = null; state.selected = null; return load(); }
+    if (ds.deleteAll) { await api(`/invoices/${ds.deleteAll}?completely=1`, { method: 'DELETE' }); toast('Invoice deleted'); state.confirmDel = null; state.selected = null; return load(); }
     if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
     if (ds.mkOpen) { state.mkOpen = Number(ds.mkOpen); renderDetail(); const sel = $('#detail [data-autofocus]'); sel?.focus(); try { sel?.showPicker(); } catch {} return; }
     if (ds.mkCancel !== undefined) { state.mkOpen = null; return renderDetail(); }
-  } catch (x) { toast(x.message); load(); }
+  } catch (x) { toast(x.message); if (!state.modal) load(); }
 });
 
-async function saveQuote() {
-  const input = $('#quoteInput');
-  const v = (input?.value || '').trim();
-  try {
-    await api('/job', { method: 'PATCH', body: JSON.stringify({ quote_amount: v === '' ? null : v }) });
-    state.editQuote = false; toast(v === '' ? 'Quoted price cleared' : 'Quoted price saved');
-  } catch (x) { toast(x.message); }
-  input?.blur(); load();
-}
-document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'quoteInput') { e.preventDefault(); saveQuote(); } });
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'pickSearch') { state.modal.search = e.target.value; return renderModal(); }
+  if (e.target.closest('#manualForm')) {
+    readManual();
+    const h = manualHint(); const el = $('#manualHint');
+    if (el) { el.textContent = h.text; el.classList.toggle('bad', !!h.bad); }
+  }
+  if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value;
+});
 
-$('#detail').addEventListener('submit', async (e) => {
-  const f = e.target.closest('form[data-edit-form]'); if (!f) return;
+document.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const v = Object.fromEntries(new FormData(f));
-  try {
-    await api(`/invoices/${f.dataset.editForm}`, { method: 'PATCH', body: JSON.stringify({ supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, '') }) });
-    state.editing = null; state.draft = {}; toast('Saved');
-  } catch (x) { toast(x.message); }
-  document.activeElement?.blur(); load();
+  if (e.target.id === 'manualForm') {
+    readManual();
+    const m = state.modal.manual;
+    try {
+      const r = await post('/invoices/manual', { ...m, mistake_reason: m.mistake_reason || undefined });
+      closeModal(); state.selected = r.id; state.previewKey = null; toast('Invoice added to this job');
+    } catch (x) { return toast(x.message); }
+    return load();
+  }
+  const f = e.target.closest('form[data-edit-form]');
+  if (f) {
+    const v = Object.fromEntries(new FormData(f));
+    try { await patch(`/invoices/${f.dataset.editForm}`, { supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, '') }); state.editing = null; state.draft = {}; toast('Saved'); }
+    catch (x) { toast(x.message); }
+    document.activeElement?.blur(); state.forceDetail = true; load();
+  }
 });
-$('#detail').addEventListener('input', (e) => { if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value; });
+
 $('#detail').addEventListener('change', async (e) => {
   const t = e.target;
-  if (t.closest('form[data-edit-form]')) return;
+  if (t.closest('form')) return;
   try {
-    if (t.dataset.itemPaid) await api(`/items/${t.dataset.itemPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) });
-    else if (t.dataset.itemDesc) await api(`/items/${t.dataset.itemDesc}`, { method: 'PATCH', body: JSON.stringify({ description: t.value }) });
-    else if (t.dataset.itemCat) await api(`/items/${t.dataset.itemCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) });
-    else if (t.dataset.invPaidCb) { await api(`/invoices/${t.dataset.invPaidCb}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
-    else if (t.dataset.invCat) { await api(`/invoices/${t.dataset.invCat}`, { method: 'PATCH', body: JSON.stringify({ category: t.value }) }); toast('Type changed to ' + (CAT_LABEL[t.value] || t.value)); }
+    if (t.dataset.invPaid) { await patch(`/invoices/${t.dataset.invPaid}`, { paid: t.checked }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
+    else if (t.dataset.invCat) { if (!t.value) return; await patch(`/invoices/${t.dataset.invCat}`, { category: t.value }); toast('Type: ' + (CAT_LABEL[t.value] || t.value)); }
+    else if (t.dataset.invMk) { if (t.value === '__') return; await patch(`/invoices/${t.dataset.invMk}`, { mistake_reason: t.value || null }); toast(t.value ? 'Tagged as a screw-up' : 'Screw-up tags cleared'); }
     else if (t.dataset.shareQty) await api(`/items/${t.dataset.shareQty}/share`, { method: 'PUT', body: JSON.stringify({ quantity: t.value }) });
     else if (t.dataset.shareAmt) await api(`/items/${t.dataset.shareAmt}/share`, { method: 'PUT', body: JSON.stringify({ amount: t.value }) });
-    else if (t.dataset.itemMk) { await api(`/items/${t.dataset.itemMk}`, { method: 'PATCH', body: JSON.stringify({ mistake_reason: t.value || null }) }); state.mkOpen = null; toast(t.value ? 'Tagged as screw-up' : 'Screw-up tag removed'); }
-    else if (t.dataset.invMk) {
-      if (t.value === '__') return;
-      await api(`/invoices/${t.dataset.invMk}`, { method: 'PATCH', body: JSON.stringify({ mistake_reason: t.value || null }) });
-      toast(t.value ? 'Whole invoice tagged as screw-up' : 'Screw-up tags cleared');
-    }
-    else if (t.dataset.itemAmt) await api(`/items/${t.dataset.itemAmt}`, { method: 'PATCH', body: JSON.stringify({ line_total: t.value.replace(/[$,\s]/g, '') }) });
+    else if (t.dataset.itemDesc) await patch(`/items/${t.dataset.itemDesc}`, { description: t.value });
+    else if (t.dataset.itemCat) await patch(`/items/${t.dataset.itemCat}`, { category: t.value });
+    else if (t.dataset.itemMk) { await patch(`/items/${t.dataset.itemMk}`, { mistake_reason: t.value || null }); state.mkOpen = null; toast(t.value ? 'Tagged as a screw-up' : 'Screw-up tag removed'); }
     else return;
   } catch (x) { toast(x.message); }
   t.blur();
-  state.forceDetail = true; // a change was saved: redraw even if the cursor moved on to the next field
+  state.forceDetail = true; // a change was saved: redraw even if the cursor moved on
   load();
 });
 
 $('#list').addEventListener('change', async (e) => {
   const t = e.target;
   if (!t.dataset.listPaid) return;
-  try { await api(`/invoices/${t.dataset.listPaid}`, { method: 'PATCH', body: JSON.stringify({ paid: t.checked }) }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); }
-  catch (x) { toast(x.message); }
+  try { await patch(`/invoices/${t.dataset.listPaid}`, { paid: t.checked }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); } catch (x) { toast(x.message); }
   load();
 });
 
-$('#attachInput').addEventListener('change', async (e) => {
+async function saveQuote() {
+  const input = $('#quoteInput');
+  const v = (input?.value || '').trim();
+  try { await patch('/job', { quote_amount: v === '' ? null : v }); state.editQuote = false; toast(v === '' ? 'Quoted price cleared' : 'Quoted price saved'); } catch (x) { toast(x.message); }
+  input?.blur(); load();
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'quoteInput') { e.preventDefault(); saveQuote(); }
+  if (e.key === 'Escape' && state.modal) closeModal();
+});
+
+document.addEventListener('change', async (e) => {
+  if (e.target.id === 'fileInput') { const files = e.target.files; closeModal(); return uploadFiles(files); }
+  if (e.target.id !== 'attachInput') return;
   const file = e.target.files[0];
   if (!file || !state.attachTo) return;
-  const fd = new FormData();
-  fd.append('file', file);
+  const fd = new FormData(); fd.append('file', file);
   toast('Attaching and reading the invoice…');
-  try { await api(`/invoices/${state.attachTo}/file`, { method: 'POST', body: fd }); state.previewKey = null; }
-  catch (x) { toast(x.message); }
-  state.attachTo = null; e.target.value = '';
-  load();
+  try { await api(`/invoices/${state.attachTo}/file`, { method: 'POST', body: fd }); state.previewKey = null; } catch (x) { toast(x.message); }
+  state.attachTo = null; e.target.value = ''; load();
 });
 
 async function uploadFiles(files) {
-  if (!files.length) return;
+  if (!files || !files.length) return;
   const fd = new FormData();
   [...files].forEach((f) => fd.append('files', f));
   toast(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}…`);
   try { const r = await api('/invoices', { method: 'POST', body: fd }); state.selected = r.created[0]; } catch (x) { toast(x.message); }
   load();
 }
-const drop = $('#drop');
-$('#fileInput').addEventListener('change', (e) => { uploadFiles(e.target.files); e.target.value = ''; });
-['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
-['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', (e) => uploadFiles(e.dataTransfer.files));
+function wireDrop(el, onFiles) {
+  if (!el) return;
+  ['dragenter', 'dragover'].forEach((ev) => el.addEventListener(ev, (e) => { e.preventDefault(); el.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((ev) => el.addEventListener(ev, (e) => { e.preventDefault(); el.classList.remove('over'); }));
+  el.addEventListener('drop', (e) => onFiles(e.dataTransfer.files));
+}
+wireDrop($('#aside'), uploadFiles);
 
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
+$('#inboxLink').href = '/inbox?t=' + encodeURIComponent(BOOT.token);
 if (BOOT.embedded && window.SMClient) {
-  try { window.SMClient.init().resizeWindow(1300, 820); } catch (e) { /* not inside ServiceM8 */ }
+  try { window.SMClient.init().resizeWindow(1320, 860); } catch (e) { /* not inside ServiceM8 */ }
 }
 load();
 </script>

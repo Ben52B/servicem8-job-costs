@@ -26,6 +26,8 @@ const InvoiceSchema = z.object({
     unit_price: z.number().nullable(),
     line_total: z.number().describe('Line amount exactly as printed on the document.'),
   })),
+  references: z.array(z.string()).describe('Every reference the customer gave the supplier: PO number, order number, "your ref", job number, customer reference, project name. Copy them exactly as printed. Empty list if none.'),
+  site_address: z.string().nullable().describe('Delivery or job-site address if shown (not the supplier\'s address and not the billing address unless it is the only one).'),
   notes: z.string().nullable().describe('Anything the business owner should notice, e.g. "Deposit only - balance to follow", or unreadable parts.'),
 });
 
@@ -38,7 +40,8 @@ Extract the document's details exactly as printed. Rules:
 - Use null when a value is not shown. Never invent numbers.
 - Dates as YYYY-MM-DD. Australian documents use day/month/year.
 - Credit notes: make total and line amounts negative.
-- If the file contains several invoices, extract the first one and say so in notes.`;
+- If the file contains several invoices, extract the first one and say so in notes.
+- References matter: the customer usually writes their job number on the order (e.g. "PO 208126", "Ref: Alpha GD 208126"). List every such reference.`;
 
 const SUPPORTED_MIME = {
   'application/pdf': 'document',

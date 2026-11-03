@@ -1,32 +1,36 @@
 # Job Costs: a ServiceM8 add-on
 
-One place for every supplier invoice on a job. For a garage door job, that's the door, motor, posts, cover and the install subbie.
+One place for every supplier invoice, matched to your ServiceM8 jobs. For a garage door job, that's the door, motor, posts, cover and the install subbie.
 
-- Adds a **Job Costs** button to every ServiceM8 job card.
-- Each job gets its **own email address**. Forward invoices to it, or give it to suppliers.
-- You can also **drag and drop** PDFs or phone photos onto the card.
-- **Add an invoice by hand** when the paperwork is lost: supplier, date and total, plus any lines you remember. Whatever the lines don't cover shows as "Other items (not listed)". If you find the paper invoice later, click **Attach invoice file** on it: it's read and replaces the typed details, keeping paid, type and screw-up tags.
-- Claude **reads each invoice**: supplier, invoice number, dates, line items, GST and total.
-- **Compares costs against the quoted price**: costs so far, expected margin (turns red if you go over the quote) and a bar split by type. The quoted price is taken from the job in ServiceM8, or you can type it in.
-- **Split view**: invoice list on the left, the selected invoice's lines in the middle, and the original invoice on the right so you can check what was read.
-- Shows **total cost, paid, still to pay and GST** for the job.
-- **Screw-up tags**: mark a line, or a whole invoice, as a screw-up and pick a reason from a fixed list (wrong measurement, wrong size, wrong colour…). The job then shows two sets of numbers: **actual** costs/profit, and **without screw-ups** (what the job should cost next time), plus how much the screw-ups cost as a % of costs and in margin points. The reason list is in `src/mistakes.js`.
-- **Reports** (button on the card): totals across all jobs for any date range: total costs, screw-ups ($ and % of costs), real profit vs profit without screw-ups, screw-ups by reason and by supplier, every job, and every screw-up line, which you can download as CSV.
-- Tick each invoice as **paid** (by hand), straight from the invoice list or the invoice itself. Receipts and invoices stamped PAID are ticked automatically.
-- **Split an invoice across jobs** when only part of it is for this job (e.g. 10 motors bought for stock). Click **Split across jobs** on the job it came in on and set how much this job gets: a quantity ("1 of 10") or a $ amount. Other jobs click **Take from another invoice** to take some of what's left; nobody can take more than is left. Paid stays one tick for the whole supplier bill; each job's totals, screw-ups and reports count only its share. Reports show what's not assigned to any job yet.
-- Each invoice has **one type** (Materials, Subcontractor…), worked out from its main items. Delivery and fees count with the goods they came with, so a gate supplier's delivery is Materials. You can change the type per invoice.
-- Catches **duplicates**: if a supplier sends the same invoice twice, it's only counted once.
-- You can fix anything the reader got wrong: description, type, amount, supplier or total.
+**How it works, in one path:**
+
+1. **One email address for the business.** Send or forward every supplier invoice there, or ask suppliers to. Claude reads each one: supplier, invoice number, dates, every line, GST and total.
+2. **Suggested job, one click.** If the invoice or email mentions a job number (e.g. "PO 208126", "Alpha GD 208126") or the job's site address, the invoice shows at the top of that job's **Job Costs** window: **✓ Add to this job** or **Not this job**. Everything else waits in the **Inbox**.
+3. **＋ Add costs** on any job opens one window:
+   - **Not assigned yet:** whole invoices, or part of a line (e.g. 1 of 10 motors). Pick the type (Materials, Subcontractor…) and screw-up reason as you add. What you don't take stays there for other jobs; that's your stock.
+   - **Upload a file:** dropped files go straight onto this job.
+   - **Type it in:** for lost paperwork. Attach the real file later and it replaces the typed details.
+
+**On each job:**
+- Profit against the quoted price (taken from ServiceM8, or typed in), costs by type, paid / still to pay, and screw-ups.
+- The invoice list, the selected invoice's lines, and the original invoice side by side.
+- Every line shows **where it went**: "#208126 ×1 (this job) · #208090 ×2 · #208117 ×3 · 4 of 10 left".
+- **Paid** is one tick per invoice (it's one bill from the supplier), shared by every job using it.
+- **Screw-up tags** per line or per invoice, with a fixed reason list (`src/mistakes.js`). Each job shows actual numbers and "without screw-ups" numbers.
+- **Duplicates** are caught and counted once. Anything the reader got wrong can be fixed.
+
+**Inbox page:** everything not on a job yet, with its suggested job; add to any job, or **Keep as stock**. Below that, stock and leftovers with where each item went.
+
+**Reports page:** any date range. Total costs, screw-ups ($ and % of costs), real profit vs profit without screw-ups, screw-ups by reason and by supplier, every job, every screw-up line (CSV download), and the value not on any job yet.
 
 ## How it fits together
 
 ```
-ServiceM8 job card ──(Job Costs button)──► this app ──► card with totals & invoices
-Supplier / you ──email──► Postmark inbound ──webhook──► this app ──► Claude reads invoice
-You ──drag & drop──────────────────────────────────────► this app ──► Claude reads invoice
+Suppliers / you ──email──► Postmark inbound ──► this app ──► Claude reads invoice ──► Inbox (+ suggested job)
+ServiceM8 job card ──(Job Costs button)──► this app ──► Job Costs window ──＋ Add costs──► invoice lines on the job
 ```
 
-How costs are counted: each line's **cost to job** is its share of the invoice total. GST, rounding and discounts are spread across the lines, so the lines always add up to what you actually owe.
+How costs are counted: invoices belong to the business; each line is shared out to jobs (all of it, or e.g. 1 of 10). A line's cost is its share of the invoice total, so GST, rounding and discounts are spread across the lines and everything adds up to what you owe.
 
 ## Setup
 
@@ -51,10 +55,10 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 2. Set the **Callback URL** to `https://<your-app>/servicem8/addon`.
 3. Paste the manifest from `https://<your-app>/manifest.json`. It adds a "Job Costs" button to the job card.
 4. Copy the add-on's **App Secret** into `SERVICEM8_APP_SECRET`.
-5. Give it the `read_jobs` scope so the card can show the job number and address.
+5. Give it the `read_jobs` scope so the window can show the job number, address and quoted price, and so emailed invoices can be matched to your active jobs.
 6. Install the add-on on your own ServiceM8 account. A private add-on doesn't need to be published to the store.
 
-### 4. Set up email-to-job
+### 4. Set up the email address
 
 **Easiest option (no domain needed): Postmark**
 
@@ -62,9 +66,11 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 2. Copy your inbound address (looks like `abc123@inbound.postmarkapp.com`) into `INBOUND_BASE_ADDRESS`.
 3. Set the inbound webhook URL to `https://<your-app>/inbound/email?key=<INBOUND_SECRET>`.
 
-Each job then gets an address like `abc123+k3x9m2pq@inbound.postmarkapp.com`, shown on the card with a Copy button.
+Your business then gets one address like `abc123+k3x9m2pq@inbound.postmarkapp.com`, shown in the Job Costs window and the Inbox with a Copy button.
 
-**Your own domain:** point a subdomain's MX record (e.g. `jobs.yourbusiness.com.au`) at Postmark, SendGrid Inbound Parse or Mailgun, and set `INBOUND_DOMAIN`. Jobs then get `job-k3x9m2pq@jobs.yourbusiness.com.au`. All three providers' webhook formats work.
+**Your own domain:** point a subdomain's MX record (e.g. `jobs.yourbusiness.com.au`) at Postmark, SendGrid Inbound Parse or Mailgun, and set `INBOUND_DOMAIN`. The address is then `invoices-k3x9m2pq@jobs.yourbusiness.com.au`. All three providers' webhook formats work.
+
+**Tip:** put the job number on your purchase orders. Suppliers usually copy it onto the invoice, and the invoice is then suggested for the right job automatically.
 
 What gets read from an email:
 - **PDF attachments**, one invoice each.
@@ -106,27 +112,16 @@ npm run dev      # auto-restart on changes
 |---|---|
 | `src/app.js` | Routes: ServiceM8 callback, card API, inbound email webhook |
 | `src/analyzer.js` | Claude invoice reading (structured output) |
-| `src/db.js` | SQLite storage (built into Node) and totals |
-| `src/inbound.js` | Per-job email addresses; Postmark / SendGrid / Mailgun parsing |
-| `src/servicem8.js` | Verifies ServiceM8's signed request; looks up the job number |
-| `public/card.html` | The screen shown inside ServiceM8 |
+| `src/db.js` | SQLite storage (built into Node): invoices, lines shared out to jobs, suggestions, totals, reports. Upgrades older databases automatically |
+| `src/inbound.js` | The business email address; Postmark / SendGrid / Mailgun parsing |
+| `src/servicem8.js` | Verifies ServiceM8's signed request; looks up the job and the list of active jobs |
+| `public/card.html` | The Job Costs window shown inside ServiceM8 |
+| `public/inbox.html`, `public/report.html` | Inbox and Reports pages |
 
 ## Later (not built yet)
 
-Paid status is ticked by hand on the card. That's intentional for now.
-
-### Split bulk invoices across jobs (built)
-
-Some invoices are bulk stock purchases, e.g. one invoice for 10 motors. The idea:
-
-- Mark a line on an invoice as **stock** instead of charging it all to one job.
-- On a job's card, **take from stock**: pick the invoice line and how many (e.g. 1 motor). The job is charged 1 × the unit cost incl. GST.
-- The invoice line then shows **9 left**. Other jobs can only take from what's left, so you can't use the same motor twice.
-- A stock view lists every bulk line with how many were bought, used (and on which jobs) and remaining.
-- Cost totals stay correct: the bulk invoice isn't counted against any one job; each job only carries what it took.
-
-### Other ideas
+Paid status is ticked by hand on purpose for now.
 
 - Pull **paid status from Xero/MYOB** instead of ticking it by hand.
-- Copy each invoice into the job's **Attachments** in ServiceM8, and post the cost total as a job note. This needs ServiceM8 OAuth.
-- Show **profit**: compare costs against the job's quoted/invoiced amount from ServiceM8.
+- Copy each invoice into the job's **Attachments** in ServiceM8, and post the cost total as a job note.
+- Show the **Job Costs button in the ServiceM8 phone app** too.

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs Inbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
+  <div class="address" id="address"></div>
+  <div id="content"><div class="empty"><span class="spin"></span></div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const qty = (n) => String(+(+n).toFixed(3));
+let data = null;
+let timer = null;
+
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); }
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+
+async function load() {
+  try { data = await api('/inbox'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  clearTimeout(timer);
+  if (data.pending.some((p) => p.status === 'processing')) timer = setTimeout(load, 3000);
+}
+
+const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}`;
+const fileLink = (i) => (i.file_path ? `<a class="btn" href="/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">View</a>` : '');
+
+function render() {
+  $('#address').innerHTML = data.inboxAddress
+    ? `<span>Send or forward every supplier invoice to</span><code id="addr">${esc(data.inboxAddress)}</code><button data-copy>Copy</button><span class="muted">Tip: put the job number on your orders (e.g. “PO 208126”) and invoices get matched automatically.</span>`
+    : '<span class="muted">Email-in is not set up on the server yet.</span>';
+  const fresh = data.invoices.filter((i) => i.untouched && !i.kept_as_stock);
+  const stock = data.invoices.filter((i) => !(i.untouched && !i.kept_as_stock) && !i.duplicate_of);
+  const jobOptions = (sel) => `<option value="">Choose job…</option>` + data.jobs.map((j) => `<option value="${esc(j.job_uuid)}" ${j.job_uuid === sel ? 'selected' : ''}>${esc(jobLabel(j))}</option>`).join('');
+  let h = `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
+  if (!fresh.length && !data.pending.length) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
+  for (const p of data.pending) {
+    h += `<div class="item"><div><div class="t">${esc(p.file_name || 'Invoice')} ${p.status === 'processing' ? '<span class="chip c-proc"><span class="spin"></span> Reading</span>' : '<span class="chip c-err">Couldn’t read</span>'}</div>
+      <div class="sub">${esc([p.email_from, p.email_subject && '“' + p.email_subject + '”'].filter(Boolean).join(' · '))}${p.error ? ' · ' + esc(p.error) : ''}</div></div>
+      <div class="acts">${p.status === 'error' ? `<button class="danger" data-del="${p.id}">Delete</button>` : ''}</div></div>`;
+  }
+  for (const i of fresh) {
+    const s = i.suggestion;
+    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total)}</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from].filter(Boolean).join(' · '))}</div>
+      ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}</div>
+      <div class="acts">${fileLink(i)}
+        ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ Add to #${esc(s.job_number)}</button>` : ''}
+        <select id="j-${i.id}">${jobOptions('')}</select><button data-assign-pick="${i.id}">${s ? 'Other job' : 'Add to job'}</button>
+        <button data-stock="${i.id}" title="Not for one job – keep it to take items from later">Keep as stock</button>
+        ${i.duplicate_of ? `<button class="danger" data-del="${i.id}">Delete</button>` : ''}</div></div>`;
+  }
+  h += `<h2>Stock & leftovers</h2>`;
+  if (!stock.length) h += '<div class="empty">Nothing left over. When only part of an invoice is used, the rest shows here.</div>';
+  for (const i of stock) {
+    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total)].filter(Boolean).join(' · '))}</div>
+      ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
+      <div class="acts">${fileLink(i)}<span class="muted" style="font-size:12px">Take items from a job's<br>＋ Add costs window</span></div></div>`;
+  }
+  $('#content').innerHTML = h;
+}
+
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const d = b.dataset;
+  try {
+    if (d.copy !== undefined) { await navigator.clipboard.writeText($('#addr').textContent).catch(() => {}); return toast('Email address copied'); }
+    if (d.assign) { await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job }) }); toast('Added to the job'); return load(); }
+    if (d.assignPick) {
+      const job = $('#j-' + d.assignPick).value;
+      if (!job) return toast('Choose a job first');
+      await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: job }) }); toast('Added to the job'); return load();
+    }
+    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Kept as stock – take items from it on any job'); return load(); }
+    if (d.del) { await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load(); }
+  } catch (x) { toast(x.message); }
+});
+load();
+</script>
+</body>
+</html>

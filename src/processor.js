@@ -32,6 +32,9 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         context: { emailFrom: inv.email_from, emailSubject: inv.email_subject },
       });
       repo.saveExtraction(id, result);
+      // Uploaded on a job: it goes on that job. Emailed: suggest a job for it.
+      if (inv.origin_job_uuid) repo.assignToOrigin(id);
+      else repo.suggestJob(id);
     } catch (e) {
       log.error(`Invoice ${id}: ${e.message}`);
       repo.setInvoiceError(id, friendlyError(e));

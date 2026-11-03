@@ -54,10 +54,41 @@ async function fetchJob(jobUUID, accessToken) {
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
       // Total of the job's billing lines (the quote / invoice amount) in ServiceM8.
       quoteAmount: Number(job.total_invoice_amount) > 0 ? Number(job.total_invoice_amount) : null,
+      status: job.status || null,
     };
   } catch {
     return null;
   }
 }
 
-module.exports = { verifyEvent, fetchJob, extractToken };
+/**
+ * Active jobs (quotes and work orders) so emailed invoices can be matched to them.
+ * Best effort: returns [] if ServiceM8 can't be reached.
+ */
+async function fetchActiveJobs(accessToken) {
+  if (!accessToken) return [];
+  const out = [];
+  for (const status of ['Work Order', 'Quote']) {
+    try {
+      const filter = encodeURIComponent(`status eq '${status}'`);
+      const res = await fetch(`${API_BASE}/job.json?%24filter=${filter}`, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) continue;
+      for (const j of await res.json()) {
+        if (!j.uuid || String(j.active) === '0') continue;
+        out.push({
+          jobUUID: j.uuid,
+          jobNumber: j.generated_job_id ? String(j.generated_job_id) : null,
+          jobTitle: (j.job_address || j.job_description || '').split('\n')[0].slice(0, 200) || null,
+          quoteAmount: Number(j.total_invoice_amount) > 0 ? Number(j.total_invoice_amount) : null,
+          status,
+        });
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
+module.exports = { verifyEvent, fetchJob, fetchActiveJobs, extractToken };

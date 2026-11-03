@@ -1,8 +1,8 @@
 /**
- * Inbound email support. Each job has a short code; mail sent to an address that
- * contains the code is filed against that job:
+ * Inbound email support. The business has ONE address with a short code in it;
+ * every invoice sent there lands in the business's inbox:
  *   - plus addressing:  anything+<code>@inbound.postmarkapp.com  (no domain needed)
- *   - own domain:       job-<code>@<INBOUND_DOMAIN>
+ *   - own domain:       invoices-<code>@<INBOUND_DOMAIN>
  * Works with Postmark (JSON webhook), SendGrid Inbound Parse and Mailgun routes (multipart).
  */
 
@@ -11,7 +11,7 @@ function inboxAddress(code, { inboundBaseAddress, inboundDomain }) {
     const [local, domain] = inboundBaseAddress.split('@');
     return `${local.split('+')[0]}+${code}@${domain}`;
   }
-  if (inboundDomain) return `job-${code}@${inboundDomain}`;
+  if (inboundDomain) return `invoices-${code}@${inboundDomain}`;
   return null;
 }
 
@@ -30,7 +30,7 @@ function codesFromAddresses(addresses) {
     const local = addr.split('@')[0];
     const plus = local.match(/\+([a-z0-9]{4,20})$/);
     if (plus) codes.add(plus[1]);
-    const job = local.match(/^job-([a-z0-9]{4,20})$/);
+    const job = local.match(/^(?:invoices|job)-([a-z0-9]{4,20})$/);
     if (job) codes.add(job[1]);
   }
   return [...codes];

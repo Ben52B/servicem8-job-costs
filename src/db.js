@@ -3,39 +3,65 @@ const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 
+/*
+ * How costs are stored
+ * --------------------
+ * - An invoice belongs to the business (a ServiceM8 account), not to a job.
+ * - Each invoice line is shared out to jobs through `allocations`: a job gets a
+ *   fraction of the line (1 = all of it, 0.1 = 1 of 10 motors), with its own
+ *   type (Materials, Subcontractor…) and screw-up tag.
+ * - Whatever isn't allocated to any job is "not assigned yet" (e.g. stock).
+ */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
   job_uuid      TEXT PRIMARY KEY,
   account_uuid  TEXT,
-  inbox_code    TEXT NOT NULL UNIQUE,
+  inbox_code    TEXT NOT NULL UNIQUE,   -- unused since v2 (one address per business)
   job_number    TEXT,
   job_title     TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS accounts (
+  account_key     TEXT PRIMARY KEY,       -- ServiceM8 account UUID ('' when testing without ServiceM8)
+  inbox_code      TEXT NOT NULL UNIQUE,   -- code in the business's invoice email address
+  jobs_synced_at  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS invoices (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_uuid        TEXT NOT NULL REFERENCES jobs(job_uuid),
-  source          TEXT NOT NULL,            -- upload | email
-  file_name       TEXT,
-  file_path       TEXT,
-  mime_type       TEXT,
-  email_from      TEXT,
-  email_subject   TEXT,
-  status          TEXT NOT NULL DEFAULT 'processing', -- processing | ready | error
-  error           TEXT,
-  document_type   TEXT,
-  supplier        TEXT,
-  supplier_abn    TEXT,
-  invoice_number  TEXT,
-  invoice_date    TEXT,
-  due_date        TEXT,
-  currency        TEXT,
-  subtotal        REAL,
-  tax             REAL,
-  total           REAL,
-  notes           TEXT,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_uuid        TEXT,
+  origin_job_uuid     TEXT,               -- job it was uploaded/typed on; it is assigned there once read
+  source              TEXT NOT NULL,      -- upload | email | manual
+  file_name           TEXT,
+  file_path           TEXT,
+  mime_type           TEXT,
+  email_from          TEXT,
+  email_subject       TEXT,
+  email_text          TEXT,
+  status              TEXT NOT NULL DEFAULT 'processing', -- processing | ready | error
+  error               TEXT,
+  document_type       TEXT,
+  supplier            TEXT,
+  supplier_abn        TEXT,
+  invoice_number      TEXT,
+  invoice_date        TEXT,
+  due_date            TEXT,
+  currency            TEXT,
+  subtotal            REAL,
+  tax                 REAL,
+  total               REAL,
+  notes               TEXT,
+  refs                TEXT,               -- JSON list: PO / order / job references printed on the invoice
+  site_address        TEXT,
+  category            TEXT,               -- default type when assigning
+  category_manual     INTEGER NOT NULL DEFAULT 0,
+  attached_later      INTEGER NOT NULL DEFAULT 0,
+  suggested_job_uuid  TEXT,
+  suggestion_reason   TEXT,
+  dismissed_jobs      TEXT,               -- JSON list of jobs marked "not this job"
+  kept_as_stock       INTEGER NOT NULL DEFAULT 0,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS items (
@@ -53,25 +79,23 @@ CREATE TABLE IF NOT EXISTS items (
   paid_at       TEXT
 );
 
--- Split invoices: which share of each line is charged to which job.
--- Only used when invoices.split = 1; otherwise every line belongs to the invoice's own job.
 CREATE TABLE IF NOT EXISTS allocations (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id         INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   job_uuid        TEXT NOT NULL,
-  fraction        REAL NOT NULL,          -- share of the line, 0..1 (e.g. 1 of 10 motors = 0.1)
+  fraction        REAL NOT NULL,          -- share of the line, 0..1
+  category        TEXT,                   -- type for this job's share
   mistake_reason  TEXT,                   -- screw-up tag for this job's share
   mistake_at      TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (item_id, job_uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_alloc_job ON allocations(job_uuid);
-
-CREATE INDEX IF NOT EXISTS idx_invoices_job ON invoices(job_uuid);
+CREATE INDEX IF NOT EXISTS idx_alloc_item ON allocations(item_id);
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON items(invoice_id);
 `;
 
-// Short, easy-to-type code used in each job's email address (no 0/o/1/l confusion).
+// Short, easy-to-type code used in the email address (no 0/o/1/l confusion).
 const CODE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 function newInboxCode(len = 8) {
   const bytes = crypto.randomBytes(len);
@@ -81,11 +105,15 @@ function newInboxCode(len = 8) {
 }
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const round3 = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
+const EPS = 1e-6;
+const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const parseJson = (s, fallback) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
 
 /**
- * One type for the whole invoice, from its main items. Delivery and fees ride along
- * with the goods they came with (a gate supplier's delivery counts as Materials);
- * they only count as their own type when that's all the invoice is.
+ * One default type for the whole invoice, from its main items. Delivery and fees ride
+ * along with the goods they came with; they only count as their own type when that's
+ * all the invoice is.
  */
 function invoiceCategory(items) {
   const sums = {};
@@ -106,7 +134,6 @@ function allocateCosts(items, invoiceTotal) {
   }
   const factor = invoiceTotal / sumLines;
   const costs = items.map((it) => round2((Number(it.line_total) || 0) * factor));
-  // Put any rounding difference on the largest line so the sum matches exactly.
   const diff = round2(invoiceTotal - costs.reduce((s, c) => s + c, 0));
   if (diff !== 0 && costs.length) {
     let idx = 0;
@@ -116,68 +143,120 @@ function allocateCosts(items, invoiceTotal) {
   return costs;
 }
 
+/** "12a Smith St, Penrith" -> { number: '12a', street: 'smith' } for address matching. */
+function addressKey(text) {
+  const m = String(text || '').toLowerCase().match(/(\d+[a-z]?)\s*[,/-]?\s+([a-z]{3,})/);
+  return m ? { number: m[1], street: m[2] } : null;
+}
+
 function openDb(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(path.join(dataDir, 'files'), { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'jobcosts.sqlite'));
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA journal_mode = WAL;');
+  migrateV1(db);
+  db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
-  migrate(db);
+  migrateColumns(db);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_account ON invoices(account_uuid)');
   return createRepo(db, dataDir);
 }
 
-/** Add columns introduced after the first release to existing databases. */
-function migrate(db) {
-  const cols = db.prepare('PRAGMA table_info(jobs)').all().map((c) => c.name);
-  if (!cols.includes('quote_amount')) db.exec('ALTER TABLE jobs ADD COLUMN quote_amount REAL');
-  // 'servicem8' = taken from the job in ServiceM8, 'manual' = typed in on the card (never overwritten)
-  if (!cols.includes('quote_source')) db.exec('ALTER TABLE jobs ADD COLUMN quote_source TEXT');
-  const itemCols = db.prepare('PRAGMA table_info(items)').all().map((c) => c.name);
-  // Screw-up tag: a reason code from src/mistakes.js, or NULL when the line is not a mistake.
-  if (!itemCols.includes('mistake_reason')) db.exec('ALTER TABLE items ADD COLUMN mistake_reason TEXT');
-  if (!itemCols.includes('mistake_at')) db.exec('ALTER TABLE items ADD COLUMN mistake_at TEXT');
-  const invCols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
-  if (!invCols.includes('split')) db.exec('ALTER TABLE invoices ADD COLUMN split INTEGER NOT NULL DEFAULT 0');
-  if (!invCols.includes('attached_later')) db.exec('ALTER TABLE invoices ADD COLUMN attached_later INTEGER NOT NULL DEFAULT 0');
-  if (!invCols.includes('category')) {
-    // One type per invoice (Materials, Subcontractor…); category_manual = 1 when changed by hand.
-    db.exec('ALTER TABLE invoices ADD COLUMN category TEXT');
-    db.exec('ALTER TABLE invoices ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0');
-    const upd = db.prepare('UPDATE invoices SET category = ? WHERE id = ?');
-    for (const inv of db.prepare("SELECT id FROM invoices WHERE status = 'ready'").all()) {
-      upd.run(invoiceCategory(db.prepare('SELECT category, line_total FROM items WHERE invoice_id = ?').all(inv.id)), inv.id);
+const cols = (db, table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+/**
+ * Upgrade a database from the first version, where every invoice belonged to one job:
+ * invoices now belong to the business and are assigned to jobs line by line.
+ */
+function migrateV1(db) {
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t) => t.name);
+  if (!tables.includes('invoices') || !cols(db, 'invoices').includes('job_uuid')) return;
+  const invCols = cols(db, 'invoices');
+  const itemCols = cols(db, 'items');
+  const has = (c) => invCols.includes(c);
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('BEGIN');
+  try {
+    db.exec(SCHEMA.replace('CREATE TABLE IF NOT EXISTS invoices (', 'CREATE TABLE invoices_v2 ('));
+    db.exec(`INSERT INTO invoices_v2 (id, account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject,
+        status, error, document_type, supplier, supplier_abn, invoice_number, invoice_date, due_date, currency, subtotal, tax, total, notes,
+        category, category_manual, attached_later, created_at)
+      SELECT id, (SELECT account_uuid FROM jobs WHERE jobs.job_uuid = invoices.job_uuid), job_uuid, source, file_name, file_path, mime_type,
+        email_from, email_subject, status, error, document_type, supplier, supplier_abn, invoice_number, invoice_date, due_date, currency,
+        subtotal, tax, total, notes, ${has('category') ? 'category' : 'NULL'}, ${has('category_manual') ? 'category_manual' : '0'},
+        ${has('attached_later') ? 'attached_later' : '0'}, created_at
+      FROM invoices`);
+
+    // Every line of an invoice that wasn't split goes wholly to its job, keeping type and screw-up tag.
+    const allocCols = tables.includes('allocations') ? cols(db, 'allocations') : [];
+    if (tables.includes('allocations') && !allocCols.includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
+    const mk = itemCols.includes('mistake_reason');
+    const splitCol = has('split') ? 'invoices.split' : '0';
+    db.exec(`INSERT OR IGNORE INTO allocations (item_id, job_uuid, fraction, category, mistake_reason, mistake_at)
+      SELECT items.id, invoices.job_uuid, 1, ${has('category') ? 'invoices.category' : 'NULL'},
+        ${mk ? 'items.mistake_reason' : 'NULL'}, ${mk ? 'items.mistake_at' : 'NULL'}
+      FROM items JOIN invoices ON invoices.id = items.invoice_id WHERE ${splitCol} = 0`);
+    if (has('category')) {
+      db.exec(`UPDATE allocations SET category = (SELECT invoices.category FROM items JOIN invoices ON invoices.id = items.invoice_id
+        WHERE items.id = allocations.item_id) WHERE category IS NULL`);
     }
+    db.exec('DROP TABLE invoices');
+    db.exec('ALTER TABLE invoices_v2 RENAME TO invoices');
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
   }
 }
 
+/** Columns added after a table was first created. */
+function migrateColumns(db) {
+  const jobCols = cols(db, 'jobs');
+  if (!jobCols.includes('quote_amount')) db.exec('ALTER TABLE jobs ADD COLUMN quote_amount REAL');
+  // 'servicem8' = taken from the job in ServiceM8, 'manual' = typed in on the card (never overwritten)
+  if (!jobCols.includes('quote_source')) db.exec('ALTER TABLE jobs ADD COLUMN quote_source TEXT');
+  if (!jobCols.includes('sm8_status')) db.exec('ALTER TABLE jobs ADD COLUMN sm8_status TEXT');
+  if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
+}
+
 function createRepo(db, dataDir) {
+  const tx = (fn) => {
+    db.exec('BEGIN');
+    try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+  };
+  const fail = (message, status = 400, extra = {}) => Object.assign(new Error(message), { status, ...extra });
+
   const repo = {
     db,
     filesDir: path.join(dataDir, 'files'),
 
-    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null }) {
-      let job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
+    // ---------- jobs & accounts ----------
+
+    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null, status = null }) {
+      const job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       if (!job) {
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
-            db.prepare('INSERT INTO jobs (job_uuid, account_uuid, inbox_code, job_number, job_title) VALUES (?, ?, ?, ?, ?)')
-              .run(jobUUID, accountUUID, newInboxCode(), jobNumber, jobTitle);
+            db.prepare('INSERT INTO jobs (job_uuid, account_uuid, inbox_code, job_number, job_title, sm8_status) VALUES (?, ?, ?, ?, ?, ?)')
+              .run(jobUUID, accountUUID, newInboxCode(10), jobNumber, jobTitle, status);
             break;
           } catch (e) {
             if (!String(e.message).includes('UNIQUE') || attempt === 4) throw e;
           }
         }
-      } else if (jobNumber || jobTitle || accountUUID) {
-        db.prepare(`UPDATE jobs SET
-            job_number = COALESCE(?, job_number),
-            job_title = COALESCE(?, job_title),
-            account_uuid = COALESCE(?, account_uuid)
-          WHERE job_uuid = ?`).run(jobNumber, jobTitle, accountUUID, jobUUID);
+      } else {
+        db.prepare(`UPDATE jobs SET job_number = COALESCE(?, job_number), job_title = COALESCE(?, job_title),
+            account_uuid = COALESCE(?, account_uuid), sm8_status = COALESCE(?, sm8_status) WHERE job_uuid = ?`)
+          .run(jobNumber, jobTitle, accountUUID, status, jobUUID);
       }
       if (quoteAmount != null && isFinite(quoteAmount)) {
         db.prepare(`UPDATE jobs SET quote_amount = ?, quote_source = 'servicem8'
           WHERE job_uuid = ? AND COALESCE(quote_source, '') != 'manual'`).run(round2(quoteAmount), jobUUID);
       }
+      return repo.getJob(jobUUID);
+    },
+
+    getJob(jobUUID) {
       return db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
     },
 
@@ -187,20 +266,50 @@ function createRepo(db, dataDir) {
       else db.prepare("UPDATE jobs SET quote_amount = ?, quote_source = 'manual' WHERE job_uuid = ?").run(round2(amount), jobUUID);
     },
 
-    getJob(jobUUID) {
-      return db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
+    /** Jobs to pick from (newest job numbers first). */
+    listJobs(accountUUID) {
+      return db.prepare(`SELECT job_uuid, job_number, job_title, sm8_status FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
+        ORDER BY CAST(job_number AS INTEGER) DESC, job_number DESC`).all(accountUUID);
     },
 
-    getJobByInboxCode(code) {
-      return db.prepare('SELECT * FROM jobs WHERE inbox_code = ?').get(String(code).toLowerCase());
+    /** The business's account row (created on first use) – holds its one inbox code. */
+    ensureAccount(accountUUID) {
+      const key = accountUUID ?? '';
+      let acc = db.prepare('SELECT * FROM accounts WHERE account_key = ?').get(key);
+      for (let attempt = 0; !acc && attempt < 5; attempt++) {
+        try { db.prepare('INSERT INTO accounts (account_key, inbox_code) VALUES (?, ?)').run(key, newInboxCode()); } catch (e) { if (!String(e.message).includes('UNIQUE')) throw e; }
+        acc = db.prepare('SELECT * FROM accounts WHERE account_key = ?').get(key);
+      }
+      return acc;
     },
 
-    createInvoice(fields) {
+    /** Returns { accountUUID } for an inbox code, or null. */
+    accountByInboxCode(code) {
+      const acc = db.prepare('SELECT * FROM accounts WHERE inbox_code = ?').get(String(code).toLowerCase());
+      return acc ? { accountUUID: acc.account_key === '' ? null : acc.account_key } : null;
+    },
+
+    jobsSyncedRecently(accountUUID, minutes) {
+      const acc = repo.ensureAccount(accountUUID);
+      return acc.jobs_synced_at && Date.now() - Date.parse(acc.jobs_synced_at) < minutes * 60000;
+    },
+
+    /** Store active jobs fetched from ServiceM8, so emailed invoices can be matched to them. */
+    saveSyncedJobs(accountUUID, jobs) {
+      tx(() => {
+        for (const j of jobs) repo.ensureJob({ ...j, accountUUID });
+        db.prepare('UPDATE accounts SET jobs_synced_at = ? WHERE account_key = ?').run(new Date().toISOString(), accountUUID ?? '');
+      });
+    },
+
+    // ---------- invoices ----------
+
+    createInvoice(f) {
       const r = db.prepare(`INSERT INTO invoices
-        (job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
-        fields.jobUUID, fields.source, fields.fileName || null, fields.filePath || null,
-        fields.mimeType || null, fields.emailFrom || null, fields.emailSubject || null,
+        (account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, email_text, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
+        f.accountUUID ?? null, f.originJobUUID || null, f.source, f.fileName || null, f.filePath || null, f.mimeType || null,
+        f.emailFrom || null, f.emailSubject || null, f.emailText ? String(f.emailText).slice(0, 5000) : null,
       );
       return repo.getInvoice(Number(r.lastInsertRowid));
     },
@@ -237,77 +346,74 @@ function createRepo(db, dataDir) {
       const costs = allocateCosts(items, total);
       const alreadyPaid = x.payment_status === 'paid';
 
-      // Keep ticks and screw-up tags from an earlier reading of the same lines.
-      const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      // Keep paid ticks and job assignments from an earlier reading of the same lines.
       const oldItems = db.prepare('SELECT * FROM items WHERE invoice_id = ?').all(id);
       const before = new Map(oldItems.map((o) => [norm(o.description), o]));
-      // Settings made for the whole invoice carry over even if the lines are different now
-      // (e.g. a hand-entered invoice gets its real file).
       const wasAllPaid = oldItems.length > 0 && oldItems.every((o) => o.paid);
-      const oldReasons = [...new Set(oldItems.map((o) => o.mistake_reason))];
-      const wholeReason = oldItems.length > 0 && oldReasons.length === 1 && oldReasons[0] ? oldReasons[0] : null;
-      const wholeReasonAt = wholeReason ? oldItems[0].mistake_at : null;
       const oldAllocs = db.prepare(`SELECT allocations.*, items.description FROM allocations
         JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = ?`).all(id);
+      // Jobs that had the whole invoice keep the whole invoice, even if the lines are different now
+      // (e.g. a hand-entered invoice gets its real file).
+      const wholeJobs = [...new Set(oldAllocs.map((a) => a.job_uuid))].filter((job) =>
+        oldItems.length && oldItems.every((o) => oldAllocs.some((a) => a.item_id === o.id && a.job_uuid === job && a.fraction >= 1 - EPS)));
 
-      db.exec('BEGIN');
-      try {
+      tx(() => {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
             document_type = ?, supplier = ?, supplier_abn = ?, invoice_number = ?, invoice_date = ?,
-            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?,
+            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?,
             category = CASE WHEN category_manual = 1 THEN category ELSE ? END
           WHERE id = ?`).run(
           x.document_type || null, x.supplier_name || null, x.supplier_abn || null, x.invoice_number || null,
           x.invoice_date || null, x.due_date || null, x.currency || null,
-          x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null, invoiceCategory(items), id,
+          x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null,
+          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, invoiceCategory(items), id,
         );
         db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
         const ins = db.prepare(`INSERT INTO items
-          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at, mistake_reason, mistake_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
         const now = new Date().toISOString();
         items.forEach((it, i) => {
           const old = before.get(norm(it.description));
           const paid = alreadyPaid || wasAllPaid || !!(old && old.paid);
           ins.run(id, i, String(it.description).slice(0, 500), it.category || 'other',
             it.quantity ?? null, it.unit || null, it.unit_price ?? null, round2(it.line_total), costs[i],
-            paid ? 1 : 0, paid ? (old?.paid_at || oldItems[0]?.paid_at || now) : null,
-            old?.mistake_reason || wholeReason, old?.mistake_at || wholeReasonAt);
+            paid ? 1 : 0, paid ? (old?.paid_at || oldItems[0]?.paid_at || now) : null);
         });
-        // Job shares follow their line (matched by description).
-        if (oldAllocs.length) {
-          const newIds = new Map(db.prepare('SELECT id, description FROM items WHERE invoice_id = ?').all(id).map((r) => [norm(r.description), r.id]));
-          const insA = db.prepare('INSERT OR IGNORE INTO allocations (item_id, job_uuid, fraction, mistake_reason, mistake_at) VALUES (?, ?, ?, ?, ?)');
-          for (const a of oldAllocs) {
-            const itemId = newIds.get(norm(a.description));
-            if (itemId) insA.run(itemId, a.job_uuid, a.fraction, a.mistake_reason, a.mistake_at);
-          }
+        const newItems = db.prepare('SELECT id, description FROM items WHERE invoice_id = ?').all(id);
+        const insA = db.prepare(`INSERT INTO allocations (item_id, job_uuid, fraction, category, mistake_reason, mistake_at)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (item_id, job_uuid) DO NOTHING`);
+        // Whole-invoice jobs first (their tags come from their first old line)…
+        for (const job of wholeJobs) {
+          const sample = oldAllocs.find((a) => a.job_uuid === job);
+          const allSameMk = oldAllocs.filter((a) => a.job_uuid === job).every((a) => a.mistake_reason === sample.mistake_reason);
+          for (const it of newItems) insA.run(it.id, job, 1, sample.category, allSameMk ? sample.mistake_reason : null, allSameMk ? sample.mistake_at : null);
         }
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
+        // …then shares of matching lines.
+        const byDesc = new Map(newItems.map((r) => [norm(r.description), r.id]));
+        for (const a of oldAllocs) {
+          if (wholeJobs.includes(a.job_uuid)) continue;
+          const itemId = byDesc.get(norm(a.description));
+          if (itemId) insA.run(itemId, a.job_uuid, a.fraction, a.category, a.mistake_reason, a.mistake_at);
+        }
+      });
       return repo.getInvoice(id);
     },
 
     deleteInvoice(id) {
       const inv = repo.getInvoice(id);
       if (!inv) return;
-      db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
-      db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
-      db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
+      tx(() => {
+        db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
+        db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
+        db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
+      });
       if (inv.file_path) fs.rm(path.join(repo.filesDir, inv.file_path), { force: true }, () => {});
     },
 
     getItem(id) {
-      return db.prepare('SELECT items.*, invoices.job_uuid FROM items JOIN invoices ON invoices.id = items.invoice_id WHERE items.id = ?').get(id);
-    },
-
-    setItemPaid(id, paid) {
-      db.prepare('UPDATE items SET paid = ?, paid_at = ? WHERE id = ?')
-        .run(paid ? 1 : 0, paid ? new Date().toISOString() : null, id);
+      return db.prepare('SELECT items.*, invoices.account_uuid FROM items JOIN invoices ON invoices.id = items.invoice_id WHERE items.id = ?').get(id);
     },
 
     setInvoicePaid(id, paid) {
@@ -315,143 +421,18 @@ function createRepo(db, dataDir) {
         .run(paid ? 1 : 0, paid ? new Date().toISOString() : null, id);
     },
 
-    // ----- Split invoices -----
-
-    /** Jobs other than the invoice's own job that have a share of it. */
-    otherJobsOnInvoice(invoiceId) {
-      return db.prepare(`SELECT DISTINCT jobs.job_uuid, jobs.job_number, jobs.job_title FROM allocations
-        JOIN items ON items.id = allocations.item_id JOIN invoices ON invoices.id = items.invoice_id
-        LEFT JOIN jobs ON jobs.job_uuid = allocations.job_uuid
-        WHERE items.invoice_id = ? AND allocations.job_uuid != invoices.job_uuid`).all(invoiceId);
-    },
-
-    /**
-     * Turn splitting on: the invoice's own job starts with all of every line (so nothing
-     * changes until you reduce it). Turning it off gives everything back to the own job,
-     * which is only allowed when no other job has a share.
-     */
-    setSplit(invoiceId, on) {
-      const inv = repo.getInvoice(invoiceId);
-      if (!inv) return;
-      db.exec('BEGIN');
-      try {
-        if (on && !inv.split) {
-          db.prepare(`INSERT OR IGNORE INTO allocations (item_id, job_uuid, fraction, mistake_reason, mistake_at)
-            SELECT id, ?, 1, mistake_reason, mistake_at FROM items WHERE invoice_id = ?`).run(inv.job_uuid, invoiceId);
-          db.prepare('UPDATE invoices SET split = 1 WHERE id = ?').run(invoiceId);
-        } else if (!on && inv.split) {
-          if (repo.otherJobsOnInvoice(invoiceId).length) throw Object.assign(new Error('Other jobs have part of this invoice'), { status: 409 });
-          // The own job's screw-up tags go back onto the lines.
-          db.prepare(`UPDATE items SET mistake_reason = (SELECT mistake_reason FROM allocations a WHERE a.item_id = items.id AND a.job_uuid = ?),
-              mistake_at = (SELECT mistake_at FROM allocations a WHERE a.item_id = items.id AND a.job_uuid = ?)
-            WHERE invoice_id = ?`).run(inv.job_uuid, inv.job_uuid, invoiceId);
-          db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(invoiceId);
-          db.prepare('UPDATE invoices SET split = 0 WHERE id = ?').run(invoiceId);
-        }
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
-    },
-
-    /**
-     * Set how much of a line a job gets (fraction 0..1). 0 removes the job's share.
-     * Fails if the jobs together would get more than the whole line.
-     */
-    setShare(itemId, jobUUID, fraction) {
-      const others = db.prepare('SELECT COALESCE(SUM(fraction), 0) AS f FROM allocations WHERE item_id = ? AND job_uuid != ?').get(itemId, jobUUID).f;
-      if (fraction < 0) throw Object.assign(new Error('Amount cannot be negative'), { status: 400 });
-      if (fraction + others > 1 + 1e-6) {
-        throw Object.assign(new Error('That is more than is left on this line'), { status: 400, left: Math.max(0, 1 - others) });
-      }
-      if (fraction <= 1e-9) db.prepare('DELETE FROM allocations WHERE item_id = ? AND job_uuid = ?').run(itemId, jobUUID);
-      else {
-        db.prepare(`INSERT INTO allocations (item_id, job_uuid, fraction) VALUES (?, ?, ?)
-          ON CONFLICT (item_id, job_uuid) DO UPDATE SET fraction = excluded.fraction`).run(itemId, jobUUID, Math.min(1, fraction));
-      }
-    },
-
-    getShare(itemId, jobUUID) {
-      return db.prepare('SELECT * FROM allocations WHERE item_id = ? AND job_uuid = ?').get(itemId, jobUUID);
-    },
-
-    /** A job gives back everything it took from an invoice that belongs to another job. */
-    giveBack(invoiceId, jobUUID) {
-      db.prepare('DELETE FROM allocations WHERE job_uuid = ? AND item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(jobUUID, invoiceId);
-    },
-
-    setShareMistake(itemId, jobUUID, reason) {
-      db.prepare('UPDATE allocations SET mistake_reason = ?, mistake_at = ? WHERE item_id = ? AND job_uuid = ?')
-        .run(reason || null, reason ? new Date().toISOString() : null, itemId, jobUUID);
-    },
-
-    setInvoiceShareMistake(invoiceId, jobUUID, reason) {
-      db.prepare(`UPDATE allocations SET mistake_reason = ?, mistake_at = ?
-        WHERE job_uuid = ? AND item_id IN (SELECT id FROM items WHERE invoice_id = ?)`)
-        .run(reason || null, reason ? new Date().toISOString() : null, jobUUID, invoiceId);
-    },
-
-    /** Is this invoice's own job in the given ServiceM8 account? */
-    invoiceAccount(invoiceId) {
-      return db.prepare('SELECT jobs.account_uuid FROM invoices JOIN jobs ON jobs.job_uuid = invoices.job_uuid WHERE invoices.id = ?').get(invoiceId)?.account_uuid ?? null;
-    },
-
-    /** Lines of split invoices (same account) that still have something left to take. */
-    getAvailable(accountUUID, jobUUID) {
-      const rows = db.prepare(`SELECT items.*, invoices.supplier, invoices.invoice_number, invoices.invoice_date, invoices.job_uuid AS home_job,
-            jobs.job_number AS home_job_number, jobs.job_title AS home_job_title,
-            COALESCE((SELECT SUM(fraction) FROM allocations a WHERE a.item_id = items.id), 0) AS taken,
-            COALESCE((SELECT fraction FROM allocations a WHERE a.item_id = items.id AND a.job_uuid = ?), 0) AS mine
-          FROM items JOIN invoices ON invoices.id = items.invoice_id JOIN jobs ON jobs.job_uuid = invoices.job_uuid
-          WHERE invoices.split = 1 AND invoices.status = 'ready' AND jobs.account_uuid IS ?
-          ORDER BY COALESCE(invoices.invoice_date, invoices.created_at) DESC, invoices.id DESC, items.position`).all(jobUUID, accountUUID);
-      const out = new Map();
-      for (const r of rows) {
-        const left = Math.max(0, 1 - r.taken);
-        if (left < 1e-6) continue;
-        if (!out.has(r.invoice_id)) {
-          out.set(r.invoice_id, {
-            invoice_id: r.invoice_id, supplier: r.supplier, invoice_number: r.invoice_number, invoice_date: r.invoice_date,
-            home_job: r.home_job, home_job_number: r.home_job_number, home_job_title: r.home_job_title, lines: [],
-          });
-        }
-        const q = Number(r.quantity) > 0 ? Number(r.quantity) : null;
-        out.get(r.invoice_id).lines.push({
-          item_id: r.id, description: r.description, unit: r.unit, quantity: q, cost: r.cost,
-          unit_cost: q ? round2(r.cost / q) : null,
-          left_fraction: left, left_quantity: q ? Math.round(left * q * 1000) / 1000 : null, left_amount: round2(left * r.cost),
-          mine_fraction: r.mine,
-        });
-      }
-      return [...out.values()];
-    },
-
-    /** Tag a line as a screw-up (reason code) or clear it (null). */
-    setItemMistake(id, reason) {
-      db.prepare('UPDATE items SET mistake_reason = ?, mistake_at = ? WHERE id = ?')
-        .run(reason || null, reason ? new Date().toISOString() : null, id);
-    },
-
-    setInvoiceMistake(id, reason) {
-      db.prepare('UPDATE items SET mistake_reason = ?, mistake_at = ? WHERE invoice_id = ?')
-        .run(reason || null, reason ? new Date().toISOString() : null, id);
+    /** Change the invoice's default type by hand; kept when the invoice is read again. */
+    setInvoiceCategory(id, category) {
+      db.prepare('UPDATE invoices SET category = ?, category_manual = 1 WHERE id = ?').run(category, id);
     },
 
     /** Manual correction of a line; re-spreads the invoice total over the lines. */
-    updateItem(id, { description, category, line_total }) {
+    updateItem(id, { description, line_total }) {
       const item = repo.getItem(id);
       if (!item) return;
-      db.prepare(`UPDATE items SET description = COALESCE(?, description), category = COALESCE(?, category),
-          line_total = COALESCE(?, line_total) WHERE id = ?`)
-        .run(description ?? null, category ?? null, line_total == null ? null : round2(line_total), id);
+      db.prepare('UPDATE items SET description = COALESCE(?, description), line_total = COALESCE(?, line_total) WHERE id = ?')
+        .run(description ?? null, line_total == null ? null : round2(line_total), id);
       repo.reallocate(item.invoice_id);
-    },
-
-    /** Manual correction of the header fields of an invoice. */
-    /** Change the invoice's type by hand; kept when the invoice is read again. */
-    setInvoiceCategory(id, category) {
-      db.prepare('UPDATE invoices SET category = ?, category_manual = 1 WHERE id = ?').run(category, id);
     },
 
     updateInvoice(id, { supplier, invoice_number, total }) {
@@ -469,46 +450,184 @@ function createRepo(db, dataDir) {
       items.forEach((it, i) => upd.run(costs[i], it.id));
     },
 
-    /** Everything the job card needs: invoices, their lines, and totals. */
+    // ---------- assigning to jobs ----------
+
+    /** Fraction of a line not assigned to any job. */
+    leftOf(itemId) {
+      return Math.max(0, 1 - db.prepare('SELECT COALESCE(SUM(fraction), 0) AS f FROM allocations WHERE item_id = ?').get(itemId).f);
+    },
+
+    getShare(itemId, jobUUID) {
+      return db.prepare('SELECT * FROM allocations WHERE item_id = ? AND job_uuid = ?').get(itemId, jobUUID);
+    },
+
+    /**
+     * Set a job's share of a line (0..1). 0 removes it. `fields` may set the type and
+     * screw-up tag for this share. Fails if the jobs together would get more than the line.
+     */
+    setShare(itemId, jobUUID, fraction, fields = {}) {
+      if (!(fraction >= 0)) throw fail('Amount cannot be negative');
+      const others = db.prepare('SELECT COALESCE(SUM(fraction), 0) AS f FROM allocations WHERE item_id = ? AND job_uuid != ?').get(itemId, jobUUID).f;
+      if (fraction + others > 1 + EPS) throw fail('That is more than is left on this line', 400, { left: Math.max(0, 1 - others) });
+      if (fraction <= EPS) { db.prepare('DELETE FROM allocations WHERE item_id = ? AND job_uuid = ?').run(itemId, jobUUID); return; }
+      const item = repo.getItem(itemId);
+      const category = fields.category || repo.getShare(itemId, jobUUID)?.category || repo.getInvoice(item.invoice_id)?.category || 'materials';
+      db.prepare(`INSERT INTO allocations (item_id, job_uuid, fraction, category) VALUES (?, ?, ?, ?)
+        ON CONFLICT (item_id, job_uuid) DO UPDATE SET fraction = excluded.fraction, category = excluded.category`)
+        .run(itemId, jobUUID, Math.min(1, fraction), category);
+      if (fields.mistake_reason !== undefined) repo.setShareFields(itemId, jobUUID, { mistake_reason: fields.mistake_reason });
+    },
+
+    /** Add more of a line to a job (on top of what it already has). */
+    addShare(itemId, jobUUID, extra, fields = {}) {
+      const mine = repo.getShare(itemId, jobUUID)?.fraction || 0;
+      repo.setShare(itemId, jobUUID, mine + extra, fields);
+    },
+
+    /** Give a job everything that's still left on an invoice. */
+    assignWhole(invoiceId, jobUUID, fields = {}) {
+      tx(() => {
+        for (const it of db.prepare('SELECT id FROM items WHERE invoice_id = ?').all(invoiceId)) {
+          const left = repo.leftOf(it.id);
+          if (left > EPS) repo.addShare(it.id, jobUUID, left, fields);
+        }
+        db.prepare('UPDATE invoices SET suggested_job_uuid = NULL, suggestion_reason = NULL WHERE id = ?').run(invoiceId);
+      });
+    },
+
+    setShareFields(itemId, jobUUID, { category, mistake_reason }) {
+      if (category !== undefined) db.prepare('UPDATE allocations SET category = ? WHERE item_id = ? AND job_uuid = ?').run(category, itemId, jobUUID);
+      if (mistake_reason !== undefined) {
+        db.prepare('UPDATE allocations SET mistake_reason = ?, mistake_at = ? WHERE item_id = ? AND job_uuid = ?')
+          .run(mistake_reason || null, mistake_reason ? new Date().toISOString() : null, itemId, jobUUID);
+      }
+    },
+
+    /** Set type / screw-up on all of a job's shares of an invoice. */
+    setInvoiceShareFields(invoiceId, jobUUID, fields) {
+      for (const it of db.prepare('SELECT id FROM items WHERE invoice_id = ?').all(invoiceId)) repo.setShareFields(it.id, jobUUID, fields);
+    },
+
+    /** Take a job's shares of an invoice off it; they become "not assigned yet" again. */
+    removeFromJob(invoiceId, jobUUID) {
+      db.prepare('DELETE FROM allocations WHERE job_uuid = ? AND item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(jobUUID, invoiceId);
+    },
+
+    /** Jobs with a share of this invoice. */
+    jobsOnInvoice(invoiceId) {
+      return db.prepare(`SELECT DISTINCT allocations.job_uuid, jobs.job_number, jobs.job_title FROM allocations
+        JOIN items ON items.id = allocations.item_id LEFT JOIN jobs ON jobs.job_uuid = allocations.job_uuid
+        WHERE items.invoice_id = ?`).all(invoiceId);
+    },
+
+    /** Assign an invoice uploaded or typed on a job to that job, once it has been read. */
+    assignToOrigin(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv || !inv.origin_job_uuid || inv.status !== 'ready') return;
+      const hasAny = db.prepare('SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = ? LIMIT 1').get(invoiceId);
+      if (!hasAny) repo.assignWhole(invoiceId, inv.origin_job_uuid, { category: inv.category });
+    },
+
+    // ---------- suggestions ----------
+
+    /**
+     * Guess which job an emailed invoice is for: a job number in the email subject/text,
+     * the invoice's references or the file name, or the site address. Stores the best
+     * guess (only if it's clear) with the reason.
+     */
+    suggestJob(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv || inv.status !== 'ready') return null;
+      const dismissed = new Set(parseJson(inv.dismissed_jobs, []));
+      const jobs = db.prepare(`SELECT * FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
+        AND COALESCE(sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(inv.account_uuid).filter((j) => !dismissed.has(j.job_uuid));
+      const places = [
+        ['the email subject', inv.email_subject],
+        ['the invoice reference', parseJson(inv.refs, []).join(' | ')],
+        ['the file name', inv.file_name],
+        ['the email', inv.email_text],
+      ];
+      const site = addressKey(inv.site_address);
+      const scored = [];
+      for (const j of jobs) {
+        const num = String(j.job_number).trim();
+        let best = null;
+        if (num.length >= 3) {
+          const re = new RegExp(`(^|[^0-9])${num.replace(/[^0-9a-z]/gi, '')}([^0-9]|$)`, 'i');
+          for (const [where, text] of places) if (text && re.test(text)) { best = { score: 3, reason: `Found “${num}” in ${where}` }; break; }
+        }
+        const jobAddr = addressKey(j.job_title);
+        if (!best && site && jobAddr && site.number === jobAddr.number && site.street === jobAddr.street) {
+          best = { score: 2, reason: `Site address matches ${String(j.job_title).split(',')[0]}` };
+        }
+        if (best) scored.push({ job: j, ...best });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      const top = scored[0];
+      const clear = top && !(scored[1] && scored[1].score === top.score);
+      db.prepare('UPDATE invoices SET suggested_job_uuid = ?, suggestion_reason = ? WHERE id = ?')
+        .run(clear ? top.job.job_uuid : null, clear ? top.reason : null, invoiceId);
+      return clear ? top.job.job_uuid : null;
+    },
+
+    /** "Not this job": forget the suggestion and don't suggest that job again for this invoice. */
+    dismissSuggestion(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv) return;
+      const dismissed = new Set(parseJson(inv.dismissed_jobs, []));
+      if (inv.suggested_job_uuid) dismissed.add(inv.suggested_job_uuid);
+      db.prepare('UPDATE invoices SET suggested_job_uuid = NULL, suggestion_reason = NULL, dismissed_jobs = ? WHERE id = ?')
+        .run(JSON.stringify([...dismissed]), invoiceId);
+      repo.suggestJob(invoiceId);
+    },
+
+    /** Leave an invoice unassigned on purpose (stock); it stops showing as new in the inbox. */
+    keepAsStock(invoiceId) {
+      db.prepare('UPDATE invoices SET kept_as_stock = 1, suggested_job_uuid = NULL, suggestion_reason = NULL WHERE id = ?').run(invoiceId);
+    },
+
+    // ---------- reading it all back ----------
+
+    /** Allocations of the given invoices, with job numbers, grouped by line. */
+    _allocsByItem(invoiceIds) {
+      const map = new Map();
+      if (!invoiceIds.length) return map;
+      const rows = db.prepare(`SELECT allocations.*, jobs.job_number, jobs.job_title FROM allocations
+        JOIN items ON items.id = allocations.item_id LEFT JOIN jobs ON jobs.job_uuid = allocations.job_uuid
+        WHERE items.invoice_id IN (${invoiceIds.map(Number).join(',')}) ORDER BY allocations.created_at, allocations.id`).all();
+      for (const a of rows) (map.get(a.item_id) || map.set(a.item_id, []).get(a.item_id)).push(a);
+      return map;
+    },
+
+    /** Where a line went: every job with a share, and what's left. */
+    _trace(item, list, jobUUID) {
+      const q = Number(item.quantity) > 0 ? Number(item.quantity) : null;
+      const taken = list.reduce((s, a) => s + a.fraction, 0);
+      return {
+        quantity: q,
+        jobs: list.map((a) => ({
+          job_uuid: a.job_uuid, job_number: a.job_number, job_title: a.job_title, this_job: a.job_uuid === jobUUID,
+          share: a.fraction, quantity: q ? round3(a.fraction * q) : null, amount: round2(a.fraction * item.cost),
+        })),
+        left: Math.max(0, 1 - taken),
+        left_quantity: q ? round3(Math.max(0, 1 - taken) * q) : null,
+        left_amount: round2(Math.max(0, 1 - taken) * item.cost),
+      };
+    },
+
+    /** Everything the job card needs: this job's share of each invoice, and totals. */
     getJobSummary(jobUUID) {
       const job = repo.getJob(jobUUID);
-      // This job's own invoices, plus split invoices of other jobs that this job took a share of.
-      const invoices = db.prepare(`SELECT invoices.*, jobs.job_number AS home_job_number, jobs.job_title AS home_job_title
-          FROM invoices LEFT JOIN jobs ON jobs.job_uuid = invoices.job_uuid
-          WHERE invoices.job_uuid = ? OR (invoices.split = 1 AND invoices.id IN (
-            SELECT items.invoice_id FROM allocations JOIN items ON items.id = allocations.item_id WHERE allocations.job_uuid = ?))
-          ORDER BY COALESCE(invoices.invoice_date, invoices.created_at) DESC, invoices.id DESC`).all(jobUUID, jobUUID);
+      // Invoices with a share on this job, plus uploads from this job still being read.
+      const invoices = db.prepare(`SELECT * FROM invoices
+          WHERE id IN (SELECT items.invoice_id FROM allocations JOIN items ON items.id = allocations.item_id WHERE allocations.job_uuid = ?)
+             OR (origin_job_uuid = ? AND NOT EXISTS (SELECT 1 FROM items WHERE items.invoice_id = invoices.id))
+          ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(jobUUID, jobUUID);
       const ids = invoices.map((i) => i.id);
-      const inList = ids.length ? ids.join(',') : '0';
-      const items = db.prepare(`SELECT * FROM items WHERE invoice_id IN (${inList}) ORDER BY position, id`).all();
-      const allocs = db.prepare(`SELECT allocations.*, jobs.job_number, jobs.job_title FROM allocations
-          JOIN items ON items.id = allocations.item_id LEFT JOIN jobs ON jobs.job_uuid = allocations.job_uuid
-          WHERE items.invoice_id IN (${inList})`).all();
-      const allocsByItem = new Map();
-      for (const a of allocs) (allocsByItem.get(a.item_id) || allocsByItem.set(a.item_id, []).get(a.item_id)).push(a);
-      const splitIds = new Set(invoices.filter((i) => i.split).map((i) => i.id));
-
-      // Each line: `cost` is what THIS job is charged; `line_cost` is the whole line.
-      const byInvoice = new Map(invoices.map((inv) => [inv.id, []]));
-      for (const it of items) {
-        const line = { ...it, paid: !!it.paid, line_cost: it.cost };
-        if (splitIds.has(it.invoice_id)) {
-          const list = allocsByItem.get(it.id) || [];
-          const mine = list.find((a) => a.job_uuid === jobUUID);
-          const q = Number(it.quantity) > 0 ? Number(it.quantity) : null;
-          line.share = mine ? mine.fraction : 0;
-          line.share_quantity = q ? Math.round(line.share * q * 1000) / 1000 : null;
-          line.left = Math.max(0, 1 - list.reduce((sum, a) => sum + a.fraction, 0));
-          line.left_quantity = q ? Math.round(line.left * q * 1000) / 1000 : null;
-          line.others = list.filter((a) => a.job_uuid !== jobUUID).map((a) => ({
-            job_number: a.job_number, job_title: a.job_title, share: a.fraction, quantity: q ? Math.round(a.fraction * q * 1000) / 1000 : null,
-          }));
-          line.cost = round2(it.cost * line.share);
-          line.mistake_reason = mine ? mine.mistake_reason : null;
-          line.mistake_at = mine ? mine.mistake_at : null;
-        }
-        byInvoice.get(it.invoice_id)?.push(line);
-      }
+      const items = ids.length ? db.prepare(`SELECT * FROM items WHERE invoice_id IN (${ids.join(',')}) ORDER BY position, id`).all() : [];
+      const allocs = repo._allocsByItem(ids);
+      const itemsByInvoice = new Map(ids.map((id) => [id, []]));
+      for (const it of items) itemsByInvoice.get(it.invoice_id).push(it);
 
       const totals = { total: 0, paid: 0, outstanding: 0, tax: 0, invoiceCount: 0, processing: 0, errors: 0, mistakes: 0 };
       const byReason = {};
@@ -517,25 +636,36 @@ function createRepo(db, dataDir) {
       const seen = new Map();
 
       const outInvoices = invoices.map((inv) => {
-        const allLines = byInvoice.get(inv.id) || [];
-        const foreign = inv.job_uuid !== jobUUID;
-        // On another job's invoice, only the lines this job took are shown.
-        const lines = foreign ? allLines.filter((l) => l.share > 0) : allLines;
+        const all = itemsByInvoice.get(inv.id) || [];
+        const lines = [];
+        const otherLines = [];
+        for (const it of all) {
+          const list = allocs.get(it.id) || [];
+          const mine = list.find((a) => a.job_uuid === jobUUID);
+          const trace = repo._trace(it, list, jobUUID);
+          const base = { ...it, paid: !!it.paid, line_cost: it.cost, trace };
+          if (mine) {
+            lines.push({
+              ...base, share: mine.fraction, share_quantity: trace.quantity ? round3(mine.fraction * trace.quantity) : null,
+              cost: round2(it.cost * mine.fraction), category: mine.category || inv.category || 'materials',
+              mistake_reason: mine.mistake_reason, mistake_at: mine.mistake_at,
+            });
+          } else otherLines.push(base);
+        }
+        const total = round2(lines.reduce((s, l) => s + l.cost, 0));
         const paid = round2(lines.filter((l) => l.paid).reduce((s, l) => s + l.cost, 0));
-        const total = inv.split ? round2(lines.reduce((s, l) => s + l.cost, 0)) : round2(inv.total || 0);
-        const shareOfInvoice = inv.total ? total / inv.total : 0;
         let duplicateOf = null;
-        if (!foreign && inv.status === 'ready' && inv.invoice_number) {
+        if (inv.status === 'ready' && inv.invoice_number) {
           const key = `${(inv.supplier || '').toLowerCase()}|${inv.invoice_number.toLowerCase()}`;
           if (seen.has(key)) duplicateOf = seen.get(key); else seen.set(key, inv.id);
         }
         if (inv.status === 'processing') totals.processing++;
         if (inv.status === 'error') totals.errors++;
-        if (inv.status === 'ready' && !duplicateOf) {
+        if (inv.status === 'ready' && !duplicateOf && lines.length) {
           totals.invoiceCount++;
           totals.total += total;
           totals.paid += paid;
-          totals.tax += (Number(inv.tax) || 0) * (inv.split ? shareOfInvoice : 1);
+          totals.tax += inv.total ? (Number(inv.tax) || 0) * (total / inv.total) : 0;
           const s = inv.supplier || 'Unknown supplier';
           bySupplier[s] = bySupplier[s] || { total: 0, paid: 0 };
           bySupplier[s].total += total;
@@ -548,26 +678,29 @@ function createRepo(db, dataDir) {
               byReason[l.mistake_reason].count++;
               if (l.paid) byReason[l.mistake_reason].paid += l.cost;
             }
-            const cat = inv.category || 'materials';
-            byCategory[cat] = byCategory[cat] || { total: 0, paid: 0 };
-            byCategory[cat].total += l.cost;
-            if (l.paid) byCategory[cat].paid += l.cost;
+            byCategory[l.category] = byCategory[l.category] || { total: 0, paid: 0 };
+            byCategory[l.category].total += l.cost;
+            if (l.paid) byCategory[l.category].paid += l.cost;
           }
         }
-        const charged = lines.filter((l) => l.cost !== 0 || !inv.split);
+        const cats = [...new Set(lines.map((l) => l.category))];
         return {
           ...inv,
+          refs: parseJson(inv.refs, []),
           items: lines,
+          other_lines: otherLines,
           job_total: total,
-          foreign,
-          not_assigned: inv.split ? round2(allLines.reduce((s, l) => s + l.line_cost * l.left, 0)) : 0,
-          other_jobs: inv.split ? [...new Map(allLines.flatMap((l) => l.others).map((o) => [o.job_number, o])).values()].map((o) => ({ job_number: o.job_number, job_title: o.job_title })) : [],
+          whole: all.length > 0 && lines.length === all.length && lines.every((l) => l.share >= 1 - EPS),
+          from_stock: lines.some((l) => l.share < 1 - EPS || l.trace.jobs.length > 1),
+          category: cats.length === 1 ? cats[0] : (cats.length ? 'mixed' : inv.category),
+          other_jobs: [...new Map(all.flatMap((it) => (allocs.get(it.id) || []).filter((a) => a.job_uuid !== jobUUID))
+            .map((a) => [a.job_uuid, { job_number: a.job_number, job_title: a.job_title }])).values()],
           paid_amount: paid,
           outstanding: round2(total - paid),
           mistake_amount: round2(lines.filter((l) => l.mistake_reason).reduce((s, l) => s + l.cost, 0)),
-          mistake_state: !charged.length || !charged.some((l) => l.mistake_reason) ? 'none' : charged.every((l) => l.mistake_reason) ? 'all' : 'part',
+          mistake_state: !lines.length || !lines.some((l) => l.mistake_reason) ? 'none' : lines.every((l) => l.mistake_reason) ? 'all' : 'part',
           // Paid is about the supplier's bill, so it looks at every line of the invoice.
-          payment_state: !allLines.length ? 'unpaid' : allLines.every((l) => l.paid) ? 'paid' : allLines.some((l) => l.paid) ? 'part' : 'unpaid',
+          payment_state: !all.length ? 'unpaid' : all.every((l) => l.paid) ? 'paid' : all.some((l) => l.paid) ? 'part' : 'unpaid',
           duplicate_of: duplicateOf,
         };
       });
@@ -590,7 +723,64 @@ function createRepo(db, dataDir) {
       totals.mistakePct = totals.total ? Math.round(totals.mistakes / totals.total * 1000) / 10 : 0;
       totals.cleanMargin = quote != null ? round2(quote - totals.cleanTotal) : null;
       totals.cleanMarginPct = quote ? Math.round((quote - totals.cleanTotal) / quote * 1000) / 10 : null;
-      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory), byReason: roundMap(byReason) };
+
+      const suggestions = db.prepare(`SELECT * FROM invoices WHERE suggested_job_uuid = ? AND status = 'ready'
+          AND NOT EXISTS (SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = invoices.id)
+          ORDER BY id DESC`).all(jobUUID)
+        .map((i) => ({ id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, category: i.category, reason: i.suggestion_reason }));
+
+      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory), byReason: roundMap(byReason), suggestions };
+    },
+
+    /**
+     * What can still be added to a job: invoices nothing has been assigned from yet
+     * ("whole"), and lines with something left (e.g. 4 of 10 motors).
+     */
+    getUnassigned(accountUUID, jobUUID = null) {
+      const invoices = db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND status = 'ready'
+        ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(accountUUID);
+      const ids = invoices.map((i) => i.id);
+      const items = ids.length ? db.prepare(`SELECT * FROM items WHERE invoice_id IN (${ids.join(',')}) ORDER BY position, id`).all() : [];
+      const allocs = repo._allocsByItem(ids);
+      const byInv = new Map(ids.map((id) => [id, []]));
+      for (const it of items) byInv.get(it.invoice_id).push(it);
+      const jobsById = new Map(db.prepare('SELECT job_uuid, job_number, job_title FROM jobs WHERE account_uuid IS ?').all(accountUUID).map((j) => [j.job_uuid, j]));
+      const firstSeen = new Map();
+      const out = [];
+      for (const inv of invoices.slice().reverse()) {
+        const key = inv.invoice_number ? `${(inv.supplier || '').toLowerCase()}|${inv.invoice_number.toLowerCase()}` : null;
+        if (key && !firstSeen.has(key)) firstSeen.set(key, inv.id);
+      }
+      for (const inv of invoices) {
+        const lines = (byInv.get(inv.id) || []).map((it) => ({ ...it, trace: repo._trace(it, allocs.get(it.id) || [], jobUUID) }));
+        const left = lines.filter((l) => l.trace.left > EPS);
+        if (!left.length) continue;
+        const untouched = lines.every((l) => !l.trace.jobs.length);
+        const key = inv.invoice_number ? `${(inv.supplier || '').toLowerCase()}|${inv.invoice_number.toLowerCase()}` : null;
+        const dupOf = key && firstSeen.get(key) !== inv.id ? firstSeen.get(key) : null;
+        const sj = inv.suggested_job_uuid ? jobsById.get(inv.suggested_job_uuid) : null;
+        out.push({
+          id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
+          category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
+          untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
+          left_amount: round2(left.reduce((s, l) => s + l.trace.left_amount, 0)),
+          suggestion: sj && untouched ? { job_uuid: sj.job_uuid, job_number: sj.job_number, job_title: sj.job_title, reason: inv.suggestion_reason } : null,
+          lines: left.map((l) => ({
+            item_id: l.id, description: l.description, unit: l.unit, quantity: l.trace.quantity, cost: l.cost,
+            unit_cost: l.trace.quantity ? round2(l.cost / l.trace.quantity) : null, trace: l.trace,
+          })),
+        });
+      }
+      // Invoices that need a decision also include those still being read or that failed.
+      const pending = db.prepare(`SELECT id, supplier, file_name, status, error, source, email_from, email_subject FROM invoices
+        WHERE account_uuid IS ? AND status != 'ready' AND origin_job_uuid IS NULL ORDER BY id DESC`).all(accountUUID);
+      return { invoices: out, pending };
+    },
+
+    /** Count for the Inbox badge: invoices waiting for a decision. */
+    inboxCount(accountUUID) {
+      const u = repo.getUnassigned(accountUUID);
+      return u.invoices.filter((i) => i.untouched && !i.kept_as_stock).length + u.pending.length;
     },
 
     /**
@@ -599,9 +789,8 @@ function createRepo(db, dataDir) {
      */
     getReport(accountUUID, { from = null, to = null } = {}) {
       const firstDate = (s) => s.invoices.filter((i) => i.status === 'ready').map((i) => i.invoice_date || String(i.created_at).slice(0, 10)).sort()[0] || null;
-      const jobs = db.prepare(`SELECT jobs.* FROM jobs WHERE jobs.account_uuid IS ? AND (
-            EXISTS (SELECT 1 FROM invoices WHERE invoices.job_uuid = jobs.job_uuid)
-            OR EXISTS (SELECT 1 FROM allocations WHERE allocations.job_uuid = jobs.job_uuid))`).all(accountUUID)
+      const jobs = db.prepare(`SELECT jobs.* FROM jobs WHERE jobs.account_uuid IS ? AND
+            EXISTS (SELECT 1 FROM allocations WHERE allocations.job_uuid = jobs.job_uuid)`).all(accountUUID)
         .map((j) => ({ ...j, summary: repo.getJobSummary(j.job_uuid) }))
         .map((j) => ({ ...j, first_date: firstDate(j.summary) }))
         .filter((j) => j.first_date && (!from || j.first_date >= from) && (!to || j.first_date <= to))
@@ -612,10 +801,8 @@ function createRepo(db, dataDir) {
       const suppliers = {};
       const jobRows = [];
       const mistakeItems = [];
-      let notAssigned = 0;
       for (const j of jobs) {
         const s = j.summary;
-        for (const inv of s.invoices) if (!inv.foreign && inv.status === 'ready') notAssigned += inv.not_assigned || 0;
         if (!s.totals.invoiceCount) continue;
         t.jobs++;
         t.total += s.totals.total;
@@ -650,24 +837,24 @@ function createRepo(db, dataDir) {
           }
         }
       }
+      const notAssigned = repo.getUnassigned(accountUUID).invoices.filter((i) => !i.duplicate_of).reduce((s, i) => s + i.left_amount, 0);
       const pct = (a, b) => (b ? Math.round(a / b * 1000) / 10 : null);
-      const totals = {
-        jobs: t.jobs,
-        total: round2(t.total),
-        mistakes: round2(t.mistakes),
-        mistakePct: pct(t.mistakes, t.total),
-        cleanTotal: round2(t.total - t.mistakes),
-        quotedJobs: t.quotedJobs,
-        quoted: round2(t.quoted),
-        profit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted) : null,
-        profitPct: pct(t.quoted - t.costsOnQuoted, t.quoted),
-        cleanProfit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted) : null,
-        cleanProfitPct: pct(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted, t.quoted),
-        jobsWithMistakes: jobRows.filter((r) => r.mistakes > 0).length,
-        notAssigned: round2(notAssigned),
-      };
       return {
-        totals,
+        totals: {
+          jobs: t.jobs,
+          total: round2(t.total),
+          mistakes: round2(t.mistakes),
+          mistakePct: pct(t.mistakes, t.total),
+          cleanTotal: round2(t.total - t.mistakes),
+          quotedJobs: t.quotedJobs,
+          quoted: round2(t.quoted),
+          profit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted) : null,
+          profitPct: pct(t.quoted - t.costsOnQuoted, t.quoted),
+          cleanProfit: t.quotedJobs ? round2(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted) : null,
+          cleanProfitPct: pct(t.quoted - t.costsOnQuoted + t.mistakesOnQuoted, t.quoted),
+          jobsWithMistakes: jobRows.filter((r) => r.mistakes > 0).length,
+          notAssigned: round2(notAssigned),
+        },
         byReason: Object.entries(reasons).map(([reason, v]) => ({ reason, count: v.count, jobs: v.jobs.size, total: round2(v.total), pct: pct(v.total, t.mistakes) }))
           .sort((a, b) => b.total - a.total),
         bySupplier: Object.entries(suppliers).map(([name, v]) => ({ name, count: v.count, total: round2(v.total) })).sort((a, b) => b.total - a.total),
@@ -683,4 +870,4 @@ function createRepo(db, dataDir) {
   return repo;
 }
 
-module.exports = { openDb, allocateCosts, newInboxCode, round2, invoiceCategory };
+module.exports = { openDb, allocateCosts, newInboxCode, round2, invoiceCategory, addressKey };

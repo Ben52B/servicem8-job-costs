@@ -4,8 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+const { DatabaseSync } = require('node:sqlite');
 
-const { openDb, allocateCosts, invoiceCategory } = require('../src/db');
+const { openDb, allocateCosts, invoiceCategory, addressKey } = require('../src/db');
 const { createProcessor } = require('../src/processor');
 const { createApp } = require('../src/app');
 const { codesFromAddresses, inboxAddress } = require('../src/inbound');
@@ -16,28 +17,50 @@ const config = {
   inboundBaseAddress: 'abc123@inbound.postmarkapp.com', inboundDomain: '', inboundSecret: 'mailkey', devMode: false,
 };
 
+const DOOR = {
+  is_financial_document: true, document_type: 'tax_invoice', supplier_name: 'Door Supplies Pty Ltd', supplier_abn: null,
+  invoice_number: 'INV-100', invoice_date: '2026-10-01', due_date: '2026-10-31', currency: 'AUD',
+  subtotal: 3000, tax: 300, total: 3300, payment_status: 'unpaid', notes: null, references: [], site_address: null,
+  items: [
+    { description: 'Sectional door', category: 'materials', quantity: 1, unit: 'ea', unit_price: 2000, line_total: 2000 },
+    { description: 'Motor', category: 'materials', quantity: 1, unit: 'ea', unit_price: 900, line_total: 900 },
+    { description: 'Delivery', category: 'freight', quantity: null, unit: null, unit_price: null, line_total: 100 },
+  ],
+};
+
 // Fake reader: answers based on the file name so tests are deterministic.
 const fakeAnalyzer = {
-  calls: [],
-  async analyzeFile({ fileName, context }) {
-    this.calls.push({ fileName, context });
+  async analyzeFile({ fileName }) {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
     if (/receipt/.test(fileName)) {
       return { is_financial_document: true, document_type: 'receipt', supplier_name: 'Bunnings', invoice_number: 'R-1', total: 55, tax: 5, payment_status: 'paid',
-        items: [{ description: 'Dynabolts', category: 'materials', line_total: 50 }] };
+        references: [], items: [{ description: 'Dynabolts', category: 'materials', line_total: 50 }] };
     }
-    return {
-      is_financial_document: true, document_type: 'tax_invoice', supplier_name: 'Door Supplies Pty Ltd', supplier_abn: null,
-      invoice_number: 'INV-100', invoice_date: '2026-10-01', due_date: '2026-10-31', currency: 'AUD',
-      subtotal: 3000, tax: 300, total: 3300, payment_status: 'unpaid', notes: null,
-      items: [
-        { description: 'Sectional door', category: 'materials', quantity: 1, unit: 'ea', unit_price: 2000, line_total: 2000 },
-        { description: 'Motor', category: 'materials', quantity: 1, unit: 'ea', unit_price: 900, line_total: 900 },
-        { description: 'Delivery', category: 'freight', quantity: null, unit: null, unit_price: null, line_total: 100 },
-      ],
-    };
+    if (/motors/.test(fileName)) {
+      return { is_financial_document: true, supplier_name: 'Merlin', invoice_number: 'M-1', total: 3410, tax: 310, payment_status: 'unpaid', references: ['Stock order'],
+        items: [{ description: 'Merlin opener', category: 'materials', quantity: 10, unit: 'ea', line_total: 3000 }, { description: 'Delivery', category: 'freight', line_total: 100 }] };
+    }
+    if (/posts-ref/.test(fileName)) {
+      return { ...DOOR, supplier_name: 'Moorabbin Steel', invoice_number: 'ORD-9', total: 198, references: ['Alpha GD 208102'],
+        items: [{ description: 'Posts', category: 'materials', line_total: 180 }] };
+    }
+    if (/site-addr/.test(fileName)) {
+      return { ...DOOR, supplier_name: 'AB Installs', invoice_number: 'AB-7', total: 715, site_address: '2A Evans St, Fairfield VIC 3078',
+        items: [{ description: 'Install', category: 'subcontractor', line_total: 650 }] };
+    }
+    return DOOR;
   },
 };
+
+// ServiceM8 stand-ins: every job opened gets its own job number.
+const JOBS = {
+  'job-a': { jobNumber: '208101', jobTitle: '12 Smith St, Penrith' },
+  'job-b': { jobNumber: '208102', jobTitle: '7 Bell St, Coburg' },
+  'job-c': { jobNumber: '208103', jobTitle: '2A Evans St, Fairfield' },
+};
+let jobCounter = 300000;
+const fetchJobImpl = async (uuid) => ({ ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), quoteAmount: 5000, status: 'Work Order' });
+const fetchActiveJobsImpl = async () => [{ jobUUID: 'never-opened', jobNumber: '208999', jobTitle: '5 Pine Rd, Coburg', status: 'Work Order' }];
 
 let server, base, repo, processor, dataDir;
 
@@ -45,415 +68,315 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-'));
   repo = openDb(dataDir);
   processor = createProcessor({ repo, analyzer: fakeAnalyzer, log: { error() {} } });
-  const app = createApp({ config, repo, processor, fetchJobImpl: async () => ({ jobNumber: '1234', jobTitle: '12 Smith St', quoteAmount: 5000 }) });
+  const app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
 after(() => { server.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
 
-async function openCard(jobUUID) {
-  const token = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID }, auth: { accountUUID: 'acc-1', accessToken: 'x' } }, SECRET);
+async function openCard(jobUUID, accountUUID = 'acc-1') {
+  const token = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID }, auth: { accountUUID, accessToken: 'x' } }, SECRET);
   const res = await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: token });
   assert.equal(res.status, 200);
   const html = await res.text();
-  const boot = JSON.parse(html.match(/const BOOT = (\{.*?\});/)[1]);
+  const boot = JSON.parse(html.match(/const BOOT = (\{.*?\});\n/)[1]);
   assert.ok(html.includes('platform.servicem8.com/sdk'));
   return boot.token;
 }
 
 const api = (token, p, opts = {}) => fetch(`${base}/api${p}`, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.json ? { 'Content-Type': 'application/json' } : {}) }, body: opts.json ? JSON.stringify(opts.json) : opts.body });
+const json = (token, p, opts) => api(token, p, opts).then((r) => r.json());
+const summary = (token) => json(token, '/job');
+const post = (token, p, body) => api(token, p, { method: 'POST', json: body || {} });
+async function upload(token, ...names) {
+  const fd = new FormData();
+  for (const n of names) fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), n);
+  const r = await api(token, '/invoices', { method: 'POST', body: fd });
+  await processor.idle();
+  return (await r.json()).created;
+}
+async function email(token, { subject = 'Invoice', file = 'invoice.pdf', text = 'Please see attached' } = {}) {
+  const { inboxAddress: addr } = await summary(token);
+  const r = await fetch(`${base}/inbound/email?key=mailkey`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ From: 'accounts@supplier.com.au', To: addr, ToFull: [{ Email: addr }], Subject: subject, TextBody: text,
+      Attachments: [{ Name: file, ContentType: 'application/pdf', Content: Buffer.from('%PDF-1.4').toString('base64') }] }),
+  }).then((x) => x.json());
+  await processor.idle();
+  return r;
+}
+const latestInvoice = () => repo.db.prepare('SELECT * FROM invoices ORDER BY id DESC LIMIT 1').get();
 
-test('allocateCosts spreads tax and keeps the exact total', () => {
+// ---------------------------------------------------------------------------
+
+test('helpers: costs add up, one type per invoice, address matching, email address format', () => {
   const costs = allocateCosts([{ line_total: 10 }, { line_total: 20 }, { line_total: 3.33 }], 36.67);
   assert.equal(Math.round(costs.reduce((a, b) => a + b, 0) * 100) / 100, 36.67);
-  assert.deepEqual(allocateCosts([{ line_total: 5 }], null), [5]);
-});
-
-test('job email addresses round-trip to the job code', () => {
+  assert.equal(invoiceCategory([{ category: 'materials', line_total: 900 }, { category: 'freight', line_total: 120 }]), 'materials');
+  assert.equal(invoiceCategory([{ category: 'freight', line_total: 80 }]), 'freight');
+  assert.deepEqual(addressKey('2A Evans St, Fairfield'), { number: '2a', street: 'evans' });
   assert.equal(inboxAddress('k3x9m2pq', config), 'abc123+k3x9m2pq@inbound.postmarkapp.com');
-  assert.equal(inboxAddress('k3x9m2pq', { inboundDomain: 'in.example.com' }), 'job-k3x9m2pq@in.example.com');
-  assert.deepEqual(codesFromAddresses(['abc123+k3x9m2pq@inbound.postmarkapp.com', 'job-zz7788aa@in.example.com', 'bob@x.com']), ['k3x9m2pq', 'zz7788aa']);
+  assert.equal(inboxAddress('k3x9m2pq', { inboundDomain: 'in.example.com' }), 'invoices-k3x9m2pq@in.example.com');
+  assert.deepEqual(codesFromAddresses(['abc123+k3x9m2pq@inbound.postmarkapp.com', 'invoices-zz7788aa@in.example.com']), ['k3x9m2pq', 'zz7788aa']);
 });
 
-test('ServiceM8 callback rejects a bad signature', async () => {
+test('ServiceM8 callback rejects a bad signature; opening a card syncs active jobs', async () => {
   const bad = jwt.sign({ eventArgs: { jobUUID: 'j' } }, 'wrong-secret');
-  const res = await fetch(`${base}/servicem8/addon`, { method: 'POST', body: bad });
-  assert.equal(res.status, 401);
+  assert.equal((await fetch(`${base}/servicem8/addon`, { method: 'POST', body: bad })).status, 401);
+  await openCard('job-a');
+  assert.equal(repo.getJob('never-opened').job_number, '208999', 'job list fetched from ServiceM8');
 });
 
-test('upload, read, mark paid, and totals', async () => {
-  const token = await openCard('job-aaa');
-  let job = await (await api(token, '/job')).json();
-  assert.equal(job.job.job_number, '1234');
-  assert.match(job.inboxAddress, /^abc123\+[a-z0-9]{8}@inbound\.postmarkapp\.com$/);
+test('upload on a job: read, put on that job, paid, type, take off, delete', async () => {
+  const token = await openCard('job-a');
+  const [id] = await upload(token, 'door.pdf');
+  let s = await summary(token);
+  const inv = s.invoices.find((i) => i.id === id);
+  assert.equal(inv.job_total, 3300);
+  assert.equal(inv.whole, true);
+  assert.deepEqual(s.byCategory.map((c) => c.name), ['materials'], 'delivery counts with the goods');
+  assert.equal(s.totals.quote, 5000);
+  assert.equal(s.totals.margin, 1700);
 
-  const fd = new FormData();
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'receipt.pdf');
-  const up = await api(token, '/invoices', { method: 'POST', body: fd });
-  assert.equal(up.status, 201);
-  await processor.idle();
+  await api(token, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
+  s = await summary(token);
+  assert.equal(s.totals.outstanding, 0);
 
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.total, 3355);
-  assert.equal(job.totals.paid, 55, 'receipt marked PAID is counted as paid');
-  assert.equal(job.totals.outstanding, 3300);
-  const inv = job.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
-  assert.equal(inv.items.reduce((s, i) => s + i.cost, 0), 3300, 'line costs include GST');
+  await api(token, `/invoices/${id}`, { method: 'PATCH', json: { category: 'subcontractor' } });
+  s = await summary(token);
+  assert.deepEqual(s.byCategory.map((c) => [c.name, c.total]), [['subcontractor', 3300]]);
 
-  // Pay just the motor
-  const motor = inv.items.find((i) => i.description === 'Motor');
-  await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { paid: true } });
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.paid, 55 + 990);
-  assert.equal(job.invoices.find((i) => i.id === inv.id).payment_state, 'part');
-
-  // Pay the whole invoice
-  await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { paid: true } });
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.outstanding, 0);
-  // Delivery on a materials invoice counts as materials, not freight
-  assert.deepEqual(job.byCategory.map((c) => c.name), ['materials']);
-  assert.equal(job.invoices.find((i) => i.id === inv.id).category, 'materials');
-
-  // Fix an amount by hand: invoice total stays, costs re-spread
-  await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { line_total: '1000' } });
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.total, 3355);
+  // Take it off the job: it's back in "not assigned yet" for the business
+  await api(token, `/invoices/${id}`, { method: 'DELETE' });
+  assert.ok(!(await summary(token)).invoices.some((i) => i.id === id));
+  const un = await json(token, '/unassigned');
+  assert.ok(un.invoices.some((i) => i.id === id && i.untouched));
+  // Delete it completely
+  assert.equal((await api(token, `/invoices/${id}?completely=1`, { method: 'DELETE' })).status, 200);
+  assert.equal(repo.getInvoice(id), undefined);
 });
 
-test('another job cannot see this job\'s invoices', async () => {
-  const tokenA = await openCard('job-aaa');
-  const tokenB = await openCard('job-bbb');
-  const jobA = await (await api(tokenA, '/job')).json();
-  const id = jobA.invoices[0].id;
-  assert.equal((await api(tokenB, `/invoices/${id}/file`)).status, 404);
-  assert.equal((await api(tokenB, `/invoices/${id}`, { method: 'DELETE' })).status, 404);
-  assert.equal((await fetch(`${base}/api/job`)).status, 401);
-});
+test('one email address: invoices land in the inbox with a suggested job; one click adds it', async () => {
+  const a = await openCard('job-a');
+  const b = await openCard('job-b');
+  const sA = await summary(a);
+  assert.equal(sA.inboxAddress, (await summary(b)).inboxAddress, 'same address for every job of the business');
 
-test('emailed invoices land on the right job; duplicates are not double counted', async () => {
-  const token = await openCard('job-ccc');
-  const { inboxAddress: addr } = await (await api(token, '/job')).json();
-  const pdf = Buffer.from('%PDF-1.4 fake').toString('base64');
-  const postmark = {
-    From: 'accounts@doorsupplies.com.au', To: addr, ToFull: [{ Email: addr, MailboxHash: addr.split('+')[1].split('@')[0] }],
-    Subject: 'Invoice INV-100', TextBody: 'Please see attached', HtmlBody: '',
-    Attachments: [
-      { Name: 'INV-100.pdf', ContentType: 'application/pdf', Content: pdf },
-      { Name: 'logo.png', ContentType: 'image/png', Content: Buffer.alloc(500).toString('base64') },
-    ],
-  };
-  assert.equal((await fetch(`${base}/inbound/email?key=wrong`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(postmark) })).status, 403);
-  const send = () => fetch(`${base}/inbound/email?key=mailkey`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(postmark) }).then((r) => r.json());
-  const r1 = await send();
-  assert.deepEqual(r1, { ok: true, matched: 1, created: 1 }, 'logo image is skipped when a PDF is attached');
-  await send(); // supplier sends it twice
-  await processor.idle();
+  // Job number in the subject
+  const r = await email(a, { subject: 'RE: New door order Alpha GD 208101', file: 'door-email.pdf' });
+  assert.deepEqual(r, { ok: true, matched: 1, created: 1 });
+  const inv = latestInvoice();
+  assert.equal(inv.origin_job_uuid, null);
+  let s = await summary(a);
+  assert.ok(!s.invoices.some((i) => i.id === inv.id), 'not on the job until approved');
+  assert.equal(s.suggestions[0].id, inv.id);
+  assert.match(s.suggestions[0].reason, /208101.*email subject/);
+  assert.ok(s.inboxCount >= 1);
+  assert.equal((await post(a, `/suggestions/${inv.id}/accept`)).status, 200);
+  s = await summary(a);
+  assert.ok(s.invoices.some((i) => i.id === inv.id && i.whole));
+  assert.equal(s.suggestions.length, 0);
 
-  const job = await (await api(token, '/job')).json();
-  assert.equal(job.invoices.length, 2);
-  assert.equal(job.invoices.filter((i) => i.duplicate_of).length, 1);
-  assert.equal(job.totals.total, 3300);
-  assert.equal(job.invoices[0].email_from, 'accounts@doorsupplies.com.au');
-  assert.equal(fakeAnalyzer.calls.at(-1).context.emailSubject, 'Invoice INV-100');
+  // Job number in the invoice's own reference
+  await email(a, { subject: 'Your invoice', file: 'posts-ref.pdf' });
+  const posts = latestInvoice();
+  assert.equal(posts.suggested_job_uuid, 'job-b');
+  assert.match(posts.suggestion_reason, /invoice reference/);
+  // "Not this job": stays in the inbox, not suggested for job-b again
+  await post(b, `/suggestions/${posts.id}/dismiss`);
+  assert.equal(repo.getInvoice(posts.id).suggested_job_uuid, null);
+  const inbox = await json(b, '/inbox');
+  assert.ok(inbox.invoices.some((i) => i.id === posts.id && i.untouched && !i.suggestion));
+  // Assign from the inbox to any job
+  assert.equal((await post(b, `/inbox/${posts.id}/assign`, { job_uuid: 'job-b' })).status, 200);
+  assert.ok((await summary(b)).invoices.some((i) => i.id === posts.id));
 
-  const unknown = await fetch(`${base}/inbound/email?key=mailkey`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...postmark, To: 'abc123+nosuchjob@inbound.postmarkapp.com', ToFull: [], MailboxHash: 'nosuchjob' }) }).then((r) => r.json());
+  // Site address match (job-c is 2A Evans St)
+  const c = await openCard('job-c');
+  await email(c, { subject: 'Invoice', file: 'site-addr.pdf' });
+  assert.equal(latestInvoice().suggested_job_uuid, 'job-c');
+  assert.match(latestInvoice().suggestion_reason, /Site address/);
+
+  // A job synced from ServiceM8 that was never opened in Job Costs can be suggested too
+  await email(a, { subject: 'Order for job 208999', file: 'door-x.pdf' });
+  assert.equal(latestInvoice().suggested_job_uuid, 'never-opened');
+
+  // No job number anywhere: no suggestion; keep as stock removes it from "needs a job"
+  await email(a, { subject: 'Statement', file: 'door-y.pdf' });
+  const none = latestInvoice();
+  assert.equal(none.suggested_job_uuid, null);
+  const before = (await summary(a)).inboxCount;
+  await post(a, `/inbox/${none.id}/stock`);
+  assert.equal((await summary(a)).inboxCount, before - 1);
+
+  // Unknown address / wrong key
+  const unknown = await fetch(`${base}/inbound/email?key=mailkey`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ To: 'abc123+nosuchcode@inbound.postmarkapp.com', Attachments: [] }) }).then((x) => x.json());
   assert.equal(unknown.matched, 0);
+  assert.equal((await fetch(`${base}/inbound/email?key=nope`, { method: 'POST' })).status, 403);
 });
 
-test('SendGrid-style multipart email and non-invoice files', async () => {
-  const token = await openCard('job-ddd');
-  const { inboxAddress: addr } = await (await api(token, '/job')).json();
-  const fd = new FormData();
-  fd.append('to', `Jobs <${addr}>`);
-  fd.append('from', 'sub@installs.com.au');
-  fd.append('subject', 'Install invoice');
-  fd.append('attachment1', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'notinvoice.pdf');
-  const r = await fetch(`${base}/inbound/email?key=mailkey`, { method: 'POST', body: fd }).then((x) => x.json());
-  assert.equal(r.created, 1);
-  await processor.idle();
-  const job = await (await api(token, '/job')).json();
-  assert.equal(job.invoices[0].status, 'error');
-  assert.match(job.invoices[0].error, /does not look like an invoice/);
-  assert.equal(job.totals.total, 0);
-});
+test('Add costs: 10 motors shared between jobs, with where each one went', async () => {
+  const a = await openCard('job-a');
+  const b = await openCard('job-b');
+  const c = await openCard('job-c');
+  await email(a, { subject: 'Stock order', file: 'motors.pdf' });
+  const inv = latestInvoice();
+  await post(a, `/inbox/${inv.id}/stock`);
+  const un = await json(a, '/unassigned');
+  const entry = un.invoices.find((i) => i.id === inv.id);
+  const motor = entry.lines.find((l) => l.description === 'Merlin opener');
+  const delivery = entry.lines.find((l) => l.description === 'Delivery');
+  assert.equal(motor.unit_cost, 330);
 
-test('quoted price comes from ServiceM8, can be overridden, and drives the margin', async () => {
-  const token = await openCard('job-quote');
-  const fd = new FormData();
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
-  await api(token, '/invoices', { method: 'POST', body: fd });
-  await processor.idle();
-
-  let job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.quote, 5000);
-  assert.equal(job.job.quote_source, 'servicem8');
-  assert.equal(job.totals.margin, 1700);
-  assert.equal(job.totals.marginPct, 34);
-
-  // Typed on the card: wins, even when the card is opened again from ServiceM8
-  assert.equal((await api(token, '/job', { method: 'PATCH', json: { quote_amount: '$6,000' } })).status, 200);
-  await openCard('job-quote');
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.quote, 6000);
-  assert.equal(job.job.quote_source, 'manual');
-  assert.equal(job.totals.margin, 2700);
-
-  // Clearing it goes back to ServiceM8's amount next time the card opens
-  await api(token, '/job', { method: 'PATCH', json: { quote_amount: null } });
-  await openCard('job-quote');
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.quote, 5000);
-
-  assert.equal((await api(token, '/job', { method: 'PATCH', json: { quote_amount: 'abc' } })).status, 400);
-});
-
-test('screw-up tags: per line and whole invoice, two sets of totals, kept on re-read', async () => {
-  const token = await openCard('job-mk');
-  const fd = new FormData();
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'receipt.pdf');
-  await api(token, '/invoices', { method: 'POST', body: fd });
-  await processor.idle();
-
-  let job = await (await api(token, '/job')).json();
-  const door = job.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
-  const receipt = job.invoices.find((i) => i.supplier === 'Bunnings');
-  const motor = door.items.find((i) => i.description === 'Motor');
-
-  assert.equal((await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'made_up' } })).status, 400);
-  assert.equal((await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } })).status, 200);
-  assert.equal((await api(token, `/invoices/${receipt.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_colour' } })).status, 200);
-
-  job = await (await api(token, '/job')).json();
-  // quote 5000 (from fake ServiceM8); costs 3300 + 55; screw-ups: motor 990 + receipt 55
-  assert.equal(job.totals.total, 3355);
-  assert.equal(job.totals.mistakes, 1045);
-  assert.equal(job.totals.cleanTotal, 2310);
-  assert.equal(job.totals.margin, 1645);
-  assert.equal(job.totals.cleanMargin, 2690);
-  assert.equal(job.totals.mistakePct, 31.1);
-  assert.deepEqual(job.byReason.map((r) => [r.name, r.total, r.count]), [['wrong_size', 990, 1], ['wrong_colour', 55, 1]]);
-  assert.equal(job.invoices.find((i) => i.id === door.id).mistake_state, 'part');
-  assert.equal(job.invoices.find((i) => i.id === receipt.id).mistake_state, 'all');
-
-  // Reading the invoice again keeps the tag (and paid ticks)
-  await api(token, `/items/${motor.id}`, { method: 'PATCH', json: { paid: true } });
-  await api(token, `/invoices/${door.id}/reanalyze`, { method: 'POST' });
-  await processor.idle();
-  job = await (await api(token, '/job')).json();
-  const motorAgain = job.invoices.find((i) => i.id === door.id).items.find((i) => i.description === 'Motor');
-  assert.equal(motorAgain.mistake_reason, 'wrong_size');
-  assert.equal(motorAgain.paid, true);
-
-  // Clearing
-  await api(token, `/invoices/${receipt.id}`, { method: 'PATCH', json: { mistake_reason: null } });
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.totals.mistakes, 990);
-});
-
-test('reports add up screw-ups and profit across jobs of the same account only', async () => {
-  const token = await openCard('job-mk');
-  // A job in a different ServiceM8 account must never show up
-  repo.ensureJob({ jobUUID: 'other-account-job', accountUUID: 'acc-2', quoteAmount: 100 });
-  const other = repo.createInvoice({ jobUUID: 'other-account-job', source: 'upload', fileName: 'x.pdf', filePath: 'x', mimeType: 'application/pdf' });
-  repo.saveExtraction(other.id, { supplier_name: 'Elsewhere', total: 999, items: [{ description: 'Secret', category: 'materials', line_total: 999 }] });
-  repo.db.prepare("UPDATE items SET mistake_reason = 'other' WHERE invoice_id = ?").run(other.id);
-
-  const rep = await (await api(token, '/report')).json();
-  assert.ok(!rep.jobs.some((j) => j.job_uuid === 'other-account-job'));
-  assert.ok(!rep.mistakeItems.some((i) => i.description === 'Secret'));
-  const mkJob = rep.jobs.find((j) => j.job_uuid === 'job-mk');
-  assert.equal(mkJob.mistakes, 990);
-  assert.equal(rep.totals.mistakes, rep.jobs.reduce((s, j) => s + j.mistakes, 0));
-  assert.equal(rep.byReason[0].reason, 'wrong_size');
-  assert.equal(rep.totals.cleanProfit - rep.totals.profit, rep.jobs.filter((j) => j.quote != null).reduce((s, j) => s + j.mistakes, 0));
-
-  // Date filter (jobs by first invoice date) and the page itself
-  const none = await (await api(token, '/report?from=2099-01-01')).json();
-  assert.equal(none.totals.jobs, 0);
-  assert.equal((await fetch(`${base}/report?t=${token}`)).status, 200);
-  assert.equal((await fetch(`${base}/report?t=bad`)).status, 401);
-});
-
-test('one type per invoice: delivery and fees follow the goods; changing it by hand sticks', async () => {
-  assert.equal(invoiceCategory([{ category: 'materials', line_total: 900 }, { category: 'freight', line_total: 120 }, { category: 'fees', line_total: 30 }]), 'materials');
-  assert.equal(invoiceCategory([{ category: 'subcontractor', line_total: 600 }, { category: 'fees', line_total: 110 }]), 'subcontractor');
-  assert.equal(invoiceCategory([{ category: 'freight', line_total: 80 }]), 'freight'); // a courier-only invoice
-
-  const token = await openCard('job-cat');
-  const fd = new FormData();
-  fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), 'door-invoice.pdf');
-  await api(token, '/invoices', { method: 'POST', body: fd });
-  await processor.idle();
-  let job = await (await api(token, '/job')).json();
-  const inv = job.invoices[0];
-  assert.equal((await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { category: 'nonsense' } })).status, 400);
-  await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { category: 'subcontractor' } });
-  await api(token, `/invoices/${inv.id}/reanalyze`, { method: 'POST' });
-  await processor.idle();
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.invoices[0].category, 'subcontractor');
-  assert.deepEqual(job.byCategory.map((c) => [c.name, c.total]), [['subcontractor', 3300]]);
-
-  // Paid is set once for the whole invoice
-  await api(token, `/invoices/${inv.id}`, { method: 'PATCH', json: { paid: true } });
-  job = await (await api(token, '/job')).json();
-  assert.equal(job.invoices[0].payment_state, 'paid');
-  assert.equal(job.totals.outstanding, 0);
-});
-
-test('invoice added by hand: total only, or some lines plus "Other items (not listed)"', async () => {
-  const token = await openCard('job-manual');
-  const post = (body) => api(token, '/invoices/manual', { method: 'POST', json: body });
-
-  assert.equal((await post({ total: 100 })).status, 400, 'supplier required');
-  assert.equal((await post({ supplier: 'X' })).status, 400, 'total or lines required');
-  assert.equal((await post({ supplier: 'X', total: 100, items: [{ description: 'Gate', amount: 150 }] })).status, 400, 'lines over total');
-  assert.equal((await post({ supplier: 'X', total: 100, category: 'nope' })).status, 400);
-
-  // Lost invoice: only the total is known
-  let r = await post({ supplier: 'Gate Supplies', invoice_date: '2026-10-30', total: '$1,100.00', paid: true });
-  assert.equal(r.status, 201);
-  // Some lines known, rest unknown
-  r = await post({ supplier: 'Gate Supplies', invoice_number: 'G-77', total: 990, category: 'materials',
-    items: [{ description: 'Gate 3.6m', amount: 660 }, { description: '', amount: '' }] });
-  assert.equal(r.status, 201);
-  const { id } = await r.json();
-
-  const job = await (await api(token, '/job')).json();
-  const a = job.invoices.find((i) => i.invoice_number === null && i.supplier === 'Gate Supplies');
-  assert.equal(a.source, 'manual');
-  assert.equal(a.total, 1100);
-  assert.equal(a.tax, 100);
-  assert.equal(a.payment_state, 'paid');
-  assert.deepEqual(a.items.map((l) => [l.description, l.cost]), [['Invoice from Gate Supplies', 1100]]);
-  const b = job.invoices.find((i) => i.id === id);
-  assert.deepEqual(b.items.map((l) => [l.description, l.cost]), [['Gate 3.6m', 660], ['Other items (not listed)', 330]]);
-  assert.equal(b.category, 'materials');
-  assert.equal(job.totals.total, 2090);
-  assert.equal(job.totals.paid, 1100);
-
-  // No file: can't be "read again", and screw-up tags still work on its lines
-  assert.equal((await api(token, `/invoices/${id}/reanalyze`, { method: 'POST' })).status, 400);
-  assert.equal((await api(token, `/items/${b.items[0].id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } })).status, 200);
-});
-
-test('found the paper invoice: attach it to a hand-added one and it replaces the details', async () => {
-  const token = await openCard('job-attach');
-  const post = (body) => api(token, '/invoices/manual', { method: 'POST', json: body }).then((r) => r.json());
-  const attach = (id, name) => {
-    const fd = new FormData();
-    fd.append('file', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), name);
-    return api(token, `/invoices/${id}/file`, { method: 'POST', body: fd });
-  };
-
-  // Hand-added, paid, typed as subcontractor, whole invoice tagged as a screw-up
-  const { id } = await post({ supplier: 'Door Supplies', total: 3000, category: 'subcontractor', paid: true });
-  await api(token, `/invoices/${id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } });
-
-  assert.equal((await attach(id, 'door-invoice.pdf')).status, 200);
-  await processor.idle();
-  let job = await (await api(token, '/job')).json();
-  let inv = job.invoices.find((i) => i.id === id);
-  assert.equal(inv.supplier, 'Door Supplies Pty Ltd', 'details now come from the file');
-  assert.equal(inv.invoice_number, 'INV-100');
-  assert.equal(inv.total, 3300);
-  assert.equal(inv.items.length, 3);
-  assert.equal(inv.attached_later, 1);
-  assert.equal(inv.payment_state, 'paid', 'paid kept');
-  assert.equal(inv.category, 'subcontractor', 'type you chose kept');
-  assert.ok(inv.items.every((l) => l.mistake_reason === 'wrong_size'), 'whole-invoice screw-up kept');
-  assert.equal((await attach(id, 'door-invoice.pdf')).status, 400, 'only once');
-
-  // A file that can't be read keeps the hand-entered details counted
-  const second = await post({ supplier: 'Gate Co', total: 500 });
-  await attach(second.id, 'notinvoice.pdf');
-  await processor.idle();
-  job = await (await api(token, '/job')).json();
-  inv = job.invoices.find((i) => i.id === second.id);
-  assert.equal(inv.status, 'ready');
-  assert.match(inv.error, /does not look like an invoice/);
-  assert.equal(inv.total, 500);
-  assert.equal(job.totals.total, 3800);
-});
-
-test('split invoices: 10 motors on one invoice shared between jobs', async () => {
-  const jobA = await openCard('split-a');
-  const jobB = await openCard('split-b');
-  const jobC = await openCard('split-c');
-  const add = (token, body) => api(token, '/invoices/manual', { method: 'POST', json: body }).then((r) => r.json());
-  const summary = (token) => api(token, '/job').then((r) => r.json());
-  const share = (token, itemId, body) => api(token, `/items/${itemId}/share`, { method: 'PUT', json: body });
-
-  // Job A receives a stock invoice: 10 motors ($3,300 incl GST, $330 each) + delivery $110
-  const created = await add(jobA, { supplier: 'Merlin', invoice_number: 'M-1', total: 3410, items: [{ description: 'Motor', amount: 3300 }, { description: 'Delivery', amount: 110 }] });
-  assert.ok(created.id, JSON.stringify(created));
-  const { id } = created;
-  repo.db.prepare("UPDATE items SET quantity = 10, unit = 'ea' WHERE invoice_id = ? AND description = 'Motor'").run(id);
-  let a = await summary(jobA);
-  const motor = a.invoices[0].items.find((l) => l.description === 'Motor');
-  const delivery = a.invoices[0].items.find((l) => l.description === 'Delivery');
-
-  // Can't take from an invoice that isn't split
-  assert.equal((await share(jobB, motor.id, { quantity: 1 })).status, 400);
-  // Split: job A keeps everything until it reduces its share
-  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: true } })).status, 200);
-  a = await summary(jobA);
-  assert.equal(a.totals.total, 3410);
-  // Job A only used 1 motor and pays the delivery
-  assert.equal((await share(jobA, motor.id, { quantity: 1 })).status, 200);
-  a = await summary(jobA);
-  assert.equal(a.totals.total, 440);
-  assert.equal(a.invoices[0].not_assigned, 2970);
-
-  // Job B sees 9 left and takes 1; job C takes 8; nothing left to over-take
-  let avail = (await (await api(jobB, '/available')).json()).invoices;
-  assert.equal(avail[0].lines.find((l) => l.item_id === motor.id).left_quantity, 9);
-  assert.equal((await share(jobB, motor.id, { quantity: 1 })).status, 200);
-  assert.equal((await share(jobC, motor.id, { quantity: 8 })).status, 200);
-  const over = await share(jobC, motor.id, { quantity: 9 });
+  // Job A takes 1 motor (as materials, a screw-up) and the delivery; B takes 2; C takes 3
+  assert.equal((await post(a, '/assign', { item_id: motor.item_id, quantity: 1, category: 'materials', mistake_reason: 'wrong_size' })).status, 200);
+  assert.equal((await post(a, '/assign', { item_id: delivery.item_id, amount: 110 })).status, 200);
+  assert.equal((await post(b, '/assign', { item_id: motor.item_id, quantity: 2 })).status, 200);
+  assert.equal((await post(c, '/assign', { item_id: motor.item_id, quantity: 3 })).status, 200);
+  const over = await post(b, '/assign', { item_id: motor.item_id, quantity: 5 });
   assert.equal(over.status, 400);
-  assert.match((await over.json()).error, /8 left/);
-  avail = (await (await api(jobB, '/available')).json()).invoices;
-  assert.ok(!avail.some((i) => i.lines.some((l) => l.item_id === motor.id)), 'motors all taken');
+  assert.match((await over.json()).error, /4 left/);
 
-  const b = await summary(jobB);
-  assert.equal(b.totals.total, 330);
-  assert.equal(b.invoices[0].foreign, true);
-  assert.deepEqual(b.invoices[0].items.map((l) => l.description), ['Motor'], 'only the lines this job took');
-  assert.equal(b.invoices[0].home_job_number, '1234');
+  // Trace: where the other motors went, seen from any job
+  const sB = await summary(b);
+  const line = sB.invoices.find((i) => i.id === inv.id).items[0];
+  assert.equal(line.cost, 660);
+  assert.equal(line.trace.left_quantity, 4);
+  assert.deepEqual(line.trace.jobs.map((j) => [j.job_number, j.quantity, j.this_job]), [['208101', 1, false], ['208102', 2, true], ['208103', 3, false]]);
+  assert.deepEqual(sB.invoices.find((i) => i.id === inv.id).other_lines.map((o) => o.description), ['Delivery']);
 
-  // Paid is one tick for the supplier's bill, seen by every job
-  await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
-  assert.equal((await summary(jobB)).totals.paid, 330);
-  // Another job can tag its own share as a screw-up, but can't edit the invoice
-  assert.equal((await api(jobB, `/items/${motor.id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_product' } })).status, 200);
-  assert.equal((await summary(jobB)).totals.mistakes, 330);
-  assert.equal((await summary(jobC)).totals.mistakes, 0, 'tag only on job B\'s share');
-  assert.equal((await api(jobB, `/invoices/${id}`, { method: 'PATCH', json: { total: 1 } })).status, 403);
-  assert.equal((await api(jobB, `/items/${delivery.id}/share`, { method: 'PUT', json: { amount: 999 } })).status, 400);
+  // Screw-up and type belong to each job's share
+  const sA = await summary(a);
+  assert.equal(sA.invoices.find((i) => i.id === inv.id).job_total, 440);
+  assert.equal(sA.totals.mistakes >= 330, true);
+  assert.equal(sB.invoices.find((i) => i.id === inv.id).mistake_state, 'none');
 
-  // Job A can't stop splitting or delete while others have shares
-  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: false } })).status, 409);
-  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'DELETE' })).status, 409);
+  // Change a share directly, give back, and paid is one tick for the whole bill
+  assert.equal((await api(b, `/items/${motor.item_id}/share`, { method: 'PUT', json: { quantity: 1 } })).status, 200);
+  assert.equal((await json(c, '/unassigned')).invoices.find((i) => i.id === inv.id).lines[0].trace.left_quantity, 5);
+  await api(a, `/invoices/${inv.id}`, { method: 'PATCH', json: { paid: true } });
+  assert.equal((await summary(c)).invoices.find((i) => i.id === inv.id).payment_state, 'paid');
+  const del = await api(a, `/invoices/${inv.id}?completely=1`, { method: 'DELETE' });
+  assert.equal(del.status, 409, 'cannot delete while other jobs use it');
 
-  // Reports: shares count on each job; nothing double counted
-  const rep = await (await api(jobA, '/report')).json();
-  const tot = (u) => rep.jobs.find((j) => j.job_uuid === u).total;
-  assert.equal(tot('split-a') + tot('split-b') + tot('split-c'), 3410);
-
-  // Give back; then A can stop splitting and gets everything again
-  await api(jobB, `/invoices/${id}`, { method: 'DELETE' });
-  await share(jobC, motor.id, { quantity: 0 });
-  assert.equal((await summary(jobB)).invoices.length, 0);
-  assert.equal((await api(jobA, `/invoices/${id}`, { method: 'PATCH', json: { split: false } })).status, 200);
-  assert.equal((await summary(jobA)).totals.total, 3410);
+  // Whole invoice from "not assigned yet", with type and screw-up chosen when adding
+  await email(a, { subject: 'misc', file: 'receipt.pdf' });
+  const rec = latestInvoice();
+  await post(a, '/assign', { invoice_id: rec.id, category: 'equipment_hire', mistake_reason: 'rework' });
+  const s = await summary(a);
+  const r = s.invoices.find((i) => i.id === rec.id);
+  assert.equal(r.category, 'equipment_hire');
+  assert.equal(r.mistake_state, 'all');
+  assert.equal(r.payment_state, 'paid', 'receipt was already paid');
 });
 
-test('the card and report page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html']) {
+test('reports: per-job shares add up; screw-ups by reason; other businesses never show', async () => {
+  const a = await openCard('job-a');
+  // Another business with a screw-up
+  const other = await openCard('other-biz-job', 'acc-2');
+  await upload(other, 'receipt.pdf');
+  const oInv = latestInvoice();
+  await api(other, `/invoices/${oInv.id}`, { method: 'PATCH', json: { mistake_reason: 'other' } });
+  assert.equal((await api(a, `/invoices/${oInv.id}/file`)).status, 404, 'cannot see another business\'s invoice');
+  assert.equal((await post(a, '/assign', { invoice_id: oInv.id })).status, 404);
+
+  const rep = await json(a, '/report');
+  assert.ok(!rep.jobs.some((j) => j.job_uuid === 'other-biz-job'));
+  const jobsTotal = rep.jobs.reduce((s, j) => s + j.total, 0);
+  assert.equal(Math.round(jobsTotal * 100) / 100, rep.totals.total);
+  assert.ok(rep.byReason.some((r) => r.reason === 'wrong_size'));
+  assert.ok(rep.totals.notAssigned > 0, 'motors left on the shelf');
+  assert.equal((await fetch(`${base}/report?t=${a}`)).status, 200);
+  assert.equal((await fetch(`${base}/inbox?t=${a}`)).status, 200);
+  assert.equal((await fetch(`${base}/inbox?t=bad`)).status, 401);
+});
+
+test('typed-in invoice goes on the job; attaching the file later keeps job, paid, type and screw-up', async () => {
+  const t = await openCard('job-manual');
+  const bad = await post(t, '/invoices/manual', { supplier: 'X', total: 100, items: [{ description: 'Gate', amount: 150 }] });
+  assert.equal(bad.status, 400);
+  const r = await post(t, '/invoices/manual', { supplier: 'Door Supplies', total: 990, category: 'subcontractor', mistake_reason: 'wrong_colour', paid: true,
+    items: [{ description: 'Gate 3.6m', amount: 660 }] });
+  const { id } = await r.json();
+  let inv = (await summary(t)).invoices.find((i) => i.id === id);
+  assert.deepEqual(inv.items.map((l) => [l.description, l.cost]), [['Gate 3.6m', 660], ['Other items (not listed)', 330]]);
+  assert.equal(inv.source, 'manual');
+
+  const fd = new FormData();
+  fd.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'door.pdf');
+  assert.equal((await api(t, `/invoices/${id}/file`, { method: 'POST', body: fd })).status, 200);
+  await processor.idle();
+  inv = (await summary(t)).invoices.find((i) => i.id === id);
+  assert.equal(inv.supplier, 'Door Supplies Pty Ltd');
+  assert.equal(inv.job_total, 3300, 'the whole real invoice is on the job');
+  assert.equal(inv.items.length, 3);
+  assert.equal(inv.payment_state, 'paid');
+  assert.equal(inv.category, 'subcontractor');
+  assert.equal(inv.mistake_state, 'all');
+
+  // A file that can't be read keeps the typed details counted
+  const r2 = await (await post(t, '/invoices/manual', { supplier: 'Gate Co', total: 500 })).json();
+  const fd2 = new FormData();
+  fd2.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'notinvoice.pdf');
+  await api(t, `/invoices/${r2.id}/file`, { method: 'POST', body: fd2 });
+  await processor.idle();
+  const inv2 = (await summary(t)).invoices.find((i) => i.id === r2.id);
+  assert.equal(inv2.status, 'ready');
+  assert.match(inv2.error, /does not look like an invoice/);
+  assert.equal(inv2.job_total, 500);
+});
+
+test('quoted price comes from ServiceM8 and can be overridden', async () => {
+  const t = await openCard('job-quote');
+  assert.equal((await summary(t)).totals.quote, 5000);
+  await api(t, '/job', { method: 'PATCH', json: { quote_amount: '$6,000' } });
+  await openCard('job-quote');
+  assert.equal((await summary(t)).totals.quote, 6000, 'typed price wins');
+  await api(t, '/job', { method: 'PATCH', json: { quote_amount: null } });
+  await openCard('job-quote');
+  assert.equal((await summary(t)).totals.quote, 5000);
+});
+
+test('upgrading a database from the first version keeps every invoice on its job', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-v1-'));
+  const db = new DatabaseSync(path.join(dir, 'jobcosts.sqlite'));
+  db.exec(`
+    CREATE TABLE jobs (job_uuid TEXT PRIMARY KEY, account_uuid TEXT, inbox_code TEXT NOT NULL UNIQUE, job_number TEXT, job_title TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')), quote_amount REAL, quote_source TEXT);
+    CREATE TABLE invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, job_uuid TEXT NOT NULL REFERENCES jobs(job_uuid), source TEXT NOT NULL,
+      file_name TEXT, file_path TEXT, mime_type TEXT, email_from TEXT, email_subject TEXT, status TEXT NOT NULL DEFAULT 'processing', error TEXT,
+      document_type TEXT, supplier TEXT, supplier_abn TEXT, invoice_number TEXT, invoice_date TEXT, due_date TEXT, currency TEXT, subtotal REAL,
+      tax REAL, total REAL, notes TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), split INTEGER NOT NULL DEFAULT 0,
+      attached_later INTEGER NOT NULL DEFAULT 0, category TEXT, category_manual INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'other', quantity REAL, unit TEXT, unit_price REAL,
+      line_total REAL NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, paid INTEGER NOT NULL DEFAULT 0, paid_at TEXT, mistake_reason TEXT, mistake_at TEXT);
+    CREATE TABLE allocations (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE, job_uuid TEXT NOT NULL,
+      fraction REAL NOT NULL, mistake_reason TEXT, mistake_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE (item_id, job_uuid));
+    INSERT INTO jobs (job_uuid, account_uuid, inbox_code, job_number) VALUES ('j1', 'acc', 'code1', '100'), ('j2', 'acc', 'code2', '200');
+    INSERT INTO invoices (id, job_uuid, source, status, supplier, total, category) VALUES (1, 'j1', 'upload', 'ready', 'Gates R Us', 1100, 'materials');
+    INSERT INTO items (invoice_id, description, line_total, cost, mistake_reason) VALUES (1, 'Gate', 1000, 1000, 'wrong_size'), (1, 'Delivery', 100, 100, NULL);
+    INSERT INTO invoices (id, job_uuid, source, status, supplier, total, category, split) VALUES (2, 'j1', 'upload', 'ready', 'Merlin', 3300, 'materials', 1);
+    INSERT INTO items (id, invoice_id, description, quantity, line_total, cost) VALUES (10, 2, 'Motor', 10, 3300, 3300);
+    INSERT INTO allocations (item_id, job_uuid, fraction) VALUES (10, 'j1', 0.1), (10, 'j2', 0.2);`);
+  db.close();
+
+  const r = openDb(dir);
+  const s1 = r.getJobSummary('j1');
+  const s2 = r.getJobSummary('j2');
+  assert.equal(r.getInvoice(1).account_uuid, 'acc');
+  assert.equal(s1.invoices.find((i) => i.id === 1).job_total, 1100);
+  assert.equal(s1.totals.mistakes, 1000, 'screw-up tag kept');
+  assert.equal(s1.invoices.find((i) => i.id === 2).job_total, 330);
+  assert.equal(s2.invoices.find((i) => i.id === 2).job_total, 660);
+  assert.equal(r.getUnassigned('acc').invoices.find((i) => i.id === 2).lines[0].trace.left_quantity, 7);
+  r.db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the card, report and inbox page scripts have no syntax errors', () => {
+  for (const file of ['card.html', 'report.html', 'inbox.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);
