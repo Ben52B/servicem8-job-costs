@@ -52,6 +52,12 @@
   .suggest .h { font-weight: 700; display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
   .srow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 10px; align-items: center; background: #fff; border: 1px solid #fde4c8; border-radius: 12px; padding: 8px 10px; margin-top: 6px; }
   .srow .why { font-size: 12px; color: var(--muted); }
+  .srow { grid-template-columns: minmax(0, 1fr) auto; }
+  .srow .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .srow select { font: inherit; font-size: 12px; font-weight: 600; border: 1px solid #d6e2de; border-radius: 8px; padding: 4px 6px; background: #fff; color: var(--ink); max-width: 220px; }
+  .stock-switch { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12.5px; color: var(--muted); border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 10px; background: #fff; cursor: pointer; }
+  .stock-switch.on { background: var(--warn-soft); border-color: #fcd34d; color: #92400e; }
+  .stock-banner { margin-bottom: 14px; padding: 10px 14px; border-radius: var(--radius); background: var(--warn-soft); color: #92400e; font-weight: 600; }
 
   /* totals */
   .kpis { display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 14px; }
@@ -198,15 +204,17 @@
 <div class="wrap">
   <header>
     <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
+    <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
     <a class="btn" id="inboxLink" target="_blank" rel="noopener">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
     <a class="btn" id="reportsLink" target="_blank" rel="noopener">📊 Reports</a>
   </header>
+  <section id="stockBanner"></section>
   <section id="suggest"></section>
   <section class="kpis" id="kpis"></section>
   <section class="cols">
     <aside id="aside">
       <button class="primary add-btn" data-add>＋ Add costs</button>
-      <div class="list-head"><b>Costs on this job</b><span class="muted" id="listToPay"></span></div>
+      <div class="list-head"><b id="listTitle">Costs on this job</b><span class="muted" id="listToPay"></span></div>
       <div id="list"></div>
       <div class="dropzone-hint">or drop invoice files here</div>
       <div class="emailbox" id="emailBox"></div>
@@ -271,21 +279,33 @@ function render() {
   const badge = $('#inboxBadge');
   badge.hidden = !state.data.inboxCount; badge.textContent = state.data.inboxCount || '';
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
+  const isStock = !!state.data.stock;
+  $('#stockToggle').checked = isStock;
+  $('#stockSwitch').classList.toggle('on', isStock);
+  $('#stockBanner').innerHTML = isStock ? `<div class="stock-banner">📦 This is a stock order job. Its invoices go into stock, not onto this job as costs. Other jobs take items from them with ＋ Add costs.</div>` : '';
+  $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
+  $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
   renderSuggestions();
-  if (!typingIn($('#kpis'))) renderKpis();
+  if (isStock) renderStockKpis();
+  else if (!typingIn($('#kpis'))) renderKpis();
   renderList();
   if (state.forceDetail || !typingIn($('#detail'))) { state.forceDetail = false; renderDetail(); }
   renderPreview();
 }
 
 // ---------- Suggestions: one click to add ----------
+const jobOpt = (j) => `#${esc(j.job_number)}${j.job_title ? ' – ' + esc(String(j.job_title).split(',')[0]) : ''}${j.is_stock ? ' (stock order)' : ''}`;
 function renderSuggestions() {
   const s = state.data.suggestions || [];
-  $('#suggest').innerHTML = !s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this job <span class="badge">${s.length}</span></div>
+  const jobs = state.data.jobs || [];
+  const confirm = state.data.stock ? '✓ Add to stock' : '✓ Add to this job';
+  $('#suggest').innerHTML = !s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this ${state.data.stock ? 'stock order' : 'job'} <span class="badge">${s.length}</span></div>
     ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total)}</span>
       <div class="why">${esc(x.reason || '')}</div></div>
-      <span class="chip c-${esc(x.category || 'materials')}">${esc(CAT_LABEL[x.category] || 'Materials')}</span>
-      <button class="primary small" data-accept="${x.id}">✓ Add to this job</button><button class="small" data-dismiss="${x.id}">Not this job</button></div>`).join('')}</div>`;
+      <div class="acts"><button class="primary small" data-accept="${x.id}">${confirm}</button>
+        <select data-move="${x.id}" title="Wrong job? Pick the right one"><option value="">Change job…</option>${jobs.map((j) => `<option value="${esc(j.job_uuid)}">${jobOpt(j)}</option>`).join('')}</select>
+        <button class="small" data-to-stock="${x.id}" title="Not for one job – keep it as stock">📦 Send to stock</button>
+        <button class="mk-link" data-dismiss="${x.id}" title="Leave it in the Inbox for now">Leave in Inbox</button></div></div>`).join('')}</div>`;
 }
 
 // ---------- Totals ----------
@@ -324,6 +344,15 @@ function renderKpis() {
       <div class="s">${t.mistakes > 0 ? `${t.mistakePct}% of costs${lost != null ? ` · cost ${lost} margin pts` : ''}<br>Without them: ${hasQuote ? `${signed(t.cleanMargin)} profit · ${t.cleanMarginPct}%` : money0(t.cleanTotal) + ' costs'}` : 'None on this job 🎉'}</div></div>`;
 }
 
+function renderStockKpis() {
+  const t = state.data.totals;
+  $('#kpis').innerHTML = `
+    <div class="kpi hero"><div class="l">📦 Stock bought on this order</div><div class="v">${money0(t.bought)}</div><div class="s">${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</div></div>
+    <div class="kpi card"><div class="l">Used on jobs</div><div class="v">${money0(t.used)}</div><div class="s">on ${t.jobs} job${t.jobs === 1 ? '' : 's'}</div></div>
+    <div class="kpi card"><div class="l">Still in stock</div><div class="v warn">${money0(t.left)}</div><div class="s">available to any job</div></div>
+    <div class="kpi card"><div class="l">Paid</div><div class="v good">${money0(t.paid)}</div><div class="s">${t.outstanding > 0.004 ? `<b style="color:var(--warn)">${money(t.outstanding)}</b> still to pay` : 'Nothing to pay'}</div></div>`;
+}
+
 // ---------- List ----------
 function statusChip(inv) {
   if (inv.status === 'processing') return '<span class="chip c-proc"><span class="spin"></span> Reading</span>';
@@ -340,7 +369,7 @@ function renderList() {
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
-      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   $('#emailBox').innerHTML = d.inboxAddress
@@ -354,9 +383,50 @@ function traceChips(trace, withLeft = true) {
   return `<div class="trace">${trace.jobs.map((j) => `<span class="${j.this_job ? 'me' : ''}" title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${unit(j)}${j.this_job ? ' (this job)' : ''}</span>`).join('')}${withLeft && trace.left > 1e-6 ? `<span class="left">${trace.quantity ? `${qty(trace.left_quantity)} of ${qty(trace.quantity)} left` : `${money(trace.left_amount)} left`}</span>` : ''}</div>`;
 }
 
+function renderStockDetail(inv, el) {
+  const ready = inv.status === 'ready';
+  const allPaid = inv.payment_state === 'paid';
+  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && !allPaid ? 'due ' + fmtDate(inv.due_date) : '', SOURCE_LABEL[inv.source]].filter(Boolean).join(' · ');
+  let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</h2><div class="muted">${esc(meta)}</div></div>
+    ${ready && inv.items.length ? `<div class="d-controls"><label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label></div>` : ''}</div>`;
+  if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice… it goes into stock when it’s done.</div>';
+  if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
+  if (inv.items.length) {
+    h += `<table><thead><tr><th>Item</th><th class="num">Bought</th><th class="num">Left</th></tr></thead><tbody>`;
+    for (const it of inv.items) {
+      const q = it.trace.quantity;
+      h += `<tr><td class="desc"><div style="font-weight:700;padding:3px 6px">${esc(it.description)}</div>${traceChips(it.trace)}</td>
+        <td class="num">${q ? qty(q) + (it.unit ? ' ' + esc(it.unit) : '') + '<br>' : ''}<span class="muted">${money(it.line_cost)}</span></td>
+        <td class="num"><b>${q ? qty(it.trace.left_quantity) : money(it.trace.left_amount)}</b>${q ? `<br><span class="muted">${money(it.trace.left_amount)}</span>` : ''}</td></tr>`;
+    }
+    h += '</tbody></table>';
+    h += `<div class="d-total">Invoice total ${money(inv.total)} · used ${money(inv.used)} · <b>${money(inv.left)} still in stock</b></div>`;
+  }
+  h += `<div class="actions">
+      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv.id)}" target="_blank" rel="noopener">View invoice</a><button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
+      ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
+      <span class="spacer"></span><button class="danger link" data-ask-delete="${inv.id}">Remove from this order</button></div>`;
+  if (state.confirmDel === inv.id) {
+    h += `<div class="confirm-bar">Take this invoice off this stock order? It stays in stock in the Inbox.<span class="spacer"></span>
+      <button class="solid-danger" data-delete="${inv.id}">Remove from order</button>${inv.used > 0 ? '' : `<button class="danger" data-delete-all="${inv.id}">Delete invoice</button>`}<button data-cancel>Cancel</button></div>`;
+  }
+  if (state.editing === inv.id) {
+    const dr = state.draft;
+    h += `<form class="edit-form" data-edit-form="${inv.id}">
+      <label>Supplier<input name="supplier" value="${esc(dr.supplier ?? inv.supplier ?? '')}"></label>
+      <label>Invoice number<input name="invoice_number" value="${esc(dr.invoice_number ?? inv.invoice_number ?? '')}"></label>
+      <label>Invoice total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
+    </form>`;
+  }
+  el.innerHTML = h;
+}
+
 function renderDetail() {
   const inv = selectedInvoice();
   const el = $('#detail');
+  if (inv && state.data.stock) return renderStockDetail(inv, el);
+  if (!inv && state.data.stock) { el.innerHTML = '<div class="empty"><div style="font-size:34px">📦</div><b>No stock invoices on this order yet</b><br>Invoices emailed with this job number are suggested here. You can also click <b>＋ Add stock invoice</b>.</div>'; return; }
   if (!inv) { el.innerHTML = '<div class="empty"><div style="font-size:34px">🧾</div><b>No costs on this job yet</b><br>Click <b>＋ Add costs</b>: pick invoices that came in by email, upload a file, or type one in.</div>'; return; }
   const ready = inv.status === 'ready';
   const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', inv.attached_later ? 'Added by hand, file attached later' : SOURCE_LABEL[inv.source]].filter(Boolean).join(' · ');
@@ -450,7 +520,7 @@ async function openAdd(tab = 'pick') {
   if (tab === 'pick') loadUnassigned();
 }
 async function loadUnassigned() {
-  try { state.modal.list = (await api('/unassigned')).invoices.filter((i) => !i.duplicate_of); } catch (x) { toast(x.message); state.modal.list = []; }
+  try { state.modal.list = (await api('/unassigned')).invoices.filter((i) => !i.duplicate_of && (!state.data.stock || (i.untouched && !i.stock_job))); } catch (x) { toast(x.message); state.modal.list = []; }
   if (state.modal) renderModal();
 }
 function closeModal() { state.modal = null; $('#modalRoot').innerHTML = ''; }
@@ -464,7 +534,7 @@ function renderModal() {
   if (m.tab === 'upload') body = `<label class="bigdrop" id="bigdrop"><input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden><div style="font-size:30px">⬆</div><b>Drop invoice files here</b>or click to choose PDFs or photos.<br>They're read automatically and go on this job.</label>`;
   if (m.tab === 'type') body = renderManual();
   $('#modalRoot').innerHTML = `<div class="overlay" data-overlay><div class="modal" role="dialog" aria-label="Add costs">
-    <div class="m-head"><div><h2>Add costs to Job #${esc(state.data.job.job_number || '')}</h2><div class="muted">Pick from invoices not assigned to a job yet, upload a file, or type one in.</div></div><button data-close>✕</button></div>
+    <div class="m-head"><div><h2>${state.data.stock ? 'Add stock invoice to order' : 'Add costs to Job'} #${esc(state.data.job.job_number || '')}</h2><div class="muted">${state.data.stock ? 'Pick an invoice that came in by email, upload a file, or type one in. It goes into stock.' : 'Pick from invoices not assigned to a job yet, upload a file, or type one in.'}</div></div><button data-close>✕</button></div>
     <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button></div>
     <div id="modalBody">${body}</div></div></div>`;
   if (m.tab === 'upload') wireDrop($('#bigdrop'), (files) => { closeModal(); uploadFiles(files); });
@@ -488,13 +558,13 @@ function renderPick() {
   };
   return `<input class="search" id="pickSearch" placeholder="Search supplier, invoice number or item…">` + list.map((i) => {
     const sugg = i.suggestion ? `<div class="trace"><span class="left">💡 Suggested for #${esc(i.suggestion.job_number || '?')}${i.suggestion.reason ? ' – ' + esc(i.suggestion.reason) : ''}</span></div>` : '';
-    const head = `<div class="t">${esc(i.supplier || 'Unknown supplier')} ${i.untouched ? '<span class="chip c-materials">Whole invoice</span>' : '<span class="chip c-stock">Part left</span>'}${i.kept_as_stock ? ' <span class="chip c-stock">Stock</span>' : ''}</div>
+    const head = `<div class="t">${esc(i.supplier || 'Unknown supplier')} ${i.untouched ? '<span class="chip c-materials">Whole invoice</span>' : '<span class="chip c-stock">Part left</span>'}${i.kept_as_stock ? ` <span class="chip c-stock">Stock${i.stock_job ? ' · order #' + esc(i.stock_job.job_number || '?') : ''}</span>` : ''}</div>
       <div class="sub">${[i.invoice_number ? '#' + esc(i.invoice_number) : '', i.invoice_date ? fmtDate(i.invoice_date) : '', money(i.total), `${i.lines.length} line${i.lines.length === 1 ? '' : 's'}${i.untouched ? '' : ' with something left'}`].filter(Boolean).join(' · ')}</div>${sugg}`;
-    const expanded = !i.untouched || m.expanded.has(i.id);
+    const expanded = !state.data.stock && (!i.untouched || m.expanded.has(i.id));
     return `<div class="pick"><div class="top"><div>${head}</div>
       ${i.untouched ? `<div class="take"><select id="ic-${i.id}">${catOptions(i.category || 'materials')}</select><select id="im-${i.id}">${reasonOptions('')}</select>
-        <button class="primary small" data-take-all="${i.id}">Add whole invoice${i.suggestion && i.suggestion.job_number === jobNo ? ' ✓' : ''}</button>
-        <button class="small" data-expand="${i.id}">${expanded ? 'Hide lines' : 'Pick lines…'}</button></div>` : ''}</div>
+        <button class="primary small" data-take-all="${i.id}">${state.data.stock ? 'Add to stock' : 'Add whole invoice'}${i.suggestion && i.suggestion.job_number === jobNo ? ' ✓' : ''}</button>
+        ${state.data.stock ? '' : `<button class="small" data-expand="${i.id}">${expanded ? 'Hide lines' : 'Pick lines…'}</button>`}</div>` : ''}</div>
       ${expanded ? `<div class="lines">${i.lines.map(lineRow).join('')}</div>` : ''}</div>`;
   }).join('') + (list.length ? '' : '<div class="empty">Nothing matches.</div>');
 }
@@ -575,6 +645,7 @@ document.addEventListener('click', async (e) => {
     if (ds.removeLine) { readManual(); state.modal.manual.items.splice(Number(ds.removeLine), 1); return renderModal(); }
     if (ds.accept) { await post(`/suggestions/${ds.accept}/accept`); toast('Added to this job'); state.selected = Number(ds.accept); state.previewKey = null; return load(); }
     if (ds.dismiss) { await post(`/suggestions/${ds.dismiss}/dismiss`); toast('OK – it stays in the Inbox'); return load(); }
+    if (ds.toStock) { await post(`/inbox/${ds.toStock}/stock`); toast('Sent to stock – take items from it on any job'); return load(); }
     if (ds.copy !== undefined) {
       const text = $('#inbox').textContent;
       try { await navigator.clipboard.writeText(text); } catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
@@ -649,6 +720,22 @@ $('#list').addEventListener('change', async (e) => {
   if (!t.dataset.listPaid) return;
   try { await patch(`/invoices/${t.dataset.listPaid}`, { paid: t.checked }); toast(t.checked ? 'Invoice marked paid' : 'Invoice marked unpaid'); } catch (x) { toast(x.message); }
   load();
+});
+
+// Suggestion went to the wrong job: send it to the right one.
+document.addEventListener('change', async (e) => {
+  const t = e.target;
+  if (t.dataset.move !== undefined) {
+    if (!t.value) return;
+    const label = t.options[t.selectedIndex].textContent;
+    try { await post(`/inbox/${t.dataset.move}/assign`, { job_uuid: t.value }); toast('Moved to ' + label); } catch (x) { toast(x.message); }
+    return load();
+  }
+  if (t.id === 'stockToggle') {
+    try { await patch('/job', { is_stock: t.checked }); toast(t.checked ? 'Marked as a stock order job' : 'Marked as a normal job'); } catch (x) { toast(x.message); }
+    state.selected = null; state.previewKey = null;
+    return load();
+  }
 });
 
 async function saveQuote() {

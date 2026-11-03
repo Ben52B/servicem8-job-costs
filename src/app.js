@@ -5,7 +5,7 @@ const express = require('express');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 
-const { verifyEvent, fetchJob, fetchActiveJobs } = require('./servicem8');
+const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = require('./servicem8');
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
@@ -112,11 +112,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     ? `${Math.round(left * item.quantity * 1000) / 1000} left` : `$${(left * item.cost).toFixed(2)} left`);
   const jobList = (jobs) => jobs.map((j) => (j.job_number ? '#' + j.job_number : 'another job')).join(', ');
 
+  // A job is a stock order job when its client or category matches (see config); unknown names change nothing.
+  const withStockFlag = (info) => (info && (info.clientName || info.categoryName)
+    ? { ...info, stockAuto: looksLikeStockJob(info, config) } : info);
+
   // Keep a list of the business's active jobs, so emailed invoices can be matched to them.
   async function syncJobs(accountUUID, accessToken) {
     if (!accessToken || repo.jobsSyncedRecently(accountUUID, 10)) return;
     const jobs = await fetchActiveJobsImpl(accessToken);
-    if (jobs.length) repo.saveSyncedJobs(accountUUID, jobs);
+    if (jobs.length) repo.saveSyncedJobs(accountUUID, jobs.map(withStockFlag));
   }
 
   // ---------- ServiceM8 ----------
@@ -139,7 +143,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       return res.status(401).type('html').send(`<p style="font-family:sans-serif">Could not open Job Costs: ${String(e.message).replace(/</g, '&lt;')}</p>`);
     }
     const info = await fetchJobImpl(event.jobUUID, event.accessToken);
-    const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(info || {}) });
+    const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
     repo.ensureAccount(job.account_uuid);
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = syncJobs(job.account_uuid, event.accessToken).catch(() => {});
@@ -175,11 +179,18 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     const acc = repo.ensureAccount(req.account);
-    res.json({ ...summary, inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account) });
+    res.json({ ...summary, inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
+      jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });
   });
 
   api.patch('/job', (req, res) => {
-    const { quote_amount } = req.body || {};
+    const { quote_amount, is_stock } = req.body || {};
+    // "This is a stock order job" switch: true / false, or null for automatic.
+    if (is_stock !== undefined) {
+      if (is_stock !== null && typeof is_stock !== 'boolean') return res.status(400).json({ error: 'is_stock must be true, false or null' });
+      repo.setStockManual(req.job.job_uuid, is_stock);
+      if (quote_amount === undefined) return res.json({ ok: true });
+    }
     if (quote_amount === null || quote_amount === '') repo.setQuote(req.job.job_uuid, null);
     else {
       const q = money(quote_amount);
@@ -291,6 +302,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       return res.json({ ok: true, deleted: true });
     }
     repo.removeFromJob(inv.id, req.job.job_uuid);
+    if (inv.stock_job_uuid === req.job.job_uuid) repo.unlinkStock(inv.id);
     // An upload that was never read can't be "unassigned" – it's simply removed.
     if (inv.status !== 'ready' && inv.origin_job_uuid === req.job.job_uuid) repo.deleteInvoice(inv.id);
     res.json({ ok: true });

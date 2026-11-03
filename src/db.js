@@ -216,6 +216,13 @@ function migrateColumns(db) {
   // 'servicem8' = taken from the job in ServiceM8, 'manual' = typed in on the card (never overwritten)
   if (!jobCols.includes('quote_source')) db.exec('ALTER TABLE jobs ADD COLUMN quote_source TEXT');
   if (!jobCols.includes('sm8_status')) db.exec('ALTER TABLE jobs ADD COLUMN sm8_status TEXT');
+  if (!jobCols.includes('client_name')) db.exec('ALTER TABLE jobs ADD COLUMN client_name TEXT');
+  if (!jobCols.includes('category_name')) db.exec('ALTER TABLE jobs ADD COLUMN category_name TEXT');
+  // Stock order job: auto = matched by client/category; manual = the switch on the card (wins when set).
+  if (!jobCols.includes('stock_auto')) db.exec('ALTER TABLE jobs ADD COLUMN stock_auto INTEGER NOT NULL DEFAULT 0');
+  if (!jobCols.includes('stock_manual')) db.exec('ALTER TABLE jobs ADD COLUMN stock_manual INTEGER');
+  // The stock order job an invoice in stock came in on.
+  if (!cols(db, 'invoices').includes('stock_job_uuid')) db.exec('ALTER TABLE invoices ADD COLUMN stock_job_uuid TEXT');
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
 }
 
@@ -232,7 +239,8 @@ function createRepo(db, dataDir) {
 
     // ---------- jobs & accounts ----------
 
-    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null, status = null }) {
+    ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null, status = null,
+      clientName = null, categoryName = null, stockAuto = undefined }) {
       const job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       if (!job) {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -249,6 +257,11 @@ function createRepo(db, dataDir) {
             account_uuid = COALESCE(?, account_uuid), sm8_status = COALESCE(?, sm8_status) WHERE job_uuid = ?`)
           .run(jobNumber, jobTitle, accountUUID, status, jobUUID);
       }
+      if (clientName || categoryName) {
+        db.prepare('UPDATE jobs SET client_name = COALESCE(?, client_name), category_name = COALESCE(?, category_name) WHERE job_uuid = ?')
+          .run(clientName, categoryName, jobUUID);
+      }
+      if (stockAuto !== undefined) db.prepare('UPDATE jobs SET stock_auto = ? WHERE job_uuid = ?').run(stockAuto ? 1 : 0, jobUUID);
       if (quoteAmount != null && isFinite(quoteAmount)) {
         db.prepare(`UPDATE jobs SET quote_amount = ?, quote_source = 'servicem8'
           WHERE job_uuid = ? AND COALESCE(quote_source, '') != 'manual'`).run(round2(quoteAmount), jobUUID);
@@ -257,7 +270,38 @@ function createRepo(db, dataDir) {
     },
 
     getJob(jobUUID) {
-      return db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
+      const j = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
+      return j ? { ...j, is_stock: j.stock_manual != null ? !!j.stock_manual : !!j.stock_auto } : j;
+    },
+
+    isStockJob(jobUUID) {
+      return !!repo.getJob(jobUUID)?.is_stock;
+    },
+
+    /**
+     * The "stock order job" switch. true/false sets it by hand; null goes back to the
+     * automatic rule. A job that becomes a stock order job hands its invoices over to stock.
+     */
+    setStockManual(jobUUID, value) {
+      db.prepare('UPDATE jobs SET stock_manual = ? WHERE job_uuid = ?').run(value == null ? null : (value ? 1 : 0), jobUUID);
+      if (repo.isStockJob(jobUUID)) {
+        const invs = db.prepare(`SELECT DISTINCT items.invoice_id AS id FROM allocations JOIN items ON items.id = allocations.item_id
+          WHERE allocations.job_uuid = ?`).all(jobUUID);
+        tx(() => { for (const { id } of invs) { repo.removeFromJob(id, jobUUID); repo.linkToStock(id, jobUUID); } });
+      } else {
+        db.prepare('UPDATE invoices SET stock_job_uuid = NULL WHERE stock_job_uuid = ?').run(jobUUID);
+      }
+    },
+
+    /** Take an invoice off a stock order job; it stays in stock. */
+    unlinkStock(invoiceId) {
+      db.prepare('UPDATE invoices SET stock_job_uuid = NULL WHERE id = ?').run(invoiceId);
+    },
+
+    /** Put an invoice into stock, noting which stock order job it came in on. */
+    linkToStock(invoiceId, jobUUID) {
+      db.prepare(`UPDATE invoices SET kept_as_stock = 1, stock_job_uuid = ?, suggested_job_uuid = NULL, suggestion_reason = NULL
+        WHERE id = ?`).run(jobUUID || null, invoiceId);
     },
 
     /** Quoted price typed on the card. null clears it so ServiceM8's value is used again. */
@@ -268,7 +312,7 @@ function createRepo(db, dataDir) {
 
     /** Jobs to pick from (newest job numbers first). */
     listJobs(accountUUID) {
-      return db.prepare(`SELECT job_uuid, job_number, job_title, sm8_status FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
+      return db.prepare(`SELECT job_uuid, job_number, job_title, sm8_status, COALESCE(stock_manual, stock_auto) AS is_stock FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
         ORDER BY CAST(job_number AS INTEGER) DESC, job_number DESC`).all(accountUUID);
     },
 
@@ -467,6 +511,7 @@ function createRepo(db, dataDir) {
      */
     setShare(itemId, jobUUID, fraction, fields = {}) {
       if (!(fraction >= 0)) throw fail('Amount cannot be negative');
+      if (fraction > EPS && repo.isStockJob(jobUUID)) throw fail('This is a stock order job, so it doesn\u2019t take costs. Add items to the job that uses them.');
       const others = db.prepare('SELECT COALESCE(SUM(fraction), 0) AS f FROM allocations WHERE item_id = ? AND job_uuid != ?').get(itemId, jobUUID).f;
       if (fraction + others > 1 + EPS) throw fail('That is more than is left on this line', 400, { left: Math.max(0, 1 - others) });
       if (fraction <= EPS) { db.prepare('DELETE FROM allocations WHERE item_id = ? AND job_uuid = ?').run(itemId, jobUUID); return; }
@@ -486,6 +531,7 @@ function createRepo(db, dataDir) {
 
     /** Give a job everything that's still left on an invoice. */
     assignWhole(invoiceId, jobUUID, fields = {}) {
+      if (repo.isStockJob(jobUUID)) { repo.linkToStock(invoiceId, jobUUID); return; }
       tx(() => {
         for (const it of db.prepare('SELECT id FROM items WHERE invoice_id = ?').all(invoiceId)) {
           const left = repo.leftOf(it.id);
@@ -617,6 +663,7 @@ function createRepo(db, dataDir) {
 
     /** Everything the job card needs: this job's share of each invoice, and totals. */
     getJobSummary(jobUUID) {
+      if (repo.isStockJob(jobUUID)) return repo.getStockSummary(jobUUID);
       const job = repo.getJob(jobUUID);
       // Invoices with a share on this job, plus uploads from this job still being read.
       const invoices = db.prepare(`SELECT * FROM invoices
@@ -724,12 +771,54 @@ function createRepo(db, dataDir) {
       totals.cleanMargin = quote != null ? round2(quote - totals.cleanTotal) : null;
       totals.cleanMarginPct = quote ? Math.round((quote - totals.cleanTotal) / quote * 1000) / 10 : null;
 
-      const suggestions = db.prepare(`SELECT * FROM invoices WHERE suggested_job_uuid = ? AND status = 'ready'
+      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory), byReason: roundMap(byReason), suggestions: repo._suggestionsFor(jobUUID) };
+    },
+
+    _suggestionsFor(jobUUID) {
+      return db.prepare(`SELECT * FROM invoices WHERE suggested_job_uuid = ? AND status = 'ready'
           AND NOT EXISTS (SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = invoices.id)
           ORDER BY id DESC`).all(jobUUID)
         .map((i) => ({ id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, category: i.category, reason: i.suggestion_reason }));
+    },
 
-      return { job, totals, invoices: outInvoices, bySupplier: roundMap(bySupplier), byCategory: roundMap(byCategory), byReason: roundMap(byReason), suggestions };
+    /** A stock order job: what was bought on it, which jobs took it, and what's left. */
+    getStockSummary(jobUUID) {
+      const job = repo.getJob(jobUUID);
+      const invoices = db.prepare(`SELECT * FROM invoices WHERE stock_job_uuid = ?
+          OR (origin_job_uuid = ? AND NOT EXISTS (SELECT 1 FROM items WHERE items.invoice_id = invoices.id))
+          ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(jobUUID, jobUUID);
+      const ids = invoices.map((i) => i.id);
+      const items = ids.length ? db.prepare(`SELECT * FROM items WHERE invoice_id IN (${ids.join(',')}) ORDER BY position, id`).all() : [];
+      const allocs = repo._allocsByItem(ids);
+      const totals = { bought: 0, used: 0, left: 0, paid: 0, outstanding: 0, invoiceCount: 0, processing: 0, errors: 0, jobs: new Set() };
+      const out = invoices.map((inv) => {
+        const lines = items.filter((it) => it.invoice_id === inv.id).map((it) => {
+          const trace = repo._trace(it, allocs.get(it.id) || [], jobUUID);
+          for (const j of trace.jobs) totals.jobs.add(j.job_uuid);
+          return { ...it, paid: !!it.paid, line_cost: it.cost, cost: it.cost, trace };
+        });
+        const used = round2(lines.reduce((s, l) => s + l.trace.jobs.reduce((t, j) => t + j.amount, 0), 0));
+        const left = round2(lines.reduce((s, l) => s + l.trace.left_amount, 0));
+        const paid = lines.length > 0 && lines.every((l) => l.paid);
+        if (inv.status === 'processing') totals.processing++;
+        if (inv.status === 'error') totals.errors++;
+        if (inv.status === 'ready') {
+          totals.invoiceCount++;
+          totals.bought += inv.total || 0;
+          totals.used += used;
+          totals.left += left;
+          if (paid) totals.paid += inv.total || 0;
+        }
+        return {
+          ...inv, refs: parseJson(inv.refs, []), items: lines, other_lines: [], other_jobs: [], job_total: round2(inv.total || 0),
+          used, left, whole: false, from_stock: false, category: inv.category || 'materials', mistake_state: 'none', duplicate_of: null,
+          payment_state: !lines.length ? 'unpaid' : paid ? 'paid' : lines.some((l) => l.paid) ? 'part' : 'unpaid',
+        };
+      });
+      for (const k of ['bought', 'used', 'left', 'paid']) totals[k] = round2(totals[k]);
+      totals.outstanding = round2(totals.bought - totals.paid);
+      totals.jobs = totals.jobs.size;
+      return { job, stock: true, totals, invoices: out, byCategory: [], byReason: [], bySupplier: [], suggestions: repo._suggestionsFor(jobUUID) };
     },
 
     /**
@@ -744,7 +833,7 @@ function createRepo(db, dataDir) {
       const allocs = repo._allocsByItem(ids);
       const byInv = new Map(ids.map((id) => [id, []]));
       for (const it of items) byInv.get(it.invoice_id).push(it);
-      const jobsById = new Map(db.prepare('SELECT job_uuid, job_number, job_title FROM jobs WHERE account_uuid IS ?').all(accountUUID).map((j) => [j.job_uuid, j]));
+      const jobsById = new Map(db.prepare('SELECT job_uuid, job_number, job_title, COALESCE(stock_manual, stock_auto) AS is_stock FROM jobs WHERE account_uuid IS ?').all(accountUUID).map((j) => [j.job_uuid, j]));
       const firstSeen = new Map();
       const out = [];
       for (const inv of invoices.slice().reverse()) {
@@ -763,8 +852,10 @@ function createRepo(db, dataDir) {
           id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
           category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
           untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
+          stock_job: inv.stock_job_uuid && jobsById.get(inv.stock_job_uuid)
+            ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,
           left_amount: round2(left.reduce((s, l) => s + l.trace.left_amount, 0)),
-          suggestion: sj && untouched ? { job_uuid: sj.job_uuid, job_number: sj.job_number, job_title: sj.job_title, reason: inv.suggestion_reason } : null,
+          suggestion: sj && untouched ? { job_uuid: sj.job_uuid, job_number: sj.job_number, job_title: sj.job_title, reason: inv.suggestion_reason, is_stock: !!sj.is_stock } : null,
           lines: left.map((l) => ({
             item_id: l.id, description: l.description, unit: l.unit, quantity: l.trace.quantity, cost: l.cost,
             unit_cost: l.trace.quantity ? round2(l.cost / l.trace.quantity) : null, trace: l.trace,
@@ -789,7 +880,7 @@ function createRepo(db, dataDir) {
      */
     getReport(accountUUID, { from = null, to = null } = {}) {
       const firstDate = (s) => s.invoices.filter((i) => i.status === 'ready').map((i) => i.invoice_date || String(i.created_at).slice(0, 10)).sort()[0] || null;
-      const jobs = db.prepare(`SELECT jobs.* FROM jobs WHERE jobs.account_uuid IS ? AND
+      const jobs = db.prepare(`SELECT jobs.* FROM jobs WHERE jobs.account_uuid IS ? AND COALESCE(stock_manual, stock_auto) = 0 AND
             EXISTS (SELECT 1 FROM allocations WHERE allocations.job_uuid = jobs.job_uuid)`).all(accountUUID)
         .map((j) => ({ ...j, summary: repo.getJobSummary(j.job_uuid) }))
         .map((j) => ({ ...j, first_date: firstDate(j.summary) }))

@@ -74,7 +74,7 @@ async function load() {
   if (data.pending.some((p) => p.status === 'processing')) timer = setTimeout(load, 3000);
 }
 
-const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}`;
+const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}${j.is_stock ? ' (stock order)' : ''}`;
 const fileLink = (i) => (i.file_path ? `<a class="btn" href="/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">View</a>` : '');
 
 function render() {
@@ -97,22 +97,27 @@ function render() {
       <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from].filter(Boolean).join(' · '))}</div>
       ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}</div>
       <div class="acts">${fileLink(i)}
-        ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ Add to #${esc(s.job_number)}</button>` : ''}
-        <select id="j-${i.id}">${jobOptions('')}</select><button data-assign-pick="${i.id}">${s ? 'Other job' : 'Add to job'}</button>
-        <button data-stock="${i.id}" title="Not for one job – keep it to take items from later">Keep as stock</button>
+        ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>` : ''}
+        <select id="j-${i.id}" data-assign-select="${i.id}">${jobOptions('').replace('Choose job…', s ? 'Change job…' : 'Choose job…')}</select>
+        <button data-stock="${i.id}" title="Not for one job – keep it to take items from later">📦 Send to stock</button>
         ${i.duplicate_of ? `<button class="danger" data-del="${i.id}">Delete</button>` : ''}</div></div>`;
   }
   h += `<h2>Stock & leftovers</h2>`;
   if (!stock.length) h += '<div class="empty">Nothing left over. When only part of an invoice is used, the rest shows here.</div>';
   for (const i of stock) {
     h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
-      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total)].filter(Boolean).join(' · '))}</div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total), i.stock_job && 'stock order #' + i.stock_job.job_number].filter(Boolean).join(' · '))}</div>
       ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
       <div class="acts">${fileLink(i)}<span class="muted" style="font-size:12px">Take items from a job's<br>＋ Add costs window</span></div></div>`;
   }
   $('#content').innerHTML = h;
 }
 
+document.addEventListener('change', async (e) => {
+  const sel = e.target.closest('select[data-assign-select]'); if (!sel || !sel.value) return;
+  try { await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: sel.value }) }); toast('Added to ' + sel.options[sel.selectedIndex].textContent); } catch (x) { toast(x.message); }
+  load();
+});
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
   const d = b.dataset;
@@ -124,7 +129,7 @@ document.addEventListener('click', async (e) => {
       if (!job) return toast('Choose a job first');
       await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: job }) }); toast('Added to the job'); return load();
     }
-    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Kept as stock – take items from it on any job'); return load(); }
+    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Sent to stock – take items from it on any job'); return load(); }
     if (d.del) { await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load(); }
   } catch (x) { toast(x.message); }
 });

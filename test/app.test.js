@@ -13,6 +13,7 @@ const { codesFromAddresses, inboxAddress } = require('../src/inbound');
 
 const SECRET = 'sm8-app-secret';
 const config = {
+  stockJobClients: ['door image'], stockJobCategories: ['internal'],
   publicUrl: 'http://test', sessionSecret: 'session-secret', servicem8AppSecret: SECRET,
   inboundBaseAddress: 'abc123@inbound.postmarkapp.com', inboundDomain: '', inboundSecret: 'mailkey', devMode: false,
 };
@@ -57,6 +58,9 @@ const JOBS = {
   'job-a': { jobNumber: '208101', jobTitle: '12 Smith St, Penrith' },
   'job-b': { jobNumber: '208102', jobTitle: '7 Bell St, Coburg' },
   'job-c': { jobNumber: '208103', jobTitle: '2A Evans St, Fairfield' },
+  'stock-job': { jobNumber: '208150', jobTitle: 'Stock – motors', clientName: 'Door Image Pty Ltd', categoryName: 'Internal' },
+  'internal-job': { jobNumber: '208151', jobTitle: 'Workshop', clientName: 'Someone', categoryName: 'Internal' },
+  'normal-job': { jobNumber: '208152', jobTitle: '9 Oak St', clientName: 'Jane Citizen', categoryName: 'New Door Installation' },
 };
 let jobCounter = 300000;
 const fetchJobImpl = async (uuid) => ({ ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), quoteAmount: 5000, status: 'Work Order' });
@@ -373,6 +377,75 @@ test('upgrading a database from the first version keeps every invoice on its job
   assert.equal(r.getUnassigned('acc').invoices.find((i) => i.id === 2).lines[0].trace.left_quantity, 7);
   r.db.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('stock order jobs: invoices with their job number go into stock, and other jobs take from it', async () => {
+  const stock = await openCard('stock-job');
+  const real = await openCard('normal-job');
+  assert.equal(repo.getJob('stock-job').is_stock, true, 'client Door Image');
+  await openCard('internal-job');
+  assert.equal(repo.getJob('internal-job').is_stock, true, 'category Internal');
+  assert.equal(repo.getJob('normal-job').is_stock, false);
+
+  // The stock order's invoice is suggested for the stock order job; confirming puts it in stock
+  await email(stock, { subject: 'Order 208150 – 10 motors', file: 'motors.pdf' });
+  const inv = latestInvoice();
+  let s = await summary(stock);
+  assert.equal(s.stock, true);
+  assert.equal(s.suggestions[0].id, inv.id);
+  await post(stock, `/suggestions/${inv.id}/accept`);
+  s = await summary(stock);
+  assert.equal(s.invoices[0].id, inv.id);
+  assert.equal(s.totals.bought, 3410);
+  assert.equal(s.totals.left, 3410);
+  assert.equal(repo.getInvoice(inv.id).stock_job_uuid, 'stock-job');
+
+  // A real job takes 1 motor; the stock order shows it was used, and isn't a cost anywhere else
+  const un = await json(real, '/unassigned');
+  const entry = un.invoices.find((i) => i.id === inv.id);
+  assert.equal(entry.stock_job.job_number, '208150');
+  const motor = entry.lines.find((l) => l.quantity === 10);
+  await post(real, '/assign', { item_id: motor.item_id, quantity: 1 });
+  s = await summary(stock);
+  assert.equal(s.totals.used, 330);
+  assert.equal(s.totals.jobs, 1);
+  assert.equal((await summary(real)).totals.total, 330);
+  assert.equal((await post(stock, '/assign', { item_id: motor.item_id, quantity: 1 })).status, 400, 'a stock order job takes no costs');
+  const rep = await json(real, '/report');
+  assert.ok(!rep.jobs.some((j) => j.job_uuid === 'stock-job'), 'stock order jobs are not in profit reports');
+
+  // The switch: turning a normal job with costs into a stock order job moves its invoices into stock
+  const sw = await openCard('switch-job');
+  await upload(sw, 'door.pdf');
+  const door = latestInvoice();
+  assert.equal((await summary(sw)).totals.total, 3300);
+  await api(sw, '/job', { method: 'PATCH', json: { is_stock: true } });
+  s = await summary(sw);
+  assert.equal(s.stock, true);
+  assert.equal(s.totals.left, 3300);
+  assert.equal(repo.getInvoice(door.id).stock_job_uuid, 'switch-job');
+  await api(sw, '/job', { method: 'PATCH', json: { is_stock: false } });
+  assert.equal((await summary(sw)).stock, undefined);
+});
+
+test('wrong suggestion: change the job, or send it to stock', async () => {
+  const a = await openCard('job-a');
+  await email(a, { subject: 'Re: order 208101', file: 'door-wrong.pdf' });
+  const inv = latestInvoice();
+  const s = await summary(a);
+  assert.ok(s.suggestions.some((x) => x.id === inv.id));
+  assert.ok(s.jobs.some((j) => j.job_uuid === 'job-b') && !s.jobs.some((j) => j.job_uuid === 'job-a'), 'list of other jobs to change to');
+  // Change job: it goes on job-b, not job-a
+  assert.equal((await post(a, `/inbox/${inv.id}/assign`, { job_uuid: 'job-b' })).status, 200);
+  const b = await openCard('job-b');
+  assert.ok((await summary(b)).invoices.some((i) => i.id === inv.id));
+  assert.ok(!(await summary(a)).suggestions.some((x) => x.id === inv.id));
+  // Send to stock
+  await email(a, { subject: 'Re: order 208101 again', file: 'door-stock.pdf' });
+  const inv2 = latestInvoice();
+  await post(a, `/inbox/${inv2.id}/stock`);
+  assert.ok(!(await summary(a)).suggestions.some((x) => x.id === inv2.id));
+  assert.ok((await json(a, '/inbox')).invoices.some((i) => i.id === inv2.id && i.kept_as_stock));
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

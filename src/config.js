@@ -2,6 +2,7 @@ require('dotenv').config();
 const path = require('path');
 
 const bool = (v) => String(v || '').toLowerCase() === 'true';
+const list = (v) => String(v || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
 
 const config = {
   port: Number(process.env.PORT || 3000),
@@ -15,6 +16,11 @@ const config = {
   inboundDomain: (process.env.INBOUND_DOMAIN || '').trim().toLowerCase(),
   inboundSecret: process.env.INBOUND_SECRET || '',
   devMode: bool(process.env.DEV_MODE),
+  // Stock orders are opened as their own ServiceM8 job. A job counts as a stock order job
+  // when its client name or category name contains one of these (comma separated, any case).
+  // Each job also has a switch to correct it either way.
+  stockJobClients: list(process.env.STOCK_JOB_CLIENTS ?? 'Door Image'),
+  stockJobCategories: list(process.env.STOCK_JOB_CATEGORIES ?? 'Internal'),
 };
 
 module.exports = config;
