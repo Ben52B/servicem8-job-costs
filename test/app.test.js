@@ -303,3 +303,39 @@ test('one type per invoice: delivery and fees follow the goods; changing it by h
   assert.equal(job.invoices[0].payment_state, 'paid');
   assert.equal(job.totals.outstanding, 0);
 });
+
+test('invoice added by hand: total only, or some lines plus "Other items (not listed)"', async () => {
+  const token = await openCard('job-manual');
+  const post = (body) => api(token, '/invoices/manual', { method: 'POST', json: body });
+
+  assert.equal((await post({ total: 100 })).status, 400, 'supplier required');
+  assert.equal((await post({ supplier: 'X' })).status, 400, 'total or lines required');
+  assert.equal((await post({ supplier: 'X', total: 100, items: [{ description: 'Gate', amount: 150 }] })).status, 400, 'lines over total');
+  assert.equal((await post({ supplier: 'X', total: 100, category: 'nope' })).status, 400);
+
+  // Lost invoice: only the total is known
+  let r = await post({ supplier: 'Gate Supplies', invoice_date: '2026-10-30', total: '$1,100.00', paid: true });
+  assert.equal(r.status, 201);
+  // Some lines known, rest unknown
+  r = await post({ supplier: 'Gate Supplies', invoice_number: 'G-77', total: 990, category: 'materials',
+    items: [{ description: 'Gate 3.6m', amount: 660 }, { description: '', amount: '' }] });
+  assert.equal(r.status, 201);
+  const { id } = await r.json();
+
+  const job = await (await api(token, '/job')).json();
+  const a = job.invoices.find((i) => i.invoice_number === null && i.supplier === 'Gate Supplies');
+  assert.equal(a.source, 'manual');
+  assert.equal(a.total, 1100);
+  assert.equal(a.tax, 100);
+  assert.equal(a.payment_state, 'paid');
+  assert.deepEqual(a.items.map((l) => [l.description, l.cost]), [['Invoice from Gate Supplies', 1100]]);
+  const b = job.invoices.find((i) => i.id === id);
+  assert.deepEqual(b.items.map((l) => [l.description, l.cost]), [['Gate 3.6m', 660], ['Other items (not listed)', 330]]);
+  assert.equal(b.category, 'materials');
+  assert.equal(job.totals.total, 2090);
+  assert.equal(job.totals.paid, 1100);
+
+  // No file: can't be "read again", and screw-up tags still work on its lines
+  assert.equal((await api(token, `/invoices/${id}/reanalyze`, { method: 'POST' })).status, 400);
+  assert.equal((await api(token, `/items/${b.items[0].id}`, { method: 'PATCH', json: { mistake_reason: 'wrong_size' } })).status, 200);
+});

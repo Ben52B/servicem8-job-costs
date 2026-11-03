@@ -5,6 +5,7 @@ One place for every supplier invoice on a job. For a garage door job, that's the
 - Adds a **Job Costs** button to every ServiceM8 job card.
 - Each job gets its **own email address**. Forward invoices to it, or give it to suppliers.
 - You can also **drag and drop** PDFs or phone photos onto the card.
+- **Add an invoice by hand** when the paperwork is lost: supplier, date and total, plus any lines you remember. Whatever the lines don't cover shows as "Other items (not listed)".
 - Claude **reads each invoice**: supplier, invoice number, dates, line items, GST and total.
 - **Compares costs against the quoted price**: costs so far, expected margin (turns red if you go over the quote) and a bar split by type. The quoted price is taken from the job in ServiceM8, or you can type it in.
 - **Split view**: invoice list on the left, the selected invoice's lines in the middle, and the original invoice on the right so you can check what was read.

@@ -161,6 +161,47 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
     res.json({ ok: true });
   });
 
+  // An invoice typed in by hand (e.g. the paper copy was lost). Lines are optional;
+  // whatever the listed lines don't cover shows as "Other items (not listed)".
+  api.post('/invoices/manual', (req, res) => {
+    const b = req.body || {};
+    const supplier = String(b.supplier || '').trim().slice(0, 200);
+    if (!supplier) return res.status(400).json({ error: 'Supplier is required' });
+    const date = String(b.invoice_date || '');
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Date must be YYYY-MM-DD' });
+    const category = b.category || 'materials';
+    if (!CATEGORIES.includes(category)) return res.status(400).json({ error: 'Unknown type' });
+    const money = (v) => (v === undefined || v === null || v === '' ? null : Number(String(v).replace(/[$,\s]/g, '')));
+
+    const lines = [];
+    for (const l of Array.isArray(b.items) ? b.items.slice(0, 50) : []) {
+      const description = String(l?.description || '').trim().slice(0, 500);
+      const amount = money(l?.amount);
+      if (!description && amount == null) continue; // empty row
+      if (!description) return res.status(400).json({ error: 'Each line needs a description' });
+      if (amount == null || !isFinite(amount)) return res.status(400).json({ error: `Enter an amount for "${description}"` });
+      lines.push({ description, category, line_total: amount });
+    }
+    const listed = lines.reduce((sum, l) => sum + l.line_total, 0);
+    let total = money(b.total);
+    if (total != null && !isFinite(total)) return res.status(400).json({ error: 'Total must be a number' });
+    if (total == null) total = listed;
+    if (!lines.length && !total) return res.status(400).json({ error: 'Enter the total or at least one line' });
+    if (listed - total > 0.005) return res.status(400).json({ error: 'The lines add up to more than the total' });
+    if (total - listed > 0.005) lines.push({ description: lines.length ? 'Other items (not listed)' : `Invoice from ${supplier}`, category, line_total: Math.round((total - listed) * 100) / 100 });
+
+    const gst = b.includes_gst === false ? 0 : Math.round(total / 11 * 100) / 100;
+    const inv = repo.createInvoice({ jobUUID: req.job.job_uuid, source: 'manual' });
+    repo.saveExtraction(inv.id, {
+      document_type: 'manual', supplier_name: supplier, invoice_number: String(b.invoice_number || '').trim().slice(0, 100) || null,
+      invoice_date: date || null, currency: 'AUD', subtotal: Math.round((total - gst) * 100) / 100, tax: gst, total,
+      notes: 'Added by hand – no invoice file.', items: lines,
+    });
+    repo.setInvoiceCategory(inv.id, category);
+    if (b.paid === true) repo.setInvoicePaid(inv.id, true);
+    res.status(201).json({ id: inv.id });
+  });
+
   api.post('/invoices', upload.array('files', 30), (req, res) => {
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'No files received' });
@@ -182,6 +223,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob }) {
   api.post('/invoices/:id/reanalyze', (req, res) => {
     const inv = ownInvoice(req, res);
     if (!inv) return;
+    if (!inv.file_path) return res.status(400).json({ error: 'This invoice was added by hand, so there is no file to read' });
     if (!isSupported(inv.file_name, inv.mime_type)) return res.status(400).json({ error: 'Unsupported file type' });
     processor.enqueue(inv.id);
     res.json({ ok: true });

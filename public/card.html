@@ -81,6 +81,19 @@
   .pill.err { background: var(--bad-soft); color: var(--bad); } .pill.dup { background: #eef0f3; color: var(--muted); }
   .drop { display: block; border: 2px dashed #cfd5dc; border-radius: var(--radius); padding: 12px; text-align: center; color: var(--muted); cursor: pointer; margin-top: 8px; }
   .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: #2a5db0; }
+  .add-manual { width: 100%; justify-content: center; margin-top: 6px; color: #2a5db0; }
+  .manual h2 { font-size: 16px; margin: 0 0 2px; }
+  .manual .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+  .manual label.f { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+  .manual input[type=text], .manual input[type=date], .manual select { font: inherit; color: var(--ink); border: 1px solid #cfd5dc; border-radius: 4px; padding: 6px 8px; width: 100%; background: #fff; }
+  .manual .checks { display: flex; gap: 18px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .manual .checks label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .manual .lines { margin-top: 14px; }
+  .manual .lines .row { display: grid; grid-template-columns: minmax(0, 1fr) 120px 28px; gap: 6px; margin-top: 6px; }
+  .manual .lines .row input.amt { text-align: right; }
+  .manual .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .manual .hint.bad { color: var(--bad); }
+  @media (max-width: 760px) { .manual .grid { grid-template-columns: minmax(0, 1fr); } }
   .email { margin-top: 8px; }
   .email .row { display: flex; gap: 6px; margin-top: 4px; }
   .email code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 6px 7px; font-size: 11.5px; }
@@ -157,6 +170,7 @@
         <input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden>
         <strong>Drop invoices here</strong><br>or click to choose files
       </label>
+      <button class="add-manual" data-add-manual>+ Add invoice by hand</button>
       <div class="email" id="emailBox"></div>
     </aside>
     <main class="panel detail" id="detail"></main>
@@ -167,7 +181,7 @@
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { mkOpen: null, data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
+const state = { adding: false, manual: null, mkOpen: null, data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
@@ -206,7 +220,8 @@ function render() {
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
   if (!typingIn($('#summary'))) renderSummary();
   renderList();
-  if (!typingIn($('#detail'))) renderDetail();
+  if (state.adding) { if (!$('#manualForm')) renderManual(); }
+  else if (!typingIn($('#detail'))) renderDetail();
   renderPreview();
 }
 
@@ -284,7 +299,7 @@ function renderList() {
   $('#listHead').innerHTML = `<b>Invoices</b><span class="muted">${money(d.totals.outstanding)} to pay</span>`;
   $('#list').innerHTML = d.invoices.length ? d.invoices.map((inv) => {
     const ready = inv.status === 'ready';
-    const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || (inv.source === 'email' ? 'Emailed' : 'Uploaded');
+    const sub = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : ''].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source];
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><span class="num">${ready ? money(inv.total) : ''}</span></div>
       <div class="r2"><span>${esc(sub)}</span><span>${inv.mistake_state !== 'none' && inv.mistake_state ? '<span class="pill mk" title="Screw-up">⚠</span> ' : ''}${statusPill(inv)}</span></div>
@@ -302,7 +317,7 @@ function renderDetail() {
   const el = $('#detail');
   if (!inv) { el.innerHTML = '<div class="empty">Drop an invoice on the left, or email it to this job.<br>It is read automatically and appears here.</div>'; return; }
   const ready = inv.status === 'ready';
-  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', inv.source === 'email' ? 'Emailed' : 'Uploaded'].filter(Boolean).join(' · ');
+  const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.invoice_date ? fmtDate(inv.invoice_date) : '', inv.due_date && inv.payment_state !== 'paid' ? 'due ' + fmtDate(inv.due_date) : '', SOURCE_LABEL[inv.source]].filter(Boolean).join(' · ');
   const allPaid = inv.payment_state === 'paid';
   let h = `<div class="d-head"><div><h2>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))} ${statusPill(inv)}</h2><div class="muted">${esc(meta)}</div></div>
     ${ready && inv.items.length ? `<div class="d-controls">
@@ -333,7 +348,7 @@ function renderDetail() {
   if (inv.email_from) h += `<div class="muted" style="margin-top:10px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
-      <button data-reread="${inv.id}">Read again</button>
+      ${inv.file_path ? `<button data-reread="${inv.id}">Read again</button>` : ''}
       ${ready && inv.items.length ? `<select class="inv-mk" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">Edit supplier / total</button>` : ''}
       <span class="spacer"></span>
@@ -352,6 +367,75 @@ function renderDetail() {
   el.innerHTML = h;
 }
 
+// ---------- Add an invoice by hand (lost paperwork etc.) ----------
+const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand' };
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+const num = (v) => { const n = Number(String(v ?? '').replace(/[$,\s]/g, '')); return String(v ?? '').trim() === '' || !isFinite(n) ? null : n; };
+const newManual = () => ({ supplier: '', invoice_number: '', invoice_date: new Date().toLocaleDateString('en-CA'), category: 'materials', total: '', includes_gst: true, paid: false, items: [] });
+
+function readManual() {
+  const f = $('#manualForm'); if (!f) return;
+  const m = state.manual;
+  for (const k of ['supplier', 'invoice_number', 'invoice_date', 'category', 'total']) m[k] = f.elements[k].value;
+  m.includes_gst = f.elements.includes_gst.checked;
+  m.paid = f.elements.paid.checked;
+  m.items = $$('#manualForm .lines .row').map((r) => ({ description: r.querySelector('[name=description]').value, amount: r.querySelector('[name=amount]').value }));
+}
+
+function manualHint() {
+  const m = state.manual;
+  const listed = m.items.reduce((sum, l) => sum + (num(l.amount) || 0), 0);
+  const total = num(m.total);
+  if (!m.items.some((l) => num(l.amount) != null)) return { text: total ? `Saved as one line: “Invoice from ${m.supplier || 'supplier'}” ${money(total)}.` : 'Enter the total. Lines are optional.' };
+  if (total == null) return { text: `Total will be ${money(listed)} (the lines added up).` };
+  if (listed - total > 0.005) return { text: `The lines add up to ${money(listed)}, more than the total.`, bad: true };
+  if (total - listed > 0.005) return { text: `Lines add up to ${money(listed)}. The other ${money(total - listed)} will show as “Other items (not listed)”.` };
+  return { text: 'The lines match the total.' };
+}
+
+function renderManual() {
+  const m = state.manual;
+  const hint = manualHint();
+  $('#detail').innerHTML = `<form class="manual" id="manualForm" autocomplete="off">
+    <h2>Add invoice by hand</h2>
+    <div class="muted">For an invoice you don't have a file for. Enter what you know; lines are optional.</div>
+    <div class="grid">
+      <label class="f">Supplier *<input type="text" name="supplier" value="${esc(m.supplier)}" placeholder="e.g. Gliderol"></label>
+      <label class="f">Invoice number<input type="text" name="invoice_number" value="${esc(m.invoice_number)}" placeholder="if you know it"></label>
+      <label class="f">Date<input type="date" name="invoice_date" value="${esc(m.invoice_date)}"></label>
+      <label class="f">Type<select name="category">${BOOT.categories.map((c) => `<option value="${c}" ${c === m.category ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('')}</select></label>
+      <label class="f">Total incl. GST *<input type="text" name="total" inputmode="decimal" value="${esc(m.total)}" placeholder="e.g. 1100.00"></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" name="includes_gst" ${m.includes_gst ? 'checked' : ''}> Includes GST</label>
+      <label><input type="checkbox" name="paid" ${m.paid ? 'checked' : ''}> Already paid</label>
+    </div>
+    <div class="lines"><b>Lines</b> <span class="muted">(optional, amounts incl. GST)</span>
+      ${m.items.map((l, i) => `<div class="row"><input type="text" name="description" value="${esc(l.description)}" placeholder="e.g. Gate 3.6m"><input type="text" class="amt" name="amount" inputmode="decimal" value="${esc(l.amount)}" placeholder="0.00"><button type="button" class="link" data-manual-remove-line="${i}" title="Remove line">✕</button></div>`).join('')}
+      <div style="margin-top:8px"><button type="button" data-manual-add-line>+ Add line</button></div>
+      <div class="hint ${hint.bad ? 'bad' : ''}" id="manualHint">${esc(hint.text)}</div>
+    </div>
+    <div class="actions"><button type="submit" class="primary">Save invoice</button><button type="button" data-manual-cancel>Cancel</button></div>
+  </form>`;
+}
+
+$('#detail').addEventListener('input', (e) => {
+  if (!e.target.closest('#manualForm')) return;
+  readManual();
+  const h = manualHint(); const el = $('#manualHint');
+  if (el) { el.textContent = h.text; el.classList.toggle('bad', !!h.bad); }
+});
+$('#detail').addEventListener('submit', async (e) => {
+  if (e.target.id !== 'manualForm') return;
+  e.preventDefault();
+  readManual();
+  try {
+    const r = await api('/invoices/manual', { method: 'POST', body: JSON.stringify(state.manual) });
+    state.adding = false; state.manual = null; state.selected = r.id; toast('Invoice added');
+  } catch (x) { return toast(x.message); }
+  load();
+});
+
 // ---------- Original invoice (only reloads when a different file is selected) ----------
 function renderPreview() {
   const inv = selectedInvoice();
@@ -359,7 +443,7 @@ function renderPreview() {
   if (key === state.previewKey) return;
   state.previewKey = key;
   const el = $('#preview');
-  if (key === 'none') { el.innerHTML = '<div class="empty">The original invoice shows here.</div>'; return; }
+  if (key === 'none') { el.innerHTML = `<div class="empty">${inv && inv.source === 'manual' ? 'Added by hand – there is no invoice file.' : 'The original invoice shows here.'}</div>`; return; }
   const url = fileUrl(inv);
   const mime = inv.mime_type || '';
   const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
@@ -373,7 +457,11 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const ds = t.dataset;
   try {
-    if (ds.select) { state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
+    if (ds.addManual !== undefined) { state.adding = true; state.manual = newManual(); renderManual(); $('#manualForm [name=supplier]').focus(); return; }
+    if (ds.manualCancel !== undefined) { state.adding = false; state.manual = null; return render(); }
+    if (ds.manualAddLine !== undefined) { readManual(); state.manual.items.push({ description: '', amount: '' }); renderManual(); $$('#manualForm .lines .row input[name=description]').pop()?.focus(); return; }
+    if (ds.manualRemoveLine) { readManual(); state.manual.items.splice(Number(ds.manualRemoveLine), 1); return renderManual(); }
+    if (ds.select) { state.adding = false; state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; return render(); }
     if (ds.copy !== undefined) {
       const text = $('#inbox').textContent;
       try { await navigator.clipboard.writeText(text); }
