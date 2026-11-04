@@ -247,23 +247,39 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (!config.servicem8AppId) {
       return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>SERVICEM8_APP_ID</b> (and <b>SERVICEM8_APP_SECRET</b>) in Render, then try again.</p>'));
     }
-    const state = jwt.sign({ purpose: 'sm8-oauth' }, config.sessionSecret, { expiresIn: '15m' });
-    res.redirect(oauth.authorizeUrl({ appId: config.servicem8AppId, redirectUri: redirectUri(), scope: config.servicem8Scopes, state }));
+    res.redirect(approvalUrl(0));
   });
+
+  // Permissions to ask for, best first. If ServiceM8 rejects one, the next (smaller) set is tried.
+  const BASE_SCOPES = 'read_jobs read_customers read_job_materials';
+  const scopeSets = () => [...new Set([config.servicem8Scopes, `${BASE_SCOPES} read_attachments manage_attachments read_job_notes publish_job_notes`,
+    `${BASE_SCOPES} manage_attachments publish_job_notes`, `${BASE_SCOPES} manage_attachments`, BASE_SCOPES].map((x) => x.trim().replace(/\s+/g, ' ')))];
+  function approvalUrl(attempt) {
+    const state = jwt.sign({ purpose: 'sm8-oauth', attempt }, config.sessionSecret, { expiresIn: '15m' });
+    return oauth.authorizeUrl({ appId: config.servicem8AppId, redirectUri: redirectUri(), scope: scopeSets()[attempt], state });
+  }
 
   // ServiceM8 sends the user back here after they approve.
   app.get('/servicem8/oauth/callback', async (req, res) => {
+    let st;
     try {
-      const st = jwt.verify(String(req.query.state || ''), config.sessionSecret);
+      st = jwt.verify(String(req.query.state || ''), config.sessionSecret);
       if (st.purpose !== 'sm8-oauth') throw new Error('bad state');
     } catch {
       return res.status(400).type('html').send(htmlPage('Job Costs', '<h2>That link has expired</h2><p>Please install / activate the add-on again from ServiceM8.</p>'));
+    }
+    const attempt = Number(st.attempt) || 0;
+    if (/scope/i.test(`${req.query.error || ''} ${req.query.error_description || ''}`) && attempt + 1 < scopeSets().length) {
+      console.log(`ServiceM8 rejected permissions "${scopeSets()[attempt]}"; trying "${scopeSets()[attempt + 1]}"`);
+      return res.redirect(approvalUrl(attempt + 1));
     }
     if (req.query.error || !req.query.code) {
       return res.status(400).type('html').send(htmlPage('Job Costs', `<h2>Not connected</h2><p>ServiceM8 said: ${String(req.query.error_description || req.query.error || 'no approval code').replace(/</g, '&lt;')}</p>`));
     }
     try {
       const tokens = await oauth.exchangeCode({ appId: config.servicem8AppId, appSecret: config.servicem8AppSecret, code: String(req.query.code), redirectUri: redirectUri() });
+      console.log(`ServiceM8 approved permissions: ${scopeSets()[attempt]}`);
+      const diaryOk = /attachments/.test(scopeSets()[attempt]);
       const acc = await oauth.fetchAccount(tokens.accessToken);
       if (acc) {
         repo.saveTokens(acc.accountUUID, tokens);
@@ -273,7 +289,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         repo.savePendingTokens(tokens);
       }
       res.type('html').send(htmlPage('Job Costs connected', `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Job Costs is connected</h2>
-        <p>${acc && acc.name ? `Connected to <b>${String(acc.name).replace(/</g, '&lt;')}</b>. ` : ''}Open any job in ServiceM8 and click <b>Job Costs</b>.</p><p style="color:#6b8a82">You can close this page.</p>`));
+        <p>${acc && acc.name ? `Connected to <b>${String(acc.name).replace(/</g, '&lt;')}</b>. ` : ''}Open any job in ServiceM8 and click <b>Job Costs</b>.</p>${diaryOk ? '' : '<p>Note: ServiceM8 didn\u2019t allow access to the job diary, so invoices won\u2019t be copied there.</p>'}<p style="color:#6b8a82">You can close this page.</p>`));
     } catch (e) {
       console.error(`ServiceM8 connect failed: ${e.message}`);
       res.status(502).type('html').send(htmlPage('Job Costs', `<h2>Couldn't connect to ServiceM8</h2><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check SERVICEM8_APP_ID and SERVICEM8_APP_SECRET in Render, then try again.</p>`));

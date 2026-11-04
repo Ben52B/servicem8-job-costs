@@ -571,6 +571,12 @@ test('installing the add-on: approval in ServiceM8 saves access, used when the b
     const state = loc.searchParams.get('state');
 
     assert.equal((await fetch(`${b2}/servicem8/oauth/callback?code=good-code&state=forged`)).status, 400);
+    // ServiceM8 rejects a permission: a smaller set is asked for instead
+    const retry = await fetch(`${b2}/servicem8/oauth/callback?error=invalid_scope&error_description=${encodeURIComponent('An unsupported scope was requested')}&state=${state}`, { redirect: 'manual' });
+    assert.equal(retry.status, 302);
+    const loc2 = new URL(retry.headers.get('location'));
+    assert.notEqual(loc2.searchParams.get('scope'), loc.searchParams.get('scope'));
+    assert.match(loc2.searchParams.get('scope'), /^read_jobs read_customers read_job_materials/);
     const cb = await fetch(`${b2}/servicem8/oauth/callback?code=good-code&state=${state}`);
     assert.equal(cb.status, 200);
     assert.match(await cb.text(), /Job Costs is connected/);

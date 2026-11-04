@@ -36,7 +36,7 @@ One place for every supplier invoice, matched to your ServiceM8 jobs. For a gara
 - **Copied to the diary:** an invoice that is wholly on one job is attached to that job's diary in ServiceM8, with a short note (supplier, invoice number, amount ex GST). Shared invoices (e.g. 1 of 10 motors) and stock stay in Job Costs only. Typed-in invoices get the note; the file follows if you attach it later.
 - **Pulled from the diary:** ＋ Add costs → **📎 From ServiceM8 diary** lists the job's PDFs and photos; click **Add** and it's read like an upload. Files already in Job Costs show **✓ Added**, and nothing is ever copied back.
 - **Removing:** taking an invoice off a job in Job Costs offers *Also remove it from the ServiceM8 job diary*. If a file is deleted in the diary, the next time the card opens it asks whether to remove it from Job Costs too.
-- Needs the attachment and note permissions in `SERVICEM8_SCOPES` (`manage_attachments read_job_attachments publish_job_attachments read_job_notes publish_job_notes`). After upgrading, open the add-on's install link once and approve again.
+- Needs the attachment and note permissions in `SERVICEM8_SCOPES` (`read_attachments manage_attachments read_job_notes publish_job_notes`; if ServiceM8 rejects one, smaller sets are tried automatically). After upgrading, open the add-on's install link once and approve again.
 
 ## How it fits together
 
