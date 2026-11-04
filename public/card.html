@@ -277,7 +277,8 @@ const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.se
 
 function render() {
   const j = state.data.job || {};
-  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number : '', j.job_title].filter(Boolean).join(' · ');
+  const parts = state.data.splitParts || [];
+  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number + (parts.length ? ` (+ ${parts.map((p) => '#' + p).join(', ')})` : '') : '', j.job_title].filter(Boolean).join(' · ');
   const badge = $('#inboxBadge');
   badge.hidden = !state.data.inboxCount; badge.textContent = state.data.inboxCount || '';
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
@@ -302,7 +303,7 @@ function renderSuggestions() {
   const jobs = state.data.jobs || [];
   const confirm = state.data.stock ? '✓ Add to stock' : '✓ Add to this job';
   $('#suggest').innerHTML = !s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this ${state.data.stock ? 'stock order' : 'job'} <span class="badge">${s.length}</span></div>
-    ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total)}</span>
+    ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total_ex ?? x.total)} ex GST</span>
       <div class="why">${esc(x.reason || '')}</div></div>
       <div class="acts"><button class="primary small" data-accept="${x.id}">${confirm}</button>
         <select data-move="${x.id}" title="Wrong job? Pick the right one"><option value="">Change job…</option>${jobs.map((j) => `<option value="${esc(j.job_uuid)}">${jobOpt(j)}</option>`).join('')}</select>
@@ -330,7 +331,7 @@ function renderKpis() {
   let hero;
   if (!hasQuote || state.editQuote) {
     hero = `<div class="kpi hero"><div class="l">${hasQuote ? 'Quoted price' : 'Profit so far'}</div>
-      ${hasQuote ? '' : '<div class="s">Add the quoted price (incl. GST) to see profit</div>'}
+      ${hasQuote ? '' : '<div class="s">Add the quoted price (ex GST) to see profit</div>'}
       <div class="quote-edit"><input id="quoteInput" inputmode="decimal" placeholder="e.g. 2640" value="${hasQuote ? Number(t.quote).toFixed(2) : ''}"><button class="small" data-save-quote>Save</button>${state.editQuote ? '<button class="small" data-cancel-quote>Cancel</button>' : ''}</div></div>`;
   } else {
     const src = state.data.job.quote_source === 'manual' ? 'typed in' : 'from ServiceM8';
@@ -340,7 +341,7 @@ function renderKpis() {
   }
   const lost = hasQuote && t.quote ? Math.round(t.mistakes / t.quote * 1000) / 10 : null;
   $('#kpis').innerHTML = `${hero}
-    <div class="kpi card"><div class="l">Costs</div><div class="v">${money0(t.total)}</div><div class="bar">${bar}</div><div class="legend">${legend || '<span>Add costs to see them by type</span>'}</div></div>
+    <div class="kpi card"><div class="l">Costs <span style="font-weight:500">ex GST</span></div><div class="v">${money0(t.total)}</div><div class="bar">${bar}</div><div class="legend">${legend || '<span>Add costs to see them by type</span>'}</div></div>
     <div class="kpi card"><div class="l">Paid</div><div class="v good">${money0(t.paid)}</div><div class="s">${t.outstanding > 0.004 ? `<b style="color:var(--warn)">${money(t.outstanding)}</b> still to pay` : 'Nothing to pay'} · ${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</div></div>
     <div class="kpi card"><div class="l">⚠ Screw-ups</div><div class="v ${t.mistakes > 0 ? 'bad' : ''}">${money0(t.mistakes)}</div>
       <div class="s">${t.mistakes > 0 ? `${t.mistakePct}% of costs${lost != null ? ` · cost ${lost} margin pts` : ''}<br>Without them: ${hasQuote ? `${signed(t.cleanMargin)} profit · ${t.cleanMarginPct}%` : money0(t.cleanTotal) + ' costs'}` : 'None on this job 🎉'}</div></div>`;
@@ -402,7 +403,7 @@ function renderStockDetail(inv, el) {
         <td class="num"><b>${q ? qty(it.trace.left_quantity) : money(it.trace.left_amount)}</b>${q ? `<br><span class="muted">${money(it.trace.left_amount)}</span>` : ''}</td></tr>`;
     }
     h += '</tbody></table>';
-    h += `<div class="d-total">Invoice total ${money(inv.total)} · used ${money(inv.used)} · <b>${money(inv.left)} still in stock</b></div>`;
+    h += `<div class="d-total">Invoice ${money(inv.total_ex ?? inv.total)} ex GST · used ${money(inv.used)} · <b>${money(inv.left)} still in stock</b></div>`;
   }
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv.id)}" target="_blank" rel="noopener">View invoice</a><button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
@@ -442,7 +443,7 @@ function renderDetail() {
   if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
   else if (ready && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
-  if (inv.other_jobs.length) h += `<div class="note info">Shared invoice: also on ${inv.other_jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ')}. This job: <b>${money(inv.job_total)}</b> of ${money(inv.total)}. Paid is for the whole invoice.</div>`;
+  if (inv.other_jobs.length) h += `<div class="note info">Shared invoice: also on ${inv.other_jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ')}. This job: <b>${money(inv.job_total)}</b> of ${money(inv.total_ex ?? inv.total)} (ex GST). Paid is for the whole invoice.</div>`;
 
   if (inv.items.length) {
     h += `<table><thead><tr><th>Item</th><th class="num">This job</th><th class="num">Cost</th></tr></thead><tbody>`;
@@ -464,7 +465,7 @@ function renderDetail() {
         <td class="num"><b>${money(it.cost)}</b></td></tr>`;
     }
     h += '</tbody></table>';
-    h += `<div class="d-total">${inv.tax != null ? 'Invoice GST ' + money(inv.tax) + ' · ' : ''}Invoice total ${money(inv.total)}${inv.job_total !== inv.total ? ` · <b>This job ${money(inv.job_total)}</b>` : ''}</div>`;
+    h += `<div class="d-total">${inv.tax != null ? 'Invoice GST ' + money(inv.tax) + ' · ' : ''}Invoice total ${money(inv.total)} incl. GST · <b>This job ${money(inv.job_total)} ex GST</b></div>`;
   }
   if (inv.other_lines.length) {
     h += `<div class="others"><b>Other lines on this invoice</b>${inv.other_lines.map((o) => `<div class="o"><div>${esc(o.description)} <span class="muted">${money(o.line_cost)}</span>${traceChips(o.trace)}</div>
@@ -594,7 +595,7 @@ function renderPick() {
   return `<input class="search" id="pickSearch" placeholder="Search supplier, invoice number or item…">` + list.map((i) => {
     const sugg = i.suggestion ? `<div class="trace"><span class="left">💡 Suggested for #${esc(i.suggestion.job_number || '?')}${i.suggestion.reason ? ' – ' + esc(i.suggestion.reason) : ''}</span></div>` : '';
     const head = `<div class="t">${esc(i.supplier || 'Unknown supplier')} ${i.untouched ? '<span class="chip c-materials">Whole invoice</span>' : '<span class="chip c-stock">Part left</span>'}${i.kept_as_stock ? ` <span class="chip c-stock">Stock${i.stock_job ? ' · order #' + esc(i.stock_job.job_number || '?') : ''}</span>` : ''}</div>
-      <div class="sub">${[i.invoice_number ? '#' + esc(i.invoice_number) : '', i.invoice_date ? fmtDate(i.invoice_date) : '', money(i.total), `${i.lines.length} line${i.lines.length === 1 ? '' : 's'}${i.untouched ? '' : ' with something left'}`].filter(Boolean).join(' · ')}</div>${sugg}`;
+      <div class="sub">${[i.invoice_number ? '#' + esc(i.invoice_number) : '', i.invoice_date ? fmtDate(i.invoice_date) : '', money(i.total_ex ?? i.total) + ' ex GST', `${i.lines.length} line${i.lines.length === 1 ? '' : 's'}${i.untouched ? '' : ' with something left'}`].filter(Boolean).join(' · ')}</div>${sugg}`;
     const expanded = !state.data.stock && (!i.untouched || m.expanded.has(i.id));
     return `<div class="pick"><div class="top"><div>${head}</div>
       ${i.untouched ? `<div class="take"><select id="ic-${i.id}">${catOptions(i.category || 'materials')}</select><select id="im-${i.id}">${reasonOptions('')}</select>

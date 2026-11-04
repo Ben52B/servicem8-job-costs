@@ -61,9 +61,12 @@ const JOBS = {
   'stock-job': { jobNumber: '208150', jobTitle: 'Stock – motors', clientName: 'Door Image Pty Ltd', categoryName: 'Internal' },
   'internal-job': { jobNumber: '208151', jobTitle: 'Workshop', clientName: 'Someone', categoryName: 'Internal' },
   'normal-job': { jobNumber: '208152', jobTitle: '9 Oak St', clientName: 'Jane Citizen', categoryName: 'New Door Installation' },
+  'job-207974': { jobNumber: '207974', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 18450 },
+  'job-207974A': { jobNumber: '207974A', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 9225 },
 };
 let jobCounter = 300000;
-const fetchJobImpl = async (uuid) => ({ ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), quoteAmount: 5000, status: 'Work Order' });
+const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), status: 'Work Order' });
+const findJobByNumberImpl = async (num) => Object.keys(JOBS).find((u) => JOBS[u].jobNumber === num) || null;
 const fetchActiveJobsImpl = async () => [{ jobUUID: 'never-opened', jobNumber: '208999', jobTitle: '5 Pine Rd, Coburg', status: 'Work Order' }];
 
 let server, base, repo, processor, dataDir;
@@ -72,7 +75,7 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-'));
   repo = openDb(dataDir);
   processor = createProcessor({ repo, analyzer: fakeAnalyzer, log: { error() {} } });
-  const app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl });
+  const app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -145,11 +148,11 @@ test('upload on a job: read, put on that job, paid, type, take off, delete', asy
   const [id] = await upload(token, 'door.pdf');
   let s = await summary(token);
   const inv = s.invoices.find((i) => i.id === id);
-  assert.equal(inv.job_total, 3300);
+  assert.equal(inv.job_total, 3000, 'ex GST: $3,300 invoice with $300 GST');
   assert.equal(inv.whole, true);
   assert.deepEqual(s.byCategory.map((c) => c.name), ['materials'], 'delivery counts with the goods');
   assert.equal(s.totals.quote, 5000);
-  assert.equal(s.totals.margin, 1700);
+  assert.equal(s.totals.margin, 2000);
 
   await api(token, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
   s = await summary(token);
@@ -157,7 +160,7 @@ test('upload on a job: read, put on that job, paid, type, take off, delete', asy
 
   await api(token, `/invoices/${id}`, { method: 'PATCH', json: { category: 'subcontractor' } });
   s = await summary(token);
-  assert.deepEqual(s.byCategory.map((c) => [c.name, c.total]), [['subcontractor', 3300]]);
+  assert.deepEqual(s.byCategory.map((c) => [c.name, c.total]), [['subcontractor', 3000]]);
 
   // Take it off the job: it's back in "not assigned yet" for the business
   await api(token, `/invoices/${id}`, { method: 'DELETE' });
@@ -240,11 +243,11 @@ test('Add costs: 10 motors shared between jobs, with where each one went', async
   const entry = un.invoices.find((i) => i.id === inv.id);
   const motor = entry.lines.find((l) => l.description === 'Merlin opener');
   const delivery = entry.lines.find((l) => l.description === 'Delivery');
-  assert.equal(motor.unit_cost, 330);
+  assert.equal(motor.unit_cost, 300, 'ex GST');
 
   // Job A takes 1 motor (as materials, a screw-up) and the delivery; B takes 2; C takes 3
   assert.equal((await post(a, '/assign', { item_id: motor.item_id, quantity: 1, category: 'materials', mistake_reason: 'wrong_size' })).status, 200);
-  assert.equal((await post(a, '/assign', { item_id: delivery.item_id, amount: 110 })).status, 200);
+  assert.equal((await post(a, '/assign', { item_id: delivery.item_id, amount: 100 })).status, 200);
   assert.equal((await post(b, '/assign', { item_id: motor.item_id, quantity: 2 })).status, 200);
   assert.equal((await post(c, '/assign', { item_id: motor.item_id, quantity: 3 })).status, 200);
   const over = await post(b, '/assign', { item_id: motor.item_id, quantity: 5 });
@@ -254,15 +257,15 @@ test('Add costs: 10 motors shared between jobs, with where each one went', async
   // Trace: where the other motors went, seen from any job
   const sB = await summary(b);
   const line = sB.invoices.find((i) => i.id === inv.id).items[0];
-  assert.equal(line.cost, 660);
+  assert.equal(line.cost, 600);
   assert.equal(line.trace.left_quantity, 4);
   assert.deepEqual(line.trace.jobs.map((j) => [j.job_number, j.quantity, j.this_job]), [['208101', 1, false], ['208102', 2, true], ['208103', 3, false]]);
   assert.deepEqual(sB.invoices.find((i) => i.id === inv.id).other_lines.map((o) => o.description), ['Delivery']);
 
   // Screw-up and type belong to each job's share
   const sA = await summary(a);
-  assert.equal(sA.invoices.find((i) => i.id === inv.id).job_total, 440);
-  assert.equal(sA.totals.mistakes >= 330, true);
+  assert.equal(sA.invoices.find((i) => i.id === inv.id).job_total, 400);
+  assert.equal(sA.totals.mistakes >= 300, true);
   assert.equal(sB.invoices.find((i) => i.id === inv.id).mistake_state, 'none');
 
   // Change a share directly, give back, and paid is one tick for the whole bill
@@ -313,7 +316,7 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
     items: [{ description: 'Gate 3.6m', amount: 660 }] });
   const { id } = await r.json();
   let inv = (await summary(t)).invoices.find((i) => i.id === id);
-  assert.deepEqual(inv.items.map((l) => [l.description, l.cost]), [['Gate 3.6m', 660], ['Other items (not listed)', 330]]);
+  assert.deepEqual(inv.items.map((l) => [l.description, l.cost]), [['Gate 3.6m', 600], ['Other items (not listed)', 300]], 'ex GST');
   assert.equal(inv.source, 'manual');
 
   const fd = new FormData();
@@ -322,7 +325,7 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
   await processor.idle();
   inv = (await summary(t)).invoices.find((i) => i.id === id);
   assert.equal(inv.supplier, 'Door Supplies Pty Ltd');
-  assert.equal(inv.job_total, 3300, 'the whole real invoice is on the job');
+  assert.equal(inv.job_total, 3000, 'the whole real invoice is on the job');
   assert.equal(inv.items.length, 3);
   assert.equal(inv.payment_state, 'paid');
   assert.equal(inv.category, 'subcontractor');
@@ -337,7 +340,7 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
   const inv2 = (await summary(t)).invoices.find((i) => i.id === r2.id);
   assert.equal(inv2.status, 'ready');
   assert.match(inv2.error, /does not look like an invoice/);
-  assert.equal(inv2.job_total, 500);
+  assert.equal(inv2.job_total, 454.55, 'typed $500 incl. GST');
 });
 
 test('quoted price comes from ServiceM8 and can be overridden', async () => {
@@ -405,8 +408,8 @@ test('stock order jobs: invoices with their job number go into stock, and other 
   await post(stock, `/suggestions/${inv.id}/accept`);
   s = await summary(stock);
   assert.equal(s.invoices[0].id, inv.id);
-  assert.equal(s.totals.bought, 3410);
-  assert.equal(s.totals.left, 3410);
+  assert.equal(s.totals.bought, 3100);
+  assert.equal(s.totals.left, 3100);
   assert.equal(repo.getInvoice(inv.id).stock_job_uuid, 'stock-job');
 
   // A real job takes 1 motor; the stock order shows it was used, and isn't a cost anywhere else
@@ -416,9 +419,9 @@ test('stock order jobs: invoices with their job number go into stock, and other 
   const motor = entry.lines.find((l) => l.quantity === 10);
   await post(real, '/assign', { item_id: motor.item_id, quantity: 1 });
   s = await summary(stock);
-  assert.equal(s.totals.used, 330);
+  assert.equal(s.totals.used, 300);
   assert.equal(s.totals.jobs, 1);
-  assert.equal((await summary(real)).totals.total, 330);
+  assert.equal((await summary(real)).totals.total, 300);
   assert.equal((await post(stock, '/assign', { item_id: motor.item_id, quantity: 1 })).status, 400, 'a stock order job takes no costs');
   const rep = await json(real, '/report');
   assert.ok(!rep.jobs.some((j) => j.job_uuid === 'stock-job'), 'stock order jobs are not in profit reports');
@@ -427,11 +430,11 @@ test('stock order jobs: invoices with their job number go into stock, and other 
   const sw = await openCard('switch-job');
   await upload(sw, 'door.pdf');
   const door = latestInvoice();
-  assert.equal((await summary(sw)).totals.total, 3300);
+  assert.equal((await summary(sw)).totals.total, 3000);
   await api(sw, '/job', { method: 'PATCH', json: { is_stock: true } });
   s = await summary(sw);
   assert.equal(s.stock, true);
-  assert.equal(s.totals.left, 3300);
+  assert.equal(s.totals.left, 3000);
   assert.equal(repo.getInvoice(door.id).stock_job_uuid, 'switch-job');
   await api(sw, '/job', { method: 'PATCH', json: { is_stock: false } });
   assert.equal((await summary(sw)).stock, undefined);
@@ -585,6 +588,32 @@ test('installing the add-on: approval in ServiceM8 saves access, used when the b
   } finally {
     srv.close();
   }
+});
+
+test('split jobs (#207974, #207974A…) are one job; the price is the full job without "Partial invoice" lines', async () => {
+  const { fullPriceFromLines } = require('../src/servicem8');
+  const { mainJobNumber } = require('../src/db');
+  // The lines from job #207974 in ServiceM8
+  assert.equal(fullPriceFromLines([
+    { name: 'Supply and install new pedestrian gate', quantity: '1', price: '2650' }, { name: 'Sliding Gate', quantity: '1', price: '14250' },
+    { name: 'Electrical work', quantity: '1', price: '0' }, { name: 'Electric strike', quantity: '1', price: '1850' },
+    { name: 'Discount', quantity: '-1', price: '300' }, { name: 'Partial invoice #207974A', quantity: '-1', price: '9225' },
+    { name: 'Partial invoice #207974B', quantity: '-1', price: '0' }, { name: 'Old line', quantity: '1', price: '999', active: '0' },
+  ]), 18450);
+  assert.equal(mainJobNumber('207974A'), '207974');
+  assert.equal(mainJobNumber('207974'), null);
+
+  // Clicking Job Costs on #207974A opens #207974 (main job is found in ServiceM8 first time)
+  const t = await openCard('job-207974A');
+  const s = await summary(t);
+  assert.equal(s.job.job_uuid, 'job-207974');
+  assert.equal(s.totals.quote, 18450, 'the full job price, not the split part');
+  assert.deepEqual(s.splitParts, ['207974A']);
+  assert.ok(!s.jobs.some((j) => j.job_number === '207974A'), 'split parts are not offered as separate jobs');
+
+  // An invoice mentioning the split part is suggested for the main job
+  await email(t, { subject: 'Gate motor for job 207974A', file: 'door-207974.pdf' });
+  assert.equal(latestInvoice().suggested_job_uuid, 'job-207974');
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

@@ -56,7 +56,7 @@
       <span class="muted">From</span><input type="date" id="from"><span class="muted">to</span><input type="date" id="to">
     </div>
   </header>
-  <div class="muted" style="margin:-6px 0 12px;font-size:12px">Jobs are counted by the date of their first invoice. All amounts incl. GST. Profit only counts jobs with a quoted price.</div>
+  <div class="muted" style="margin:-6px 0 12px;font-size:12px">Jobs are counted by the date of their first invoice. All amounts ex GST. Profit only counts jobs with a quoted price.</div>
   <section class="tiles" id="tiles"></section>
   <div id="notAssigned" class="muted" style="margin:-4px 0 12px;font-size:12.5px"></div>
   <section class="grid2">
@@ -134,7 +134,7 @@ function render() {
 $('#csv').addEventListener('click', () => {
   if (!data) return;
   const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const rows = [['Date', 'Job number', 'Job', 'Supplier', 'Invoice', 'Item', 'Reason', 'Cost incl GST', 'Paid']]
+  const rows = [['Date', 'Job number', 'Job', 'Supplier', 'Invoice', 'Item', 'Reason', 'Cost ex GST', 'Paid']]
     .concat(data.mistakeItems.map((i) => [i.date, i.job_number, i.job_title, i.supplier, i.invoice_number, i.description, REASON[i.reason] || i.reason, i.cost.toFixed(2), i.paid ? 'Yes' : 'No']));
   const blob = new Blob([rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
   const a = document.createElement('a');

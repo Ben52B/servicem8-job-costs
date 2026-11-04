@@ -93,7 +93,7 @@ function render() {
   }
   for (const i of fresh) {
     const s = i.suggestion;
-    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total)}</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
+    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total_ex ?? i.total)} ex GST</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
       <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from].filter(Boolean).join(' · '))}</div>
       ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}</div>
       <div class="acts">${fileLink(i)}

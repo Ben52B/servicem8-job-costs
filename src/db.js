@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS allocations (
 CREATE INDEX IF NOT EXISTS idx_alloc_job ON allocations(job_uuid);
 
 -- Emails already read from the mailbox (so the mailbox itself is never changed).
+CREATE TABLE IF NOT EXISTS meta (
+  key    TEXT PRIMARY KEY,
+  value  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS processed_mail (
   mail_key    TEXT PRIMARY KEY,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -129,6 +134,12 @@ function invoiceCategory(items) {
   return pick ? pick[0] : 'materials';
 }
 
+/** Invoice total without GST (no GST shown = nothing to take off). */
+function exGst(total, tax) {
+  if (total == null || !isFinite(total)) return total;
+  return round2(Number(total) - (Number(tax) || 0));
+}
+
 /**
  * Spread the invoice total across its lines so that line costs always add up to
  * the amount actually owed (handles tax, freight, rounding and discounts).
@@ -149,6 +160,15 @@ function allocateCosts(items, invoiceTotal) {
   return costs;
 }
 
+/**
+ * Split jobs: ServiceM8 partial invoicing makes #207974A, #207974B… next to #207974.
+ * Returns the main job number for a split part, or null for a normal job number.
+ */
+function mainJobNumber(jobNumber) {
+  const m = String(jobNumber || '').trim().match(/^(\d+)[A-Za-z]{1,2}$/);
+  return m ? m[1] : null;
+}
+
 /** "12a Smith St, Penrith" -> { number: '12a', street: 'smith' } for address matching. */
 function addressKey(text) {
   const m = String(text || '').toLowerCase().match(/(\d+[a-z]?)\s*[,/-]?\s+([a-z]{3,})/);
@@ -165,7 +185,13 @@ function openDb(dataDir) {
   db.exec(SCHEMA);
   migrateColumns(db);
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_account ON invoices(account_uuid)');
-  return createRepo(db, dataDir);
+  const repo = createRepo(db, dataDir);
+  // Costs are counted ex GST (like ServiceM8's prices). Convert invoices saved before that.
+  if (!db.prepare("SELECT 1 FROM meta WHERE key = 'costs_ex_gst'").get()) {
+    for (const { id } of db.prepare('SELECT id FROM invoices WHERE total IS NOT NULL').all()) repo.reallocate(id);
+    db.prepare("INSERT INTO meta (key, value) VALUES ('costs_ex_gst', '1')").run();
+  }
+  return repo;
 }
 
 const cols = (db, table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
@@ -284,6 +310,23 @@ function createRepo(db, dataDir) {
       return j ? { ...j, is_stock: j.stock_manual != null ? !!j.stock_manual : !!j.stock_auto } : j;
     },
 
+    findJobByNumber(accountUUID, jobNumber) {
+      return db.prepare('SELECT job_uuid FROM jobs WHERE account_uuid IS ? AND job_number = ? LIMIT 1').get(accountUUID, String(jobNumber))?.job_uuid || null;
+    },
+
+    /** Split parts of a main job that we know of (e.g. ['207974A', '207974B']). */
+    splitParts(accountUUID, jobNumber) {
+      if (!jobNumber || mainJobNumber(jobNumber)) return [];
+      return db.prepare("SELECT job_number FROM jobs WHERE account_uuid IS ? AND job_number LIKE ? ORDER BY job_number").all(accountUUID, `${jobNumber}%`)
+        .map((j) => j.job_number).filter((n) => mainJobNumber(n) === String(jobNumber));
+    },
+
+    /** Leave out split parts whose main job we know: they're shown as the main job. */
+    _withoutSplitParts(jobs) {
+      const numbers = new Set(jobs.map((j) => String(j.job_number)));
+      return jobs.filter((j) => { const main = mainJobNumber(j.job_number); return !main || !numbers.has(main); });
+    },
+
     isStockJob(jobUUID) {
       return !!repo.getJob(jobUUID)?.is_stock;
     },
@@ -322,8 +365,8 @@ function createRepo(db, dataDir) {
 
     /** Jobs to pick from (newest job numbers first). */
     listJobs(accountUUID) {
-      return db.prepare(`SELECT job_uuid, job_number, job_title, sm8_status, COALESCE(stock_manual, stock_auto) AS is_stock FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
-        ORDER BY CAST(job_number AS INTEGER) DESC, job_number DESC`).all(accountUUID);
+      return repo._withoutSplitParts(db.prepare(`SELECT job_uuid, job_number, job_title, sm8_status, COALESCE(stock_manual, stock_auto) AS is_stock FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
+        ORDER BY CAST(job_number AS INTEGER) DESC, job_number DESC`).all(accountUUID));
     },
 
     /** The business's account row (created on first use) – holds its one inbox code. */
@@ -453,7 +496,7 @@ function createRepo(db, dataDir) {
         items.push({ description: x.supplier_name ? `Invoice from ${x.supplier_name}` : 'Invoice total', category: 'other', line_total: x.total });
       }
       const total = x.total != null ? x.total : items.reduce((s, it) => s + (Number(it.line_total) || 0), 0);
-      const costs = allocateCosts(items, total);
+      const costs = allocateCosts(items, exGst(total, x.tax));
       const alreadyPaid = x.payment_status === 'paid';
 
       // Keep paid ticks and job assignments from an earlier reading of the same lines.
@@ -555,7 +598,7 @@ function createRepo(db, dataDir) {
     reallocate(invoiceId) {
       const inv = repo.getInvoice(invoiceId);
       const items = db.prepare('SELECT * FROM items WHERE invoice_id = ? ORDER BY position, id').all(invoiceId);
-      const costs = allocateCosts(items, inv.total);
+      const costs = allocateCosts(items, exGst(inv.total, inv.tax));
       const upd = db.prepare('UPDATE items SET cost = ? WHERE id = ?');
       items.forEach((it, i) => upd.run(costs[i], it.id));
     },
@@ -653,6 +696,7 @@ function createRepo(db, dataDir) {
       const dismissed = new Set(parseJson(inv.dismissed_jobs, []));
       const jobs = db.prepare(`SELECT * FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
         AND COALESCE(sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(inv.account_uuid).filter((j) => !dismissed.has(j.job_uuid));
+      const activeJobs = repo._withoutSplitParts(jobs);
       const places = [
         ['the email subject', inv.email_subject],
         ['the invoice reference', parseJson(inv.refs, []).join(' | ')],
@@ -661,7 +705,7 @@ function createRepo(db, dataDir) {
       ];
       const site = addressKey(inv.site_address);
       const scored = [];
-      for (const j of jobs) {
+      for (const j of activeJobs) {
         const num = String(j.job_number).trim();
         let best = null;
         if (num.length >= 3) {
@@ -778,7 +822,8 @@ function createRepo(db, dataDir) {
           totals.invoiceCount++;
           totals.total += total;
           totals.paid += paid;
-          totals.tax += inv.total ? (Number(inv.tax) || 0) * (total / inv.total) : 0;
+          const ex = exGst(inv.total, inv.tax);
+          totals.tax += ex ? (Number(inv.tax) || 0) * (total / ex) : 0;
           const s = inv.supplier || 'Unknown supplier';
           bySupplier[s] = bySupplier[s] || { total: 0, paid: 0 };
           bySupplier[s].total += total;
@@ -799,6 +844,7 @@ function createRepo(db, dataDir) {
         const cats = [...new Set(lines.map((l) => l.category))];
         return {
           ...inv,
+          total_ex: exGst(inv.total, inv.tax),
           refs: parseJson(inv.refs, []),
           items: lines,
           other_lines: otherLines,
@@ -844,7 +890,8 @@ function createRepo(db, dataDir) {
       return db.prepare(`SELECT * FROM invoices WHERE suggested_job_uuid = ? AND status = 'ready'
           AND NOT EXISTS (SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = invoices.id)
           ORDER BY id DESC`).all(jobUUID)
-        .map((i) => ({ id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, category: i.category, reason: i.suggestion_reason }));
+        .map((i) => ({ id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total,
+          total_ex: exGst(i.total, i.tax), category: i.category, reason: i.suggestion_reason }));
     },
 
     /** A stock order job: what was bought on it, which jobs took it, and what's left. */
@@ -870,13 +917,15 @@ function createRepo(db, dataDir) {
         if (inv.status === 'error') totals.errors++;
         if (inv.status === 'ready') {
           totals.invoiceCount++;
-          totals.bought += inv.total || 0;
+          const ex = round2(lines.reduce((s, l) => s + l.line_cost, 0));
+          totals.bought += ex;
           totals.used += used;
           totals.left += left;
-          if (paid) totals.paid += inv.total || 0;
+          if (paid) totals.paid += ex;
         }
         return {
-          ...inv, refs: parseJson(inv.refs, []), items: lines, other_lines: [], other_jobs: [], job_total: round2(inv.total || 0),
+          ...inv, refs: parseJson(inv.refs, []), items: lines, other_lines: [], other_jobs: [], job_total: round2(lines.reduce((s, l) => s + l.line_cost, 0)),
+          total_ex: exGst(inv.total, inv.tax),
           used, left, whole: false, from_stock: false, category: inv.category || 'materials', mistake_state: 'none', duplicate_of: null,
           payment_state: !lines.length ? 'unpaid' : paid ? 'paid' : lines.some((l) => l.paid) ? 'part' : 'unpaid',
         };
@@ -916,7 +965,7 @@ function createRepo(db, dataDir) {
         const sj = inv.suggested_job_uuid ? jobsById.get(inv.suggested_job_uuid) : null;
         out.push({
           id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
-          category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
+          total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
           untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
           stock_job: inv.stock_job_uuid && jobsById.get(inv.stock_job_uuid)
             ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,
@@ -1027,4 +1076,4 @@ function createRepo(db, dataDir) {
   return repo;
 }
 
-module.exports = { openDb, allocateCosts, newInboxCode, round2, invoiceCategory, addressKey };
+module.exports = { openDb, allocateCosts, newInboxCode, round2, invoiceCategory, addressKey, mainJobNumber };

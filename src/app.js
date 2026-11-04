@@ -10,6 +10,7 @@ const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = sm8;
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
+const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
@@ -36,7 +37,8 @@ function safeName(name) {
   return String(name || 'file').replace(/[^\w.\- ]+/g, '_').slice(-120) || 'file';
 }
 
-function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8 }) {
+function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
+  findJobByNumberImpl = sm8.findJobByNumber }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -214,7 +216,17 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     const claimed = repo.claimPendingTokens(event.accountUUID);
     const token = await accessTokenFor(event.accountUUID, event.accessToken);
     const info = await fetchJobImpl(event.jobUUID, token);
-    const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
+    let job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
+    // A split part (#207974A) opens its main job (#207974): one Job Costs for the whole job.
+    const main = mainJobNumber(job.job_number);
+    if (main) {
+      let mainUUID = repo.findJobByNumber(job.account_uuid, main);
+      if (!mainUUID) mainUUID = await findJobByNumberImpl(main, token);
+      if (mainUUID) {
+        const mainInfo = await fetchJobImpl(mainUUID, token);
+        job = repo.ensureJob({ jobUUID: mainUUID, accountUUID: event.accountUUID, ...(withStockFlag(mainInfo) || { jobNumber: main }) });
+      }
+    }
     repo.ensureAccount(job.account_uuid);
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
@@ -262,7 +274,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     const acc = repo.ensureAccount(req.account);
-    res.json({ ...summary, inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
+    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number),
+      inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
       jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });
   });
 

@@ -69,6 +69,58 @@ async function jobNames(job, accessToken) {
   return { clientName, categoryName };
 }
 
+/**
+ * The job's full price, ex GST: every billing line on the job except "Partial invoice"
+ * lines (those move part of the job to a split job like #207974A and would otherwise
+ * make the job look smaller than it is). null if the lines can't be read.
+ */
+function fullPriceFromLines(lines) {
+  let sum = 0;
+  let any = false;
+  for (const l of lines || []) {
+    if (String(l.active) === '0') continue;
+    if (/partial\s*invoice/i.test(`${l.name || ''} ${l.item_number || ''}`)) continue;
+    const qty = Number(l.quantity);
+    const price = Number(l.price);
+    if (!isFinite(qty) || !isFinite(price)) continue;
+    sum += qty * price;
+    any = true;
+  }
+  return any ? Math.round(sum * 100) / 100 : null;
+}
+
+async function fetchJobLines(jobUUID, accessToken) {
+  try {
+    const filter = encodeURIComponent(`job_uuid eq '${jobUUID}'`);
+    const res = await fetch(`${API_BASE}/jobmaterial.json?%24filter=${filter}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) { console.error(`ServiceM8 job lines: ${res.status}`); return null; }
+    return await res.json();
+  } catch (e) {
+    console.error(`ServiceM8 job lines failed: ${e.message}`);
+    return null;
+  }
+}
+
+/** Find a job by its number (e.g. the main job #207974 of a split job #207974A). */
+async function findJobByNumber(jobNumber, accessToken) {
+  if (!accessToken || !jobNumber) return null;
+  try {
+    const filter = encodeURIComponent(`generated_job_id eq '${String(jobNumber).replace(/'/g, '')}'`);
+    const res = await fetch(`${API_BASE}/job.json?%24filter=${filter}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const j = [].concat(await res.json()).find((x) => x && x.uuid && String(x.active) !== '0');
+    return j ? j.uuid : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchJob(jobUUID, accessToken) {
   if (!accessToken) return null;
   try {
@@ -82,8 +134,8 @@ async function fetchJob(jobUUID, accessToken) {
       ...(await jobNames(job, accessToken)),
       jobNumber: job.generated_job_id ? String(job.generated_job_id) : null,
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
-      // Total of the job's billing lines (the quote / invoice amount) in ServiceM8.
-      quoteAmount: Number(job.total_invoice_amount) > 0 ? Number(job.total_invoice_amount) : null,
+      // Full job price ex GST from its lines (not counting "Partial invoice" lines).
+      quoteAmount: fullPriceFromLines(await fetchJobLines(jobUUID, accessToken)),
       status: job.status || null,
     };
   } catch {
@@ -118,7 +170,6 @@ async function fetchActiveJobs(accessToken) {
       jobUUID: j.uuid,
       jobNumber: j.generated_job_id ? String(j.generated_job_id) : null,
       jobTitle: (j.job_address || j.job_description || '').split('\n')[0].slice(0, 200) || null,
-      quoteAmount: Number(j.total_invoice_amount) > 0 ? Number(j.total_invoice_amount) : null,
       status: j.status,
       ...names[k],
     }));
@@ -179,6 +230,6 @@ async function fetchAccount(accessToken) {
 }
 
 module.exports = {
-  verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken,
+  verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken, fullPriceFromLines, findJobByNumber,
   authorizeUrl, exchangeCode, refreshAccessToken, fetchAccount,
 };

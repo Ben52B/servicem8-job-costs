@@ -19,6 +19,10 @@ One place for every supplier invoice, matched to your ServiceM8 jobs. For a gara
 - **Screw-up tags** per line or per invoice, with a fixed reason list (`src/mistakes.js`). Each job shows actual numbers and "without screw-ups" numbers.
 - **Duplicates** are caught and counted once. Anything the reader got wrong can be fixed.
 
+**Ex GST:** all costs, prices, profit and reports are ex GST, like ServiceM8's prices. Each invoice line is charged at its share of the invoice total without GST.
+
+**Split jobs:** when ServiceM8 partial invoicing splits a job into #207974, #207974A, #207974B…, they're one job in Job Costs. Clicking Job Costs on any of them opens the main job. Its price is all its lines except the "Partial invoice" lines (the full job, ex GST). Invoices mentioning any of the numbers are suggested for the main job.
+
 **Suggestions:** every suggestion can be confirmed with one click, moved to the right job with **Change job…**, or sent to stock with **📦 Send to stock** (or left in the Inbox).
 
 **Stock order jobs:** if you open a ServiceM8 job for each stock order (because ServiceM8 has no purchase orders), invoices with that job number go into **stock** instead of becoming that job's costs. A job counts as a stock order job when its client name contains "Door Image" or its category contains "Internal" (change with `STOCK_JOB_CLIENTS` / `STOCK_JOB_CATEGORIES`). Every job also has a **📦 Stock order job** switch to correct it. A stock order job's window shows what was bought, which jobs took each item, and what's still in stock; reports leave stock order jobs out of profit.
@@ -62,7 +66,7 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 3. Paste the manifest from `https://<your-app>/manifest.json`. It adds a "Job Costs" button to the job card.
 4. Copy the add-on's **App ID** into `SERVICEM8_APP_ID` and its **App Secret** into `SERVICEM8_APP_SECRET`.
    Set the **Activation URL** to `https://<your-app>/servicem8/activate` and the **Return URL** to `https://<your-app>/servicem8/oauth/callback`. When you install the add-on, ServiceM8 asks you to approve it once; that lets the app read job numbers, addresses, quotes and the job list.
-5. Give it the `read_jobs`, `read_customers` and `read_job_categories` scopes, so the window can show the job number, address and quoted price, emailed invoices can be matched to your active jobs, and stock order jobs can be recognised by client and category.
+5. Give it the `read_jobs`, `read_customers` and `read_job_materials` scopes (job lines, for the full job price), so the window can show the job number, address and quoted price, emailed invoices can be matched to your active jobs, and stock order jobs can be recognised by client and category.
 6. Install the add-on on your own ServiceM8 account. A private add-on doesn't need to be published to the store.
 
 ### 4. Set up the email address
