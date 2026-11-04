@@ -131,9 +131,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
    * sent one, otherwise the one saved when the add-on was approved (refreshed when due).
    */
   async function accessTokenFor(accountUUID, eventToken) {
-    if (eventToken) return eventToken;
     const t = repo.getTokens(accountUUID);
-    if (!t) return null;
+    if (!t) return eventToken || null;
     if (t.refreshToken && Date.parse(t.expiresAt) - Date.now() < 120000) {
       try {
         const fresh = await oauth.refreshAccessToken({ appId: config.servicem8AppId, appSecret: config.servicem8AppSecret, refreshToken: t.refreshToken });
@@ -147,6 +146,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   }
 
   const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
+  const sm8Notes = new Map(); // job -> why ServiceM8 info is missing (shown on the card)
   const htmlPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
     <body style="margin:0;background:#f4f7f6;font:15px/1.5 'Segoe UI',Arial,sans-serif;color:#17312b;display:flex;min-height:100vh;align-items:center;justify-content:center">
     <div style="background:#fff;border:1px solid #e3ece9;border-radius:18px;padding:28px 32px;max-width:460px;box-shadow:0 6px 18px rgba(16,40,34,.08)">${body}</div></body>`;
@@ -214,8 +214,13 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         <p>Check SERVICEM8_APP_SECRET in Render matches the add-on's App Secret.</p></div>`);
     }
     const claimed = repo.claimPendingTokens(event.accountUUID);
-    const token = await accessTokenFor(event.accountUUID, event.accessToken);
-    const info = await fetchJobImpl(event.jobUUID, token);
+    let token = await accessTokenFor(event.accountUUID, event.accessToken);
+    let info = await fetchJobImpl(event.jobUUID, token);
+    // Saved access not working (e.g. revoked)? Try the pass that came with the click.
+    if ((!info || info.linesError) && event.accessToken && event.accessToken !== token) {
+      const alt = await fetchJobImpl(event.jobUUID, event.accessToken);
+      if (alt && (!info || !alt.linesError)) { info = alt; token = event.accessToken; }
+    }
     let job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
     // A split part (#207974A) opens its main job (#207974): one Job Costs for the whole job.
     const main = mainJobNumber(job.job_number);
@@ -224,10 +229,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       if (!mainUUID) mainUUID = await findJobByNumberImpl(main, token);
       if (mainUUID) {
         const mainInfo = await fetchJobImpl(mainUUID, token);
+        if (mainInfo) info = mainInfo;
         job = repo.ensureJob({ jobUUID: mainUUID, accountUUID: event.accountUUID, ...(withStockFlag(mainInfo) || { jobNumber: main }) });
       }
     }
     repo.ensureAccount(job.account_uuid);
+    // Remember what ServiceM8 said, so the window can explain a missing price.
+    sm8Notes.set(job.job_uuid, !token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
+      : (info && info.linesError) || (!info ? 'Couldn\u2019t read this job from ServiceM8.' : null));
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
@@ -274,7 +283,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     const acc = repo.ensureAccount(req.account);
-    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number),
+    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: sm8Notes.get(req.job.job_uuid) || null,
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
       jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });
   });

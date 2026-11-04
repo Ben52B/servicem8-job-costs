@@ -585,6 +585,17 @@ test('installing the add-on: approval in ServiceM8 saves access, used when the b
     assert.ok(calls.tokens.includes('tok-p'));
     assert.ok(calls.tokens.includes('sync:tok-p'), 'job list fetched on that first click');
     assert.equal(repo.getTokens('__pending__'), null);
+
+    // Re-installing (e.g. to add a permission): the new approval replaces the old one,
+    // and it's used even when the click brings its own pass
+    fakeOauth.exchangeCode = async () => ({ accessToken: 'tok-new', refreshToken: 'ref-new', expiresIn: 3600 });
+    const act3 = new URL((await fetch(`${b2}/servicem8/activate`, { redirect: 'manual' })).headers.get('location'));
+    await fetch(`${b2}/servicem8/oauth/callback?code=x&state=${act3.searchParams.get('state')}`);
+    const ev3 = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID: 'new-acc-job' }, auth: { accountUUID: 'acc-new', accessToken: 'click-pass' } }, SECRET);
+    calls.tokens.length = 0;
+    await fetch(`${b2}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev3 });
+    assert.equal(repo.getTokens('acc-new').accessToken, 'tok-new');
+    assert.equal(calls.tokens[0], 'tok-new', 'saved approval used first');
   } finally {
     srv.close();
   }

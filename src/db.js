@@ -423,9 +423,12 @@ function createRepo(db, dataDir) {
         .run(tokens.accessToken, tokens.refreshToken || null, new Date(Date.now() + (tokens.expiresIn || 3600) * 1000).toISOString());
     },
 
-    /** Give a waiting approval to this account, if it has none yet. Returns true if it did. */
+    /**
+     * Give a waiting approval to this account. It's the newest approval (e.g. after
+     * re-installing with more permissions), so it replaces an older one. Returns true if it did.
+     */
     claimPendingTokens(accountUUID) {
-      if (accountUUID == null || repo.getTokens(accountUUID)) return false;
+      if (accountUUID == null) return false;
       const p = db.prepare("SELECT * FROM accounts WHERE account_key = '__pending__' AND sm8_access_token IS NOT NULL").get();
       if (!p) return false;
       repo.ensureAccount(accountUUID);

@@ -96,11 +96,15 @@ async function fetchJobLines(jobUUID, accessToken) {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) { console.error(`ServiceM8 job lines: ${res.status}`); return null; }
+    if (!res.ok) {
+      const why = `${res.status} ${(await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 160)}`;
+      console.error(`ServiceM8 job lines: ${why}`);
+      return { error: `ServiceM8 wouldn't share the job's lines (${why})` };
+    }
     return await res.json();
   } catch (e) {
     console.error(`ServiceM8 job lines failed: ${e.message}`);
-    return null;
+    return { error: `Couldn't reach ServiceM8 for the job's lines (${e.message})` };
   }
 }
 
@@ -135,7 +139,11 @@ async function fetchJob(jobUUID, accessToken) {
       jobNumber: job.generated_job_id ? String(job.generated_job_id) : null,
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
       // Full job price ex GST from its lines (not counting "Partial invoice" lines).
-      quoteAmount: fullPriceFromLines(await fetchJobLines(jobUUID, accessToken)),
+      ...(await (async () => {
+        const lines = await fetchJobLines(jobUUID, accessToken);
+        if (lines && lines.error) return { quoteAmount: null, linesError: lines.error };
+        return { quoteAmount: fullPriceFromLines(lines), linesError: null };
+      })()),
       status: job.status || null,
     };
   } catch {
