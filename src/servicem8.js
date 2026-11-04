@@ -158,14 +158,24 @@ const refreshAccessToken = ({ appId, appSecret, refreshToken }) =>
   tokenRequest({ grant_type: 'refresh_token', client_id: appId, client_secret: appSecret, refresh_token: refreshToken });
 
 /** Which ServiceM8 account a token belongs to. */
+// Best effort: may need a permission the add-on doesn't have. If it can't tell, the
+// approval is linked to the account the first time someone clicks Job Costs instead.
 async function fetchAccount(accessToken) {
-  const res = await fetch(`${API_BASE}/vendor.json`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!res.ok) return null;
-  const v = [].concat(await res.json())[0];
-  return v && v.uuid ? { accountUUID: v.uuid, name: v.name || null } : null;
+  try {
+    const res = await fetch(`${API_BASE}/vendor.json`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      console.error(`ServiceM8 account lookup: ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`);
+      return null;
+    }
+    const v = [].concat(await res.json())[0];
+    return v && v.uuid ? { accountUUID: v.uuid, name: v.name || null } : null;
+  } catch (e) {
+    console.error(`ServiceM8 account lookup failed: ${e.message}`);
+    return null;
+  }
 }
 
 module.exports = {

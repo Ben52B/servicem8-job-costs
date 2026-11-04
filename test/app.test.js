@@ -558,6 +558,21 @@ test('installing the add-on: approval in ServiceM8 saves access, used when the b
     assert.equal(calls.refresh, 1, 'token close to expiry was refreshed');
     assert.ok(calls.tokens.includes('tok-2'));
     assert.equal(repo.getJob('oauth-job').job_number, '777001');
+
+    // If ServiceM8 won't say which account it is, the approval waits for the first click
+    fakeOauth.fetchAccount = async () => null;
+    fakeOauth.exchangeCode = async () => ({ accessToken: 'tok-p', refreshToken: 'ref-p', expiresIn: 3600 });
+    const act2 = new URL((await fetch(`${b2}/servicem8/activate`, { redirect: 'manual' })).headers.get('location'));
+    const cb2 = await fetch(`${b2}/servicem8/oauth/callback?code=x&state=${act2.searchParams.get('state')}`);
+    assert.equal(cb2.status, 200);
+    assert.match(await cb2.text(), /Job Costs is connected/);
+    assert.equal(repo.getTokens('acc-new'), null);
+    const ev2 = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID: 'new-acc-job' }, auth: { accountUUID: 'acc-new' } }, SECRET);
+    assert.equal((await fetch(`${b2}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev2 })).status, 200);
+    assert.equal(repo.getTokens('acc-new').accessToken, 'tok-p', 'first click claims the waiting approval');
+    assert.ok(calls.tokens.includes('tok-p'));
+    assert.ok(calls.tokens.includes('sync:tok-p'), 'job list fetched on that first click');
+    assert.equal(repo.getTokens('__pending__'), null);
   } finally {
     srv.close();
   }

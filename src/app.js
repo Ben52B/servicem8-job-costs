@@ -174,11 +174,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     try {
       const tokens = await oauth.exchangeCode({ appId: config.servicem8AppId, appSecret: config.servicem8AppSecret, code: String(req.query.code), redirectUri: redirectUri() });
       const acc = await oauth.fetchAccount(tokens.accessToken);
-      if (!acc) throw new Error('could not read your ServiceM8 account');
-      repo.saveTokens(acc.accountUUID, tokens);
-      await syncJobs(acc.accountUUID, tokens.accessToken, { force: true }).catch(() => {});
+      if (acc) {
+        repo.saveTokens(acc.accountUUID, tokens);
+        await syncJobs(acc.accountUUID, tokens.accessToken, { force: true }).catch(() => {});
+      } else {
+        // Couldn't tell which account: keep it until the first Job Costs click says.
+        repo.savePendingTokens(tokens);
+      }
       res.type('html').send(htmlPage('Job Costs connected', `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Job Costs is connected</h2>
-        <p>${acc.name ? `Connected to <b>${String(acc.name).replace(/</g, '&lt;')}</b>. ` : ''}Open any job in ServiceM8 and click <b>Job Costs</b>.</p><p style="color:#6b8a82">You can close this page.</p>`));
+        <p>${acc && acc.name ? `Connected to <b>${String(acc.name).replace(/</g, '&lt;')}</b>. ` : ''}Open any job in ServiceM8 and click <b>Job Costs</b>.</p><p style="color:#6b8a82">You can close this page.</p>`));
     } catch (e) {
       console.error(`ServiceM8 connect failed: ${e.message}`);
       res.status(502).type('html').send(htmlPage('Job Costs', `<h2>Couldn't connect to ServiceM8</h2><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check SERVICEM8_APP_ID and SERVICEM8_APP_SECRET in Render, then try again.</p>`));
@@ -203,12 +207,13 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     } catch (e) {
       return res.status(401).type('html').send(`<p style="font-family:sans-serif">Could not open Job Costs: ${String(e.message).replace(/</g, '&lt;')}</p>`);
     }
+    const claimed = repo.claimPendingTokens(event.accountUUID);
     const token = await accessTokenFor(event.accountUUID, event.accessToken);
     const info = await fetchJobImpl(event.jobUUID, token);
     const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
     repo.ensureAccount(job.account_uuid);
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
-    const sync = syncJobs(job.account_uuid, token).catch(() => {});
+    const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
     renderCard(res, job, { embedded: true });
   });

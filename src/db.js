@@ -348,7 +348,7 @@ function createRepo(db, dataDir) {
      * checks belongs to one business): the only ServiceM8 account, or the local test one.
      */
     defaultAccount() {
-      const real = db.prepare("SELECT account_key FROM accounts WHERE account_key != ''").all();
+      const real = db.prepare("SELECT account_key FROM accounts WHERE account_key NOT IN ('', '__pending__')").all();
       if (real.length === 1) return { accountUUID: real[0].account_key };
       if (!real.length && db.prepare("SELECT 1 FROM accounts WHERE account_key = ''").get()) return { accountUUID: null };
       return null;
@@ -367,6 +367,31 @@ function createRepo(db, dataDir) {
       repo.ensureAccount(accountUUID);
       db.prepare(`UPDATE accounts SET sm8_access_token = ?, sm8_refresh_token = COALESCE(?, sm8_refresh_token), sm8_expires_at = ?
         WHERE account_key = ?`).run(accessToken, refreshToken || null, new Date(Date.now() + (expiresIn || 3600) * 1000).toISOString(), accountUUID ?? '');
+    },
+
+    /**
+     * Approval saved before we knew which account it was for: it's kept aside and handed
+     * to the first account whose Job Costs button is clicked.
+     */
+    savePendingTokens(tokens) {
+      db.prepare(`INSERT INTO accounts (account_key, inbox_code) VALUES ('__pending__', ?)
+        ON CONFLICT (account_key) DO NOTHING`).run('pending-' + newInboxCode(12));
+      db.prepare(`UPDATE accounts SET sm8_access_token = ?, sm8_refresh_token = ?, sm8_expires_at = ? WHERE account_key = '__pending__'`)
+        .run(tokens.accessToken, tokens.refreshToken || null, new Date(Date.now() + (tokens.expiresIn || 3600) * 1000).toISOString());
+    },
+
+    /** Give a waiting approval to this account, if it has none yet. Returns true if it did. */
+    claimPendingTokens(accountUUID) {
+      if (accountUUID == null || repo.getTokens(accountUUID)) return false;
+      const p = db.prepare("SELECT * FROM accounts WHERE account_key = '__pending__' AND sm8_access_token IS NOT NULL").get();
+      if (!p) return false;
+      repo.ensureAccount(accountUUID);
+      tx(() => {
+        db.prepare('UPDATE accounts SET sm8_access_token = ?, sm8_refresh_token = ?, sm8_expires_at = ? WHERE account_key = ?')
+          .run(p.sm8_access_token, p.sm8_refresh_token, p.sm8_expires_at, accountUUID);
+        db.prepare("DELETE FROM accounts WHERE account_key = '__pending__'").run();
+      });
+      return true;
     },
 
     getTokens(accountUUID) {
