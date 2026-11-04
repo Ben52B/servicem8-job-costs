@@ -82,9 +82,16 @@ async function openCard(jobUUID, accountUUID = 'acc-1') {
   const token = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID }, auth: { accountUUID, accessToken: 'x' } }, SECRET);
   const res = await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: token });
   assert.equal(res.status, 200);
-  const html = await res.text();
-  const boot = JSON.parse(html.match(/const BOOT = (\{.*?\});\n/)[1]);
-  assert.ok(html.includes('platform.servicem8.com/sdk'));
+  // ServiceM8 gets JSON with the window's HTML: the SDK, and our page in a frame
+  const { eventResponse } = await res.json();
+  assert.ok(eventResponse.includes('platform.servicem8.com/sdk'));
+  const src = eventResponse.match(/<iframe src="([^"]+)"/)[1];
+  assert.ok(src.startsWith('http://test/card?t='));
+  const t = decodeURIComponent(src.split('t=')[1]);
+  const page = await fetch(`${base}/card?t=${encodeURIComponent(t)}`);
+  assert.equal(page.status, 200);
+  const boot = JSON.parse((await page.text()).match(/const BOOT = (\{.*?\});\n/)[1]);
+  assert.equal(boot.token, t);
   return boot.token;
 }
 
@@ -126,7 +133,9 @@ test('helpers: costs add up, one type per invoice, address matching, email addre
 
 test('ServiceM8 callback rejects a bad signature; opening a card syncs active jobs', async () => {
   const bad = jwt.sign({ eventArgs: { jobUUID: 'j' } }, 'wrong-secret');
-  assert.equal((await fetch(`${base}/servicem8/addon`, { method: 'POST', body: bad })).status, 401);
+  const badRes = await (await fetch(`${base}/servicem8/addon`, { method: 'POST', body: bad })).json();
+  assert.match(badRes.eventResponse, /Could not open Job Costs/, 'the reason shows in the ServiceM8 window');
+  assert.equal((await fetch(`${base}/card?t=bad`)).status, 401);
   await openCard('job-a');
   assert.equal(repo.getJob('never-opened').job_number, '208999', 'job list fetched from ServiceM8');
 });

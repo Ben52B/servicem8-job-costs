@@ -201,11 +201,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
 
   // ServiceM8 calls this when someone clicks "Job Costs" on a job card.
   app.post('/servicem8/addon', express.text({ type: '*/*', limit: '1mb' }), async (req, res) => {
+    // ServiceM8 expects JSON: { eventResponse: "<html to show in the window>" }.
+    const reply = (html) => res.set('Cache-Control', 'no-store').json({ eventResponse: html });
     let event;
     try {
       event = verifyEvent(req.body, config.servicem8AppSecret);
     } catch (e) {
-      return res.status(401).type('html').send(`<p style="font-family:sans-serif">Could not open Job Costs: ${String(e.message).replace(/</g, '&lt;')}</p>`);
+      console.error(`ServiceM8 click rejected: ${e.message}`);
+      return reply(`<div style="font-family:sans-serif;padding:16px"><b>Could not open Job Costs</b><p>${String(e.message).replace(/</g, '&lt;')}</p>
+        <p>Check SERVICEM8_APP_SECRET in Render matches the add-on's App Secret.</p></div>`);
     }
     const claimed = repo.claimPendingTokens(event.accountUUID);
     const token = await accessTokenFor(event.accountUUID, event.accessToken);
@@ -215,7 +219,19 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
-    renderCard(res, job, { embedded: true });
+    // The window shows our page (from our own address, so everything on it works),
+    // and asks ServiceM8 to make the window big enough.
+    const url = `${config.publicUrl}/card?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
+    reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
+<script>try { SMClient.init().resizeWindow(1320, 860); } catch (e) {}</script>
+<iframe src="${url}" title="Job Costs" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
+  });
+
+  // The Job Costs window itself (opened inside ServiceM8's window, using the click's session).
+  app.get('/card', (req, res) => {
+    const job = jobFromToken(req.query.t);
+    if (!job) return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Close this window and click Job Costs again.</p>');
+    renderCard(res, job, { embedded: false });
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
