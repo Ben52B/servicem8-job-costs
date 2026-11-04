@@ -343,7 +343,7 @@ function renderKpis() {
       <div class="s">${t.marginPct}% margin · quoted ${money0(t.quote)} <button class="link small" data-edit-quote title="Quoted price ${src}">edit</button></div></div>`;
   }
   const lost = hasQuote && t.quote ? Math.round(t.mistakes / t.quote * 1000) / 10 : null;
-  if (state.data.sm8Note && state.data.job.quote_source !== 'manual') hero = hero.replace(/<\/div>$/, `<div class="s" style="margin-top:6px;font-size:11.5px">⚠ ${esc(state.data.sm8Note)}</div></div>`);
+  if (state.data.sm8Note && (state.data.job.quote_source !== 'manual' || /part of job/.test(state.data.sm8Note))) hero = hero.replace(/<\/div>$/, `<div class="s" style="margin-top:6px;font-size:11.5px">⚠ ${esc(state.data.sm8Note)}</div></div>`);
   $('#kpis').innerHTML = `${hero}
     <div class="kpi card"><div class="l">Costs <span style="font-weight:500">ex GST</span></div><div class="v">${money0(t.total)}</div><div class="bar">${bar}</div><div class="legend">${legend || '<span>Add costs to see them by type</span>'}</div></div>
     <div class="kpi card"><div class="l">Paid</div><div class="v good">${money0(t.paid)}</div><div class="s">${t.outstanding > 0.004 ? `<b style="color:var(--warn)">${money(t.outstanding)}</b> still to pay` : 'Nothing to pay'} · ${t.invoiceCount} invoice${t.invoiceCount === 1 ? '' : 's'}${t.processing ? ` · <span class="spin"></span> ${t.processing} reading` : ''}</div></div>

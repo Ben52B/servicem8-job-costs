@@ -223,20 +223,26 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     }
     let job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
     // A split part (#207974A) opens its main job (#207974): one Job Costs for the whole job.
+    let partNote = null;
     const main = mainJobNumber(job.job_number);
     if (main) {
       let mainUUID = repo.findJobByNumber(job.account_uuid, main);
       if (!mainUUID) mainUUID = await findJobByNumberImpl(main, token);
       if (mainUUID) {
+        const partUUID = job.job_uuid;
         const mainInfo = await fetchJobImpl(mainUUID, token);
         if (mainInfo) info = mainInfo;
         job = repo.ensureJob({ jobUUID: mainUUID, accountUUID: event.accountUUID, ...(withStockFlag(mainInfo) || { jobNumber: main }) });
+        // Anything added on the split part itself (e.g. before parts were linked) belongs to the main job.
+        repo.mergeJobInto(partUUID, mainUUID);
+      } else {
+        partNote = `This looks like part of job #${main}, but that job couldn\u2019t be found in ServiceM8, so it\u2019s shown on its own.`;
       }
     }
     repo.ensureAccount(job.account_uuid);
     // Remember what ServiceM8 said, so the window can explain a missing price.
-    sm8Notes.set(job.job_uuid, !token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
-      : (info && info.linesError) || (!info ? 'Couldn\u2019t read this job from ServiceM8.' : null));
+    sm8Notes.set(job.job_uuid, partNote || (!token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
+      : (info && info.linesError) || (!info ? 'Couldn\u2019t read this job from ServiceM8.' : null)));
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);

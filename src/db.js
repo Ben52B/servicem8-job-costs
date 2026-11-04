@@ -165,7 +165,7 @@ function allocateCosts(items, invoiceTotal) {
  * Returns the main job number for a split part, or null for a normal job number.
  */
 function mainJobNumber(jobNumber) {
-  const m = String(jobNumber || '').trim().match(/^(\d+)[A-Za-z]{1,2}$/);
+  const m = String(jobNumber || '').trim().match(/^(\d+)\s*[-/.]?\s*[A-Za-z]{1,2}$/);
   return m ? m[1] : null;
 }
 
@@ -308,6 +308,30 @@ function createRepo(db, dataDir) {
     getJob(jobUUID) {
       const j = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       return j ? { ...j, is_stock: j.stock_manual != null ? !!j.stock_manual : !!j.stock_auto } : j;
+    },
+
+    /**
+     * Move everything on one job to another (a split part's costs go to its main job):
+     * shares of invoice lines, uploads still being read, suggestions.
+     */
+    mergeJobInto(fromUUID, toUUID) {
+      if (!fromUUID || !toUUID || fromUUID === toUUID) return 0;
+      let moved = 0;
+      tx(() => {
+        for (const a of db.prepare('SELECT * FROM allocations WHERE job_uuid = ?').all(fromUUID)) {
+          const existing = repo.getShare(a.item_id, toUUID);
+          if (existing) {
+            db.prepare('UPDATE allocations SET fraction = ? WHERE id = ?').run(Math.min(1, existing.fraction + a.fraction), existing.id);
+            db.prepare('DELETE FROM allocations WHERE id = ?').run(a.id);
+          } else {
+            db.prepare('UPDATE allocations SET job_uuid = ? WHERE id = ?').run(toUUID, a.id);
+          }
+          moved++;
+        }
+        db.prepare('UPDATE invoices SET origin_job_uuid = ? WHERE origin_job_uuid = ?').run(toUUID, fromUUID);
+        db.prepare('UPDATE invoices SET suggested_job_uuid = ? WHERE suggested_job_uuid = ?').run(toUUID, fromUUID);
+      });
+      return moved;
     },
 
     findJobByNumber(accountUUID, jobNumber) {

@@ -63,6 +63,8 @@ const JOBS = {
   'normal-job': { jobNumber: '208152', jobTitle: '9 Oak St', clientName: 'Jane Citizen', categoryName: 'New Door Installation' },
   'job-207974': { jobNumber: '207974', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 18450 },
   'job-207974A': { jobNumber: '207974A', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 9225 },
+  'job-207974B': { jobNumber: '207974 B', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 0 },
+  'job-555B': { jobNumber: '555B', jobTitle: 'Orphan part' },
 };
 let jobCounter = 300000;
 const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), status: 'Work Order' });
@@ -621,6 +623,23 @@ test('split jobs (#207974, #207974A…) are one job; the price is the full job w
   assert.equal(s.totals.quote, 18450, 'the full job price, not the split part');
   assert.deepEqual(s.splitParts, ['207974A']);
   assert.ok(!s.jobs.some((j) => j.job_number === '207974A'), 'split parts are not offered as separate jobs');
+
+  // Costs that were put on a split part itself (before parts were linked) move to the main job
+  const rec = repo.createInvoice({ accountUUID: 'acc-1', source: 'upload' });
+  repo.saveExtraction(rec.id, { supplier_name: 'Old Part Supplier', total: 110, tax: 10, items: [{ description: 'Thing', category: 'materials', line_total: 100 }] });
+  repo.ensureJob({ jobUUID: 'job-207974B', accountUUID: 'acc-1', jobNumber: '207974 B' });
+  repo.assignWhole(rec.id, 'job-207974B');
+  const tb = await openCard('job-207974B');
+  const sb = await summary(tb);
+  assert.equal(sb.job.job_uuid, 'job-207974', '"207974 B" (with a space) is recognised as part B');
+  assert.ok(sb.invoices.some((i) => i.id === rec.id), 'part B\'s costs moved to the main job');
+  assert.equal(repo.getJobSummary('job-207974B').invoices.length, 0);
+
+  // A part whose main job can't be found opens on its own, with a note saying so
+  const to = await openCard('job-555B');
+  const so = await summary(to);
+  assert.equal(so.job.job_uuid, 'job-555B');
+  assert.match(so.sm8Note, /part of job #555/);
 
   // An invoice mentioning the split part is suggested for the main job
   await email(t, { subject: 'Gate motor for job 207974A', file: 'door-207974.pdf' });
