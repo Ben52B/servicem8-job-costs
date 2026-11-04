@@ -444,6 +444,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
 
   app.use('/api', api);
 
+  // Opened in a browser by mistake: explain instead of "Cannot GET".
+  app.get('/inbound/email', (req, res) => {
+    res.type('text').send('This is the address Postmark sends invoice emails to. Paste it (with ?key=...) into Postmark\'s inbound webhook setting - it is not a page to open in a browser.');
+  });
+
   // ---------- Inbound email webhook: one address for the whole business ----------
   app.post('/inbound/email',
     (req, res, next) => {
