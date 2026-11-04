@@ -558,23 +558,59 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   });
 
   // PDFs and photos in this job's ServiceM8 diary (and its split parts'), to add as invoices.
-  async function diaryFiles(req) {
+  const diaryCache = new Map(); // job -> { at, files } (so previews don't ask ServiceM8 every time)
+  async function diaryFiles(req, { cached = false } = {}) {
+    const hit = diaryCache.get(req.job.job_uuid);
     const token = await diaryToken(req.account);
+    if (cached && hit && token && Date.now() - hit.at < 5 * 60000) return { token, files: hit.files };
     if (!token) { const e = new Error('Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'); e.status = 400; throw e; }
     const files = (await diaryApi.listJobFiles(repo.familyJobUUIDs(req.job.job_uuid), token))
       .filter((f) => f.active && isSupported(f.name + (/\.[a-z0-9]+$/i.test(f.name) ? '' : f.file_type), guessMime(f.name + (/\.[a-z0-9]+$/i.test(f.name) ? '' : f.file_type))));
+    diaryCache.set(req.job.job_uuid, { at: Date.now(), files });
     return { token, files };
   }
+
+  /**
+   * Your own paperwork in the diary (ServiceM8 quotes / invoices / work orders for this job) and
+   * quotes are hidden by default: they aren't supplier costs.
+   */
+  function diaryKind(f, jobNumbers) {
+    const text = `${f.name} ${f.source}`;
+    const docWord = /\b(invoice|quote|quotation|work\s*order|proposal|job\s*sheet)\b/i.test(text);
+    const mentionsJob = jobNumbers.some((n) => n && new RegExp(`(^|[^0-9])${n}([^0-9]|$)`).test(f.name));
+    if ((docWord && mentionsJob) || /\b(invoice|quote|proposal|work\s*order)\b/i.test(f.source)) return 'own';
+    if (/\bquot(e|ation)\b/i.test(f.name)) return 'quote';
+    return 'file';
+  }
+  const fileExt = (f) => (/\.[a-z0-9]+$/i.test(f.name) ? f.name.match(/\.[a-z0-9]+$/i)[0] : (f.file_type || '')).toLowerCase();
   api.get('/diary', async (req, res) => {
     let r;
     try { r = await diaryFiles(req); } catch (e) { return res.status(e.status || 502).json({ error: e.status ? e.message : diaryProblem(e) }); }
     const jobs = new Map(repo.familyJobUUIDs(req.job.job_uuid).map((u) => [u, repo.getJob(u)?.job_number || null]));
+    const numbers = [...new Set([...jobs.values()].filter(Boolean).map((n) => String(n).match(/^\d+/)?.[0]).filter(Boolean))];
     res.json({
       files: r.files.map((f) => {
         const inv = repo.invoiceByAttachment(f.uuid);
-        return { uuid: f.uuid, name: f.name, date: f.date, job_number: jobs.get(f.job_uuid), invoice_id: inv ? inv.id : null, pushed: inv?.sm8_link === 'pushed' };
+        const ext = fileExt(f);
+        return { uuid: f.uuid, name: f.name, date: f.date, job_number: jobs.get(f.job_uuid), invoice_id: inv ? inv.id : null, pushed: inv?.sm8_link === 'pushed',
+          kind: inv?.sm8_link === 'pushed' ? 'file' : diaryKind(f, numbers), is_photo: /^\.(jpe?g|png|gif|webp)$/.test(ext), is_pdf: ext === '.pdf' };
       }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
     });
+  });
+  // Look at a diary file before adding it (photos show as thumbnails, PDFs in the viewer).
+  api.get('/diary/:uuid/file', async (req, res) => {
+    let r;
+    try { r = await diaryFiles(req, { cached: true }); } catch (e) { return res.status(e.status || 502).json({ error: e.status ? e.message : diaryProblem(e) }); }
+    const f = r.files.find((x) => x.uuid === req.params.uuid);
+    if (!f) return res.status(404).json({ error: 'That file isn\u2019t in this job\u2019s diary' });
+    try {
+      const file = await diaryApi.downloadJobFile(f.uuid, r.token);
+      const byName = guessMime(f.name + (/\.[a-z0-9]+$/i.test(f.name) ? '' : f.file_type), '');
+      const type = byName !== 'application/octet-stream' ? byName : (file.contentType || byName);
+      res.set('Cache-Control', 'private, max-age=600').type(type).send(file.buffer);
+    } catch (e) {
+      res.status(502).json({ error: diaryProblem(e) });
+    }
   });
   api.post('/diary/:uuid/import', async (req, res) => {
     const existing = repo.invoiceByAttachment(req.params.uuid);

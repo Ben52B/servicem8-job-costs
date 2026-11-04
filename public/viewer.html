@@ -23,7 +23,9 @@
 // Shows an invoice PDF by drawing its pages (Chrome won't show PDFs opened from ServiceM8's window).
 const q = new URLSearchParams(location.search);
 const id = Number(q.get('id'));
-const url = `/api/invoices/${id}/file?t=${encodeURIComponent(q.get('t') || '')}`;
+const diary = q.get('diary'); // a file in the ServiceM8 job diary (not added yet)
+const url = diary ? `/api/diary/${encodeURIComponent(diary)}/file?t=${encodeURIComponent(q.get('t') || '')}`
+  : `/api/invoices/${id}/file?t=${encodeURIComponent(q.get('t') || '')}`;
 const pages = document.getElementById('pages');
 document.getElementById('name').textContent = q.get('name') || 'Invoice';
 document.title = q.get('name') || 'Invoice';

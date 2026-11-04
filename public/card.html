@@ -586,10 +586,27 @@ function renderDiary() {
   if (m.diaryError) return `<div class="empty"><div style="font-size:30px">⚠</div>${esc(m.diaryError)}</div>`;
   if (!m.diary) return '<div class="empty"><span class="spin"></span> Looking in the job diary…</div>';
   if (!m.diary.length) return '<div class="empty"><div style="font-size:30px">📎</div><b>No PDFs or photos in this job’s diary.</b><br>Files attached to the job in ServiceM8 show up here.</div>';
-  return `<div class="muted" style="margin-bottom:8px">PDFs and photos attached to this job in ServiceM8. Add one and it’s read like an upload.</div>` + m.diary.map((f) => `<div class="pick"><div class="top"><div>
-      <div class="t">${esc(f.name)}${f.job_number && f.job_number !== state.data.job.job_number ? ` <span class="chip c-stock">#${esc(f.job_number)}</span>` : ''}</div>
-      <div class="sub">${f.date ? esc(String(f.date).slice(0, 10)) : ''}${f.pushed ? ' · copied there by Job Costs' : ''}</div></div>
-      <div class="take">${f.invoice_id ? '<span class="chip c-paid">✓ Added</span>' : `<button class="primary small" data-diary-add="${esc(f.uuid)}">Add</button>`}</div></div></div>`).join('');
+  const t = encodeURIComponent(BOOT.token);
+  const fileUrl = (f) => `/api/diary/${encodeURIComponent(f.uuid)}/file?t=${t}`;
+  const viewUrl = (f) => (f.is_pdf ? `/viewer.html?diary=${encodeURIComponent(f.uuid)}&t=${t}&name=${encodeURIComponent(f.name)}` : fileUrl(f));
+  // Camera / email names like "Attachment" or "20261011_231611.jpg" say nothing: call it what it is.
+  const vague = (n) => /^(attachment|file|image|scan|document|photo)[\s_\-\d.]*(\.\w+)?$|^(img|pxl|dsc|photo|scan)?[_-]?\d[\d_-]{5,}\.(jpe?g|png|pdf)$|^attachment_[0-9a-f-]+(\.\w+)?$/i.test(n);
+  const when = (d) => (d ? new Date(String(d).replace(' ', 'T')).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+  const row = (f) => {
+    const title = vague(f.name) ? `${f.is_photo ? 'Photo' : 'PDF'} added ${when(f.date)}` : f.name;
+    const thumb = f.is_photo ? `<a href="${viewUrl(f)}" target="_blank" rel="noopener"><img src="${fileUrl(f)}" loading="lazy" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>`
+      : `<a href="${viewUrl(f)}" target="_blank" rel="noopener" style="width:64px;height:64px;border-radius:10px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:26px;text-decoration:none;background:var(--line2)">📄</a>`;
+    return `<div class="pick"><div class="top" style="align-items:center"><div style="display:flex;gap:12px;align-items:center">${thumb}<div>
+      <div class="t">${esc(title)}${f.job_number && f.job_number !== state.data.job.job_number ? ` <span class="chip c-stock">#${esc(f.job_number)}</span>` : ''}</div>
+      <div class="sub">${vague(f.name) ? esc(f.name) + ' · ' : esc(when(f.date)) + ' · '}<a href="${viewUrl(f)}" target="_blank" rel="noopener">👁 View</a>${f.pushed ? ' · copied there by Job Costs' : ''}</div></div></div>
+      <div class="take">${f.invoice_id ? '<span class="chip c-paid">✓ Added</span>' : `<button class="primary small" data-diary-add="${esc(f.uuid)}">Add</button>`}</div></div></div>`;
+  };
+  const shown = m.diary.filter((f) => f.kind === 'file' || f.invoice_id);
+  const hidden = m.diary.filter((f) => !shown.includes(f));
+  return `<div class="muted" style="margin-bottom:8px">Supplier PDFs and photos attached to this job in ServiceM8. Click a file to look at it; <b>Add</b> reads it like an upload.</div>`
+    + (shown.length ? shown.map(row).join('') : '<div class="empty">No supplier files in this job’s diary.</div>')
+    + (hidden.length ? `<div style="margin:10px 0"><button class="mk-link" data-diary-hidden>${m.showHidden ? 'Hide' : 'Show'} ${hidden.length} quote${hidden.length === 1 ? '' : 's'} / your own ServiceM8 invoice${hidden.length === 1 ? '' : 's'}</button></div>`
+      + (m.showHidden ? hidden.map(row).join('') : '') : '');
 }
 
 function renderModal() {
@@ -737,6 +754,7 @@ document.addEventListener('click', async (e) => {
       await api(`/invoices/${ds.diaryRemove}${inv && !inv.other_jobs.length ? '?completely=1' : ''}`, { method: 'DELETE' });
       toast('Removed from Job Costs'); state.selected = null; return load();
     }
+    if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
     if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }
     if (ds.diaryAdd) {
       t.disabled = true; t.textContent = 'Adding…';

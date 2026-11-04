@@ -264,7 +264,7 @@ async function listJobFiles(jobUUIDs, accessToken) {
     for (const a of [].concat(data || [])) {
       out.push({
         uuid: a.uuid, job_uuid: jobUUID, name: a.attachment_name || 'File', file_type: a.file_type || '',
-        active: String(a.active) !== '0', date: a.timestamp || a.edit_date || null,
+        active: String(a.active) !== '0', date: a.timestamp || a.edit_date || null, source: a.attachment_source || '',
       });
     }
   }

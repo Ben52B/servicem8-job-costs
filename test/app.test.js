@@ -715,8 +715,19 @@ test('ServiceM8 job diary: whole invoices are copied with a note, shared ones ar
   // Pull a file from the job diary (one someone attached in ServiceM8)
   diary.files.push({ uuid: 'att-photo', job_uuid: 'diary-a', name: 'Supplier invoice.pdf', file_type: '.pdf', active: true });
   diary.files.push({ uuid: 'att-doc', job_uuid: 'diary-a', name: 'Notes.docx', file_type: '.docx', active: true });
+  const num = repo.getJob('diary-a').job_number;
+  diary.files.push({ uuid: 'att-own', job_uuid: 'diary-a', name: `Partial Invoice #${num}B`, file_type: '.pdf', active: true });
+  diary.files.push({ uuid: 'att-q', job_uuid: 'diary-a', name: 'Kopper Electrical Quote 4453.pdf', file_type: '.pdf', active: true });
+  diary.files.push({ uuid: 'att-cam', job_uuid: 'diary-a', name: '20261011_231611.jpg', file_type: '.jpg', active: true });
   let list = (await json(tA, '/diary')).files;
   assert.ok(!list.some((f) => f.uuid === 'att-doc'), 'only PDFs and photos');
+  assert.equal(list.find((f) => f.uuid === 'att-own').kind, 'own', 'your own ServiceM8 invoice is hidden');
+  assert.equal(list.find((f) => f.uuid === 'att-q').kind, 'quote');
+  assert.equal(list.find((f) => f.uuid === 'att-photo').kind, 'file');
+  assert.equal(list.find((f) => f.uuid === 'att-cam').is_photo, true);
+  const prev = await api(tA, '/diary/att-cam/file');
+  assert.equal(prev.status, 200);
+  assert.match(prev.headers.get('content-type'), /image\/jpeg/);
   assert.equal(list.find((f) => f.uuid === 'att-photo').invoice_id, null);
   assert.ok(list.find((f) => f.uuid === repo.getInvoice(up).sm8_attachment_uuid).invoice_id, 'one copied there shows as added');
   const imp = await post(tA, '/diary/att-photo/import').then((x) => x.json());
