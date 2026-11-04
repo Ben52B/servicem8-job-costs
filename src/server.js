@@ -3,6 +3,7 @@ const { openDb } = require('./db');
 const { createAnalyzer } = require('./analyzer');
 const { createProcessor } = require('./processor');
 const { createApp } = require('./app');
+const { startMailboxPoller } = require('./mailbox');
 
 if (!config.sessionSecret) {
   console.error('SESSION_SECRET must be set (see .env.example).');
@@ -15,6 +16,12 @@ const processor = createProcessor({ repo, analyzer });
 const app = createApp({ config, repo, processor });
 
 processor.resumeStuck();
+
+// Free email-in: check the invoice mailbox every couple of minutes.
+if (config.imapUser && config.imapPassword) {
+  startMailboxPoller({ config, repo, onMail: (mail) => app.locals.processMail(mail, { fallbackToOnlyAccount: true }) });
+  console.log(`Checking mailbox ${config.imapUser} at ${config.imapHost} every ${config.imapPollSeconds}s`);
+}
 app.listen(config.port, () => {
   console.log(`Job Costs listening on :${config.port}`);
   console.log(`ServiceM8 callback URL: ${config.publicUrl}/servicem8/addon`);

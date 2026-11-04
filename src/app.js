@@ -449,7 +449,52 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     res.type('text').send('This is the address Postmark sends invoice emails to. Paste it (with ?key=...) into Postmark\'s inbound webhook setting - it is not a page to open in a browser.');
   });
 
-  // ---------- Inbound email webhook: one address for the whole business ----------
+  // ---------- Incoming email (Postmark webhook, or the mailbox the app checks) ----------
+
+  /**
+   * File an email's invoices for the business it was sent to. The address's code says
+   * which business; with no code (a mailbox the app checks), it's the only business.
+   */
+  function processMail(mail, { fallbackToOnlyAccount = false } = {}) {
+    let accounts = [...new Map(codesFromAddresses(mail.recipients || []).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
+      .map((a) => [a.accountUUID ?? '', a])).values()];
+    if (!accounts.length && fallbackToOnlyAccount) {
+      const only = repo.defaultAccount();
+      if (only) accounts = [only];
+    }
+    if (!accounts.length) return { matched: 0, created: 0 };
+
+    const pdfs = mail.attachments.filter((a) => guessMime(a.name, a.contentType) === 'application/pdf');
+    let files;
+    if (pdfs.length) files = pdfs;
+    else {
+      // No PDFs: use real photos (skip small logos / signature images), else unsupported files so the user sees them.
+      files = mail.attachments.filter((a) => {
+        const m = guessMime(a.name, a.contentType);
+        if (m.startsWith('image/')) return a.buffer.length >= 20 * 1024;
+        return !m.startsWith('text/');
+      });
+    }
+    const body = mail.text || (mail.html ? htmlToText(mail.html) : '');
+    if (!files.length && body.trim().length > 80) {
+      files = [{ name: `${safeName(mail.subject || 'email').slice(0, 60)}.txt`, contentType: 'text/plain', buffer: Buffer.from(body, 'utf8') }];
+    }
+
+    let created = 0;
+    for (const acc of accounts) {
+      for (const f of files) {
+        addInvoiceFile({
+          accountUUID: acc.accountUUID, source: 'email', name: f.name, contentType: f.contentType, buffer: f.buffer,
+          emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
+        });
+        created++;
+      }
+    }
+    return { matched: accounts.length, created };
+  }
+  app.locals.processMail = processMail;
+
+  // Postmark (or SendGrid / Mailgun) webhook.
   app.post('/inbound/email',
     (req, res, next) => {
       const key = req.query.key || '';
@@ -461,39 +506,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     express.json({ limit: '60mb' }),
     upload.any(),
     (req, res) => {
-      const mail = parseInboundEmail(req);
-      const accounts = [...new Map(codesFromAddresses(mail.recipients).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
-        .map((a) => [a.accountUUID ?? '', a])).values()];
-      // Always answer 200 so the email provider doesn't keep retrying mail for unknown addresses.
-      if (!accounts.length) return res.json({ ok: true, matched: 0 });
-
-      const pdfs = mail.attachments.filter((a) => guessMime(a.name, a.contentType) === 'application/pdf');
-      let files;
-      if (pdfs.length) files = pdfs;
-      else {
-        // No PDFs: use real photos (skip small logos / signature images), else unsupported files so the user sees them.
-        files = mail.attachments.filter((a) => {
-          const m = guessMime(a.name, a.contentType);
-          if (m.startsWith('image/')) return a.buffer.length >= 20 * 1024;
-          return !m.startsWith('text/');
-        });
-      }
-      const body = mail.text || (mail.html ? htmlToText(mail.html) : '');
-      if (!files.length && body.trim().length > 80) {
-        files = [{ name: `${safeName(mail.subject || 'email').slice(0, 60)}.txt`, contentType: 'text/plain', buffer: Buffer.from(body, 'utf8') }];
-      }
-
-      let created = 0;
-      for (const acc of accounts) {
-        for (const f of files) {
-          addInvoiceFile({
-            accountUUID: acc.accountUUID, source: 'email', name: f.name, contentType: f.contentType, buffer: f.buffer,
-            emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
-          });
-          created++;
-        }
-      }
-      res.json({ ok: true, matched: accounts.length, created });
+      const r = processMail(parseInboundEmail(req));
+      res.json({ ok: true, ...r });
     });
 
   app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));

@@ -448,6 +448,79 @@ test('wrong suggestion: change the job, or send it to stock', async () => {
   assert.ok((await json(a, '/inbox')).invoices.some((i) => i.id === inv2.id && i.kept_as_stock));
 });
 
+test('free email-in: the app reads a normal mailbox (own domain or Gmail) without changing it', async () => {
+  const { parseRawEmail, checkMailbox } = require('../src/mailbox');
+  const pdf = Buffer.from('%PDF-1.4 fake').toString('base64');
+  const raw = (id, subject) => Buffer.from([
+    'From: Gliderol Accounts <accounts@gliderol.com.au>',
+    'To: invoices@doorimage.com.au',
+    `Subject: ${subject}`,
+    `Message-ID: <${id}@gliderol.com.au>`,
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="b1"',
+    '',
+    '--b1',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Please find attached our invoice.',
+    '--b1',
+    'Content-Type: application/pdf; name="INV-100.pdf"',
+    'Content-Disposition: attachment; filename="INV-100.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    pdf,
+    '--b1--',
+    '',
+  ].join('\r\n'));
+
+  const mail = await parseRawEmail(raw('m1', 'Invoice for job 208101'));
+  assert.equal(mail.subject, 'Invoice for job 208101');
+  assert.deepEqual(mail.recipients, ['invoices@doorimage.com.au']);
+  assert.equal(mail.attachments.length, 1);
+  assert.equal(mail.attachments[0].name, 'INV-100.pdf');
+
+  // A fake mailbox with two emails, one of them a copy of the other (same Message-ID)
+  const messages = { 11: raw('m1', 'Invoice for job 208101'), 12: raw('m1', 'Invoice for job 208101'), 13: raw('m2', 'Statement') };
+  const fakeClient = () => ({
+    mailbox: { uidValidity: 7 },
+    async connect() {}, async logout() {},
+    async getMailboxLock() { return { release() {} }; },
+    async search() { return Object.keys(messages).map(Number); },
+    async fetchOne(uid) { return { source: messages[uid] }; },
+  });
+  const seen = [];
+  const handled = await checkMailbox(fakeClient(), { repo, onMail: async (m) => seen.push(m.subject), log: { error() {} } });
+  assert.equal(handled, 2, 'the duplicate copy is skipped');
+  assert.deepEqual(seen, ['Invoice for job 208101', 'Statement']);
+  assert.equal(await checkMailbox(fakeClient(), { repo, onMail: async () => { throw new Error('should not run again'); } }), 0, 'already read emails are not read twice');
+
+  // An email with no code in the address goes to the one business using the app
+  const a = await openCard('job-a');
+  const before = repo.db.prepare('SELECT COUNT(*) AS n FROM invoices').get().n;
+  const app = server.listeners('request')[0];
+  const r = app.locals.processMail(mail, { fallbackToOnlyAccount: false });
+  assert.equal(r.matched, 0, 'without the mailbox fallback an address with no code matches nothing');
+  const other = await openCard('other-biz-job', 'acc-2');
+  assert.ok(other);
+  // Two businesses use this test server, so there is no single business to fall back to
+  assert.equal(app.locals.processMail(mail, { fallbackToOnlyAccount: true }).matched, 0);
+  repo.db.prepare("DELETE FROM accounts WHERE account_key = 'acc-2'").run();
+  const r2 = app.locals.processMail(mail, { fallbackToOnlyAccount: true });
+  assert.equal(r2.matched, 1);
+  await processor.idle();
+  assert.equal(repo.db.prepare('SELECT COUNT(*) AS n FROM invoices').get().n, before + 1);
+  const inv = latestInvoice();
+  assert.equal(inv.account_uuid, 'acc-1');
+  assert.equal(inv.suggested_job_uuid, 'job-a', 'job number in the subject is still suggested');
+  assert.ok(a);
+});
+
+test('the invoice address shown in the app', () => {
+  assert.equal(inboxAddress('code1', { imapAddress: 'invoices@doorimage.com.au', imapPassword: 'x' }), 'invoices@doorimage.com.au');
+  assert.equal(inboxAddress('code1', { inboundBaseAddress: 'abc@inbound.postmarkapp.com', imapAddress: 'invoices@doorimage.com.au', imapPassword: 'x' }), 'abc+code1@inbound.postmarkapp.com');
+  assert.equal(inboxAddress('code1', {}), null);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

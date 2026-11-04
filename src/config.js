@@ -16,6 +16,14 @@ const config = {
   inboundBaseAddress: (process.env.INBOUND_BASE_ADDRESS || '').trim().toLowerCase(),
   inboundDomain: (process.env.INBOUND_DOMAIN || '').trim().toLowerCase(),
   inboundSecret: process.env.INBOUND_SECRET || '',
+  // Free email-in: a normal mailbox the app checks over IMAP (your own domain, or Gmail).
+  imapHost: (process.env.IMAP_HOST || 'imap.gmail.com').trim(),
+  imapPort: Number(process.env.IMAP_PORT || 993),
+  imapUser: (process.env.IMAP_USER || '').trim(),
+  imapPassword: process.env.IMAP_PASSWORD || '',
+  imapPollSeconds: Number(process.env.IMAP_POLL_SECONDS || 120),
+  // The address suppliers send to (defaults to the mailbox login).
+  imapAddress: (process.env.INVOICE_EMAIL || process.env.IMAP_USER || '').trim().toLowerCase(),
   devMode: bool(process.env.DEV_MODE),
   // Stock orders are opened as their own ServiceM8 job. A job counts as a stock order job
   // when its client name or category name contains one of these (comma separated, any case).

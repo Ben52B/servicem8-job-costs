@@ -66,6 +66,17 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 
 ### 4. Set up the email address
 
+**Free option (recommended): a normal mailbox the app checks.** Create a mailbox just for invoices, on your own domain (e.g. `invoices@yourbusiness.com.au`) or a free Gmail account. In Render → Environment set:
+
+- `IMAP_HOST`: your provider's incoming mail server (`imap.gmail.com` for Gmail / Google Workspace, `imap.zoho.com` for Zoho, usually `mail.yourdomain.com.au` for web hosts)
+- `IMAP_USER`: the mailbox address
+- `IMAP_PASSWORD`: its password. Gmail / Google Workspace need an **app password** (Google Account → Security → 2-Step Verification → App passwords)
+
+The app checks the mailbox every 2 minutes and reads emails from the last 2 weeks it hasn't seen. It never deletes, moves or marks anything, so you can still open the mailbox normally. Microsoft 365 / Outlook mailboxes don't allow this kind of password login, so use another provider or Postmark.
+
+**Or Postmark** (a service that forwards emails to the app; paid above its free limit):
+
+
 **Easiest option (no domain needed): Postmark**
 
 1. Create a Postmark account and server. Open the **Inbound** stream.

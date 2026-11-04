@@ -91,6 +91,12 @@ CREATE TABLE IF NOT EXISTS allocations (
   UNIQUE (item_id, job_uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_alloc_job ON allocations(job_uuid);
+
+-- Emails already read from the mailbox (so the mailbox itself is never changed).
+CREATE TABLE IF NOT EXISTS processed_mail (
+  mail_key    TEXT PRIMARY KEY,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_alloc_item ON allocations(item_id);
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON items(invoice_id);
 `;
@@ -331,6 +337,25 @@ function createRepo(db, dataDir) {
     accountByInboxCode(code) {
       const acc = db.prepare('SELECT * FROM accounts WHERE inbox_code = ?').get(String(code).toLowerCase());
       return acc ? { accountUUID: acc.account_key === '' ? null : acc.account_key } : null;
+    },
+
+    /**
+     * The business an email belongs to when its address has no code (a mailbox the app
+     * checks belongs to one business): the only ServiceM8 account, or the local test one.
+     */
+    defaultAccount() {
+      const real = db.prepare("SELECT account_key FROM accounts WHERE account_key != ''").all();
+      if (real.length === 1) return { accountUUID: real[0].account_key };
+      if (!real.length && db.prepare("SELECT 1 FROM accounts WHERE account_key = ''").get()) return { accountUUID: null };
+      return null;
+    },
+
+    isMailProcessed(key) {
+      return !!db.prepare('SELECT 1 FROM processed_mail WHERE mail_key = ?').get(key);
+    },
+
+    markMailProcessed(key) {
+      db.prepare('INSERT OR IGNORE INTO processed_mail (mail_key) VALUES (?)').run(key);
     },
 
     jobsSyncedRecently(accountUUID, minutes) {

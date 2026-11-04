@@ -39,5 +39,13 @@ services:
         sync: false
       - key: SERVICEM8_APP_SECRET
         sync: false
+      # Free email-in: the invoice mailbox the app checks (e.g. invoices@yourdomain.com.au).
+      - key: IMAP_HOST
+        sync: false
+      - key: IMAP_USER
+        sync: false
+      - key: IMAP_PASSWORD
+        sync: false
+      # Only needed if you use Postmark instead of a mailbox:
       - key: INBOUND_BASE_ADDRESS
         sync: false

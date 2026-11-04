@@ -6,12 +6,14 @@
  * Works with Postmark (JSON webhook), SendGrid Inbound Parse and Mailgun routes (multipart).
  */
 
-function inboxAddress(code, { inboundBaseAddress, inboundDomain }) {
+function inboxAddress(code, { inboundBaseAddress, inboundDomain, imapAddress, imapPassword }) {
   if (inboundBaseAddress && inboundBaseAddress.includes('@')) {
     const [local, domain] = inboundBaseAddress.split('@');
     return `${local.split('+')[0]}+${code}@${domain}`;
   }
   if (inboundDomain) return `invoices-${code}@${inboundDomain}`;
+  // A mailbox the app checks: the plain address (every email there is for this business).
+  if (imapAddress && imapPassword) return imapAddress;
   return null;
 }
 
