@@ -5,7 +5,8 @@ const express = require('express');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 
-const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = require('./servicem8');
+const sm8 = require('./servicem8');
+const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = sm8;
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
@@ -35,7 +36,7 @@ function safeName(name) {
   return String(name || 'file').replace(/[^\w.\- ]+/g, '_').slice(-120) || 'file';
 }
 
-function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs }) {
+function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8 }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -117,13 +118,73 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     ? { ...info, stockAuto: looksLikeStockJob(info, config) } : info);
 
   // Keep a list of the business's active jobs, so emailed invoices can be matched to them.
-  async function syncJobs(accountUUID, accessToken) {
-    if (!accessToken || repo.jobsSyncedRecently(accountUUID, 10)) return;
+  async function syncJobs(accountUUID, accessToken, { force = false } = {}) {
+    if (!accessToken || (!force && repo.jobsSyncedRecently(accountUUID, 10))) return;
     const jobs = await fetchActiveJobsImpl(accessToken);
     if (jobs.length) repo.saveSyncedJobs(accountUUID, jobs.map(withStockFlag));
   }
 
+  /**
+   * A ServiceM8 access token for an account: the one in the click event if ServiceM8
+   * sent one, otherwise the one saved when the add-on was approved (refreshed when due).
+   */
+  async function accessTokenFor(accountUUID, eventToken) {
+    if (eventToken) return eventToken;
+    const t = repo.getTokens(accountUUID);
+    if (!t) return null;
+    if (t.refreshToken && Date.parse(t.expiresAt) - Date.now() < 120000) {
+      try {
+        const fresh = await oauth.refreshAccessToken({ appId: config.servicem8AppId, appSecret: config.servicem8AppSecret, refreshToken: t.refreshToken });
+        repo.saveTokens(accountUUID, fresh);
+        return fresh.accessToken;
+      } catch (e) {
+        console.error(`ServiceM8 token refresh failed: ${e.message}`);
+      }
+    }
+    return t.accessToken;
+  }
+
+  const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
+  const htmlPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+    <body style="margin:0;background:#f4f7f6;font:15px/1.5 'Segoe UI',Arial,sans-serif;color:#17312b;display:flex;min-height:100vh;align-items:center;justify-content:center">
+    <div style="background:#fff;border:1px solid #e3ece9;border-radius:18px;padding:28px 32px;max-width:460px;box-shadow:0 6px 18px rgba(16,40,34,.08)">${body}</div></body>`;
+
   // ---------- ServiceM8 ----------
+
+  // Installing the add-on: ServiceM8 sends the user here; we ask ServiceM8 for approval.
+  app.get('/servicem8/activate', (req, res) => {
+    if (!config.servicem8AppId) {
+      return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>SERVICEM8_APP_ID</b> (and <b>SERVICEM8_APP_SECRET</b>) in Render, then try again.</p>'));
+    }
+    const state = jwt.sign({ purpose: 'sm8-oauth' }, config.sessionSecret, { expiresIn: '15m' });
+    res.redirect(oauth.authorizeUrl({ appId: config.servicem8AppId, redirectUri: redirectUri(), scope: config.servicem8Scopes, state }));
+  });
+
+  // ServiceM8 sends the user back here after they approve.
+  app.get('/servicem8/oauth/callback', async (req, res) => {
+    try {
+      const st = jwt.verify(String(req.query.state || ''), config.sessionSecret);
+      if (st.purpose !== 'sm8-oauth') throw new Error('bad state');
+    } catch {
+      return res.status(400).type('html').send(htmlPage('Job Costs', '<h2>That link has expired</h2><p>Please install / activate the add-on again from ServiceM8.</p>'));
+    }
+    if (req.query.error || !req.query.code) {
+      return res.status(400).type('html').send(htmlPage('Job Costs', `<h2>Not connected</h2><p>ServiceM8 said: ${String(req.query.error_description || req.query.error || 'no approval code').replace(/</g, '&lt;')}</p>`));
+    }
+    try {
+      const tokens = await oauth.exchangeCode({ appId: config.servicem8AppId, appSecret: config.servicem8AppSecret, code: String(req.query.code), redirectUri: redirectUri() });
+      const acc = await oauth.fetchAccount(tokens.accessToken);
+      if (!acc) throw new Error('could not read your ServiceM8 account');
+      repo.saveTokens(acc.accountUUID, tokens);
+      await syncJobs(acc.accountUUID, tokens.accessToken, { force: true }).catch(() => {});
+      res.type('html').send(htmlPage('Job Costs connected', `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Job Costs is connected</h2>
+        <p>${acc.name ? `Connected to <b>${String(acc.name).replace(/</g, '&lt;')}</b>. ` : ''}Open any job in ServiceM8 and click <b>Job Costs</b>.</p><p style="color:#6b8a82">You can close this page.</p>`));
+    } catch (e) {
+      console.error(`ServiceM8 connect failed: ${e.message}`);
+      res.status(502).type('html').send(htmlPage('Job Costs', `<h2>Couldn't connect to ServiceM8</h2><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check SERVICEM8_APP_ID and SERVICEM8_APP_SECRET in Render, then try again.</p>`));
+    }
+  });
+
   app.get('/manifest.json', (req, res) => {
     res.json({
       name: 'Job Costs',
@@ -142,11 +203,12 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     } catch (e) {
       return res.status(401).type('html').send(`<p style="font-family:sans-serif">Could not open Job Costs: ${String(e.message).replace(/</g, '&lt;')}</p>`);
     }
-    const info = await fetchJobImpl(event.jobUUID, event.accessToken);
+    const token = await accessTokenFor(event.accountUUID, event.accessToken);
+    const info = await fetchJobImpl(event.jobUUID, token);
     const job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
     repo.ensureAccount(job.account_uuid);
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
-    const sync = syncJobs(job.account_uuid, event.accessToken).catch(() => {});
+    const sync = syncJobs(job.account_uuid, token).catch(() => {});
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
     renderCard(res, job, { embedded: true });
   });

@@ -230,6 +230,10 @@ function migrateColumns(db) {
   // The stock order job an invoice in stock came in on.
   if (!cols(db, 'invoices').includes('stock_job_uuid')) db.exec('ALTER TABLE invoices ADD COLUMN stock_job_uuid TEXT');
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
+  const accCols = cols(db, 'accounts');
+  for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
+    if (!accCols.includes(c)) db.exec(`ALTER TABLE accounts ADD COLUMN ${c} TEXT`);
+  }
 }
 
 function createRepo(db, dataDir) {
@@ -356,6 +360,18 @@ function createRepo(db, dataDir) {
 
     markMailProcessed(key) {
       db.prepare('INSERT OR IGNORE INTO processed_mail (mail_key) VALUES (?)').run(key);
+    },
+
+    /** ServiceM8 access for an account, from approving the add-on (OAuth). */
+    saveTokens(accountUUID, { accessToken, refreshToken, expiresIn }) {
+      repo.ensureAccount(accountUUID);
+      db.prepare(`UPDATE accounts SET sm8_access_token = ?, sm8_refresh_token = COALESCE(?, sm8_refresh_token), sm8_expires_at = ?
+        WHERE account_key = ?`).run(accessToken, refreshToken || null, new Date(Date.now() + (expiresIn || 3600) * 1000).toISOString(), accountUUID ?? '');
+    },
+
+    getTokens(accountUUID) {
+      const a = db.prepare('SELECT sm8_access_token, sm8_refresh_token, sm8_expires_at FROM accounts WHERE account_key = ?').get(accountUUID ?? '');
+      return a && a.sm8_access_token ? { accessToken: a.sm8_access_token, refreshToken: a.sm8_refresh_token, expiresAt: a.sm8_expires_at } : null;
     },
 
     jobsSyncedRecently(accountUUID, minutes) {

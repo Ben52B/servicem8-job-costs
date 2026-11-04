@@ -37,8 +37,12 @@ services:
       # You paste these in (Render asks when you create it; they can be filled in later):
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: SERVICEM8_APP_ID
+        sync: false
       - key: SERVICEM8_APP_SECRET
         sync: false
+      - key: SERVICEM8_SCOPES
+        value: read_jobs read_customers
       # Free email-in: the invoice mailbox the app checks (e.g. invoices@yourdomain.com.au).
       - key: IMAP_HOST
         sync: false

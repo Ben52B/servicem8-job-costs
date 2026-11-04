@@ -132,4 +132,43 @@ function looksLikeStockJob({ clientName, categoryName }, { stockJobClients = [],
   return has(clientName, stockJobClients) || has(categoryName, stockJobCategories);
 }
 
-module.exports = { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken };
+// ---------- OAuth: the one-off approval when the add-on is installed ----------
+const OAUTH_BASE = 'https://go.servicem8.com/oauth';
+
+function authorizeUrl({ appId, redirectUri, scope, state }) {
+  const q = new URLSearchParams({ response_type: 'code', client_id: appId, scope, redirect_uri: redirectUri, state });
+  return `${OAUTH_BASE}/authorize?${q}`;
+}
+
+async function tokenRequest(fields) {
+  const res = await fetch(`${OAUTH_BASE}/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams(fields),
+    signal: AbortSignal.timeout(15000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) throw new Error(body.error_description || body.error || `ServiceM8 said ${res.status}`);
+  return { accessToken: body.access_token, refreshToken: body.refresh_token || null, expiresIn: Number(body.expires_in) || 3600 };
+}
+
+const exchangeCode = ({ appId, appSecret, code, redirectUri }) =>
+  tokenRequest({ grant_type: 'authorization_code', client_id: appId, client_secret: appSecret, code, redirect_uri: redirectUri });
+const refreshAccessToken = ({ appId, appSecret, refreshToken }) =>
+  tokenRequest({ grant_type: 'refresh_token', client_id: appId, client_secret: appSecret, refresh_token: refreshToken });
+
+/** Which ServiceM8 account a token belongs to. */
+async function fetchAccount(accessToken) {
+  const res = await fetch(`${API_BASE}/vendor.json`, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) return null;
+  const v = [].concat(await res.json())[0];
+  return v && v.uuid ? { accountUUID: v.uuid, name: v.name || null } : null;
+}
+
+module.exports = {
+  verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken,
+  authorizeUrl, exchangeCode, refreshAccessToken, fetchAccount,
+};

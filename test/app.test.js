@@ -521,6 +521,48 @@ test('the invoice address shown in the app', () => {
   assert.equal(inboxAddress('code1', {}), null);
 });
 
+test('installing the add-on: approval in ServiceM8 saves access, used when the button is clicked', async () => {
+  const calls = { exchange: 0, refresh: 0, tokens: [] };
+  const fakeOauth = {
+    authorizeUrl: ({ appId, redirectUri, scope, state }) => `https://go.servicem8.com/oauth/authorize?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}&state=${state}`,
+    exchangeCode: async ({ code }) => { calls.exchange++; assert.equal(code, 'good-code'); return { accessToken: 'tok-1', refreshToken: 'ref-1', expiresIn: 60 }; },
+    refreshAccessToken: async ({ refreshToken }) => { calls.refresh++; assert.equal(refreshToken, 'ref-1'); return { accessToken: 'tok-2', refreshToken: 'ref-2', expiresIn: 3600 }; },
+    fetchAccount: async (token) => (token === 'tok-1' ? { accountUUID: 'acc-oauth', name: 'Door Image' } : null),
+  };
+  const cfg = { ...config, servicem8AppId: 'app-123', servicem8Scopes: 'read_jobs read_customers' };
+  const app2 = createApp({ config: cfg, repo, processor, oauth: fakeOauth,
+    fetchJobImpl: async (uuid, token) => { calls.tokens.push(token); return { jobNumber: '777001', jobTitle: '1 Test St' }; },
+    fetchActiveJobsImpl: async (token) => { calls.tokens.push('sync:' + token); return []; } });
+  const srv = await new Promise((r) => { const x = app2.listen(0, () => r(x)); });
+  const b2 = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    // Activation sends you to ServiceM8 to approve
+    const act = await fetch(`${b2}/servicem8/activate`, { redirect: 'manual' });
+    assert.equal(act.status, 302);
+    const loc = new URL(act.headers.get('location'));
+    assert.equal(loc.searchParams.get('client_id'), 'app-123');
+    assert.equal(loc.searchParams.get('redirect_uri'), 'http://test/servicem8/oauth/callback');
+    const state = loc.searchParams.get('state');
+
+    assert.equal((await fetch(`${b2}/servicem8/oauth/callback?code=good-code&state=forged`)).status, 400);
+    const cb = await fetch(`${b2}/servicem8/oauth/callback?code=good-code&state=${state}`);
+    assert.equal(cb.status, 200);
+    assert.match(await cb.text(), /Job Costs is connected/);
+    assert.equal(repo.getTokens('acc-oauth').accessToken, 'tok-1');
+    assert.ok(calls.tokens.includes('sync:tok-1'), 'job list fetched right away');
+
+    // Button clicked without a token in the event: the saved one is used (refreshed when due)
+    const ev = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID: 'oauth-job' }, auth: { accountUUID: 'acc-oauth' } }, SECRET);
+    const r = await fetch(`${b2}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev });
+    assert.equal(r.status, 200);
+    assert.equal(calls.refresh, 1, 'token close to expiry was refreshed');
+    assert.ok(calls.tokens.includes('tok-2'));
+    assert.equal(repo.getJob('oauth-job').job_number, '777001');
+  } finally {
+    srv.close();
+  }
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

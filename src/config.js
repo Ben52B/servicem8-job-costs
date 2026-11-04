@@ -11,6 +11,9 @@ const config = {
   dataDir: path.resolve(process.env.DATA_DIR || './data'),
   sessionSecret: process.env.SESSION_SECRET || '',
   servicem8AppSecret: process.env.SERVICEM8_APP_SECRET || '',
+  servicem8AppId: (process.env.SERVICEM8_APP_ID || '').trim(),
+  // What the add-on may read in ServiceM8 (asked for once, when it's installed).
+  servicem8Scopes: (process.env.SERVICEM8_SCOPES || 'read_jobs read_customers').trim(),
   claudeModel: process.env.CLAUDE_MODEL || 'claude-opus-5-5',
   claudeEffort: process.env.CLAUDE_EFFORT || 'medium',
   inboundBaseAddress: (process.env.INBOUND_BASE_ADDRESS || '').trim().toLowerCase(),

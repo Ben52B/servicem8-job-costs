@@ -60,7 +60,8 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 1. Sign up for a ServiceM8 developer account (developer.servicem8.com) and create a new add-on of type **Web Service Hosted**.
 2. Set the **Callback URL** to `https://<your-app>/servicem8/addon`.
 3. Paste the manifest from `https://<your-app>/manifest.json`. It adds a "Job Costs" button to the job card.
-4. Copy the add-on's **App Secret** into `SERVICEM8_APP_SECRET`.
+4. Copy the add-on's **App ID** into `SERVICEM8_APP_ID` and its **App Secret** into `SERVICEM8_APP_SECRET`.
+   Set the **Activation URL** to `https://<your-app>/servicem8/activate` and the **Return URL** to `https://<your-app>/servicem8/oauth/callback`. When you install the add-on, ServiceM8 asks you to approve it once; that lets the app read job numbers, addresses, quotes and the job list.
 5. Give it the `read_jobs`, `read_customers` and `read_job_categories` scopes, so the window can show the job number, address and quoted price, emailed invoices can be matched to your active jobs, and stock order jobs can be recognised by client and category.
 6. Install the add-on on your own ServiceM8 account. A private add-on doesn't need to be published to the store.
 
