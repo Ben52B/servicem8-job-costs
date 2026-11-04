@@ -42,7 +42,7 @@ services:
       - key: SERVICEM8_APP_SECRET
         sync: false
       - key: SERVICEM8_SCOPES
-        value: read_jobs read_customers read_job_materials manage_attachments
+        value: read_jobs read_customers read_job_materials manage_attachments read_job_attachments publish_job_attachments read_job_notes publish_job_notes
       # Free email-in: the invoice mailbox the app checks (e.g. invoices@yourdomain.com.au).
       - key: IMAP_HOST
         sync: false
