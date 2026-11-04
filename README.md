@@ -76,7 +76,25 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 5. Give it the `read_jobs`, `read_customers` and `read_job_materials` scopes (job lines, for the full job price), so the window can show the job number, address and quoted price, emailed invoices can be matched to your active jobs, and stock order jobs can be recognised by client and category.
 6. Install the add-on on your own ServiceM8 account. A private add-on doesn't need to be published to the store.
 
-### 4. Set up the email address
+### 4. Outlook (Microsoft 365): read the inbox where invoices arrive
+
+Job Costs reads your Outlook inbox (read-only: it never changes, moves or deletes emails) every 2 minutes. Each PDF or photo is read by Claude; real invoices and receipts go to the Job Costs **Inbox** with a suggested job (job number or site address on the invoice) or **📦 Looks like stock**, and wait for your OK. Quotes, statements, brochures and normal emails are ignored. It starts with the last 3 days of email.
+
+One-time setup in Microsoft (about 10 minutes, as a Microsoft 365 admin):
+
+1. Go to **entra.microsoft.com** → **Applications** → **App registrations** → **New registration**.
+   - Name: `Job Costs`
+   - Supported account types: **Accounts in this organizational directory only**
+   - Redirect URI: platform **Web**, `https://<your Render address>/outlook/callback`
+2. On the app's **Overview**, copy **Application (client) ID** and **Directory (tenant) ID**.
+3. **Certificates & secrets** → **New client secret** (24 months) → copy the **Value** (shown once).
+4. **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated** → tick `Mail.Read`, `User.Read`, `offline_access` → Add. Then click **Grant admin consent**.
+5. In Render → Environment set `MS_CLIENT_ID`, `MS_CLIENT_SECRET` (the Value), `MS_TENANT_ID`, then **Save and deploy**.
+6. Open Job Costs on any job and click **📥 Connect Outlook** (under the costs list). Sign in with the mailbox that receives the invoices.
+
+The client secret expires (24 months); when it does, make a new one and update `MS_CLIENT_SECRET`.
+
+### 4b. Or set up a separate invoice email address
 
 **Free option (recommended): a normal mailbox the app checks.** Create a mailbox just for invoices, on your own domain (e.g. `invoices@yourbusiness.com.au`) or a free Gmail account. In Render → Environment set:
 

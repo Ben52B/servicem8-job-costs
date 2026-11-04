@@ -46,6 +46,12 @@ services:
       # Free email-in: the invoice mailbox the app checks (e.g. invoices@yourdomain.com.au).
       - key: IMAP_HOST
         sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TENANT_ID
+        sync: false
       - key: IMAP_USER
         sync: false
       - key: IMAP_PASSWORD

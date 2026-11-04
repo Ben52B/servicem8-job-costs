@@ -6,6 +6,7 @@ const multer = require('multer');
 const jwt = require('jsonwebtoken');
 
 const sm8 = require('./servicem8');
+const outlook = require('./outlook');
 const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = sm8;
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
@@ -38,7 +39,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8 }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -718,6 +719,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     res.json({ ok: true });
   });
 
+  // Outlook connection status (shown on the card and the Inbox).
+  api.get('/outlook', (req, res) => {
+    const o = repo.getOutlook(req.account);
+    res.json({ available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token),
+      email: o?.email || null, lastCheck: o?.last_check || null, error: o?.error || null });
+  });
+  api.delete('/outlook', (req, res) => { repo.removeOutlook(req.account); res.json({ ok: true }); });
+
   // Reports across all jobs of the business.
   api.get('/report', (req, res) => {
     const date = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
@@ -737,8 +746,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
    * File an email's invoices for the business it was sent to. The address's code says
    * which business; with no code (a mailbox the app checks), it's the only business.
    */
-  function processMail(mail, { fallbackToOnlyAccount = false } = {}) {
-    let accounts = [...new Map(codesFromAddresses(mail.recipients || []).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
+  function processMail(mail, { fallbackToOnlyAccount = false, accountUUID, source = 'email' } = {}) {
+    let accounts = accountUUID !== undefined ? [{ accountUUID }] : [...new Map(codesFromAddresses(mail.recipients || []).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
       .map((a) => [a.accountUUID ?? '', a])).values()];
     if (!accounts.length && fallbackToOnlyAccount) {
       const only = repo.defaultAccount();
@@ -766,7 +775,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     for (const acc of accounts) {
       for (const f of files) {
         addInvoiceFile({
-          accountUUID: acc.accountUUID, source: 'email', name: f.name, contentType: f.contentType, buffer: f.buffer,
+          accountUUID: acc.accountUUID, source, name: f.name, contentType: f.contentType, buffer: f.buffer,
           emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
         });
         created++;
@@ -775,6 +784,56 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return { matched: accounts.length, created };
   }
   app.locals.processMail = processMail;
+
+  // ---------- Outlook (Microsoft 365) ----------
+  const msApp = () => ({ clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId });
+  const outlookRedirect = () => `${config.publicUrl}/outlook/callback`;
+  let outlookRunning = null; // one check at a time, so an email is never picked up twice
+  app.locals.checkOutlook = () => {
+    if (!outlookRunning) {
+      outlookRunning = outlook.checkOutlook({
+        repo, config, api: outlookApi,
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }),
+      }).finally(() => { outlookRunning = null; });
+    }
+    return outlookRunning;
+  };
+
+  // "Connect Outlook" (opened from the card): sign in to Microsoft and allow reading mail.
+  app.get('/outlook/connect', (req, res) => {
+    const job = jobFromToken(req.query.t);
+    if (!job) return res.status(401).type('html').send(htmlPage('Job Costs', '<h2>Session expired</h2><p>Open Job Costs from a job in ServiceM8 and try again.</p>'));
+    if (!config.msClientId || !config.msClientSecret) {
+      return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b> and <b>MS_TENANT_ID</b> in Render (see the README), then try again.</p>'));
+    }
+    const state = jwt.sign({ purpose: 'outlook', account: job.account_uuid ?? null }, config.sessionSecret, { expiresIn: '15m' });
+    res.redirect(outlookApi.authorizeUrl({ clientId: config.msClientId, tenant: config.msTenantId, redirectUri: outlookRedirect(), state }));
+  });
+  app.get('/outlook/callback', async (req, res) => {
+    let st;
+    try {
+      st = jwt.verify(String(req.query.state || ''), config.sessionSecret);
+      if (st.purpose !== 'outlook') throw new Error('bad state');
+    } catch {
+      return res.status(400).type('html').send(htmlPage('Job Costs', '<h2>That link has expired</h2><p>Click <b>Connect Outlook</b> in Job Costs again.</p>'));
+    }
+    if (req.query.error || !req.query.code) {
+      return res.status(400).type('html').send(htmlPage('Job Costs', `<h2>Outlook not connected</h2><p>Microsoft said: ${String(req.query.error_description || req.query.error || 'no approval code').replace(/</g, '&lt;')}</p>`));
+    }
+    try {
+      const tokens = await outlookApi.exchangeCode(msApp(), { code: String(req.query.code), redirectUri: outlookRedirect() });
+      const me = await outlookApi.fetchMe(tokens.accessToken);
+      repo.removeOutlook(st.account);
+      repo.saveOutlook(st.account, { ...tokens, email: me.email, name: me.name, connectedAt: new Date().toISOString() });
+      app.locals.checkOutlook().catch(() => {});
+      res.type('html').send(htmlPage('Outlook connected', `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Outlook is connected</h2>
+        <p>Job Costs now checks <b>${String(me.email || 'your inbox').replace(/</g, '&lt;')}</b> every couple of minutes, keeps the invoices and ignores everything else. It only reads – it never changes or deletes your emails.</p>
+        <p>New invoices show up in the Job Costs <b>Inbox</b> with a suggested job (or stock), waiting for your OK.</p><p style="color:#6b8a82">You can close this page.</p>`));
+    } catch (e) {
+      console.error(`Outlook connect failed: ${e.message}`);
+      res.status(502).type('html').send(htmlPage('Job Costs', `<h2>Couldn't connect Outlook</h2><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check MS_CLIENT_ID, MS_CLIENT_SECRET and MS_TENANT_ID in Render, then try again.</p>`));
+    }
+  });
 
   // Postmark (or SendGrid / Mailgun) webhook.
   app.post('/inbound/email',

@@ -27,6 +27,11 @@ const config = {
   imapPollSeconds: Number(process.env.IMAP_POLL_SECONDS || 120),
   // The address suppliers send to (defaults to the mailbox login).
   imapAddress: (process.env.INVOICE_EMAIL || process.env.IMAP_USER || '').trim().toLowerCase(),
+  // Outlook (Microsoft 365): an app registered in Microsoft Entra, so Job Costs can read the inbox (read-only).
+  msClientId: (process.env.MS_CLIENT_ID || '').trim(),
+  msClientSecret: process.env.MS_CLIENT_SECRET || '',
+  msTenantId: (process.env.MS_TENANT_ID || 'organizations').trim(),
+  outlookPollSeconds: Number(process.env.OUTLOOK_POLL_SECONDS || 120),
   devMode: bool(process.env.DEV_MODE),
   // Stock orders are opened as their own ServiceM8 job. A job counts as a stock order job
   // when its client name or category name contains one of these (comma separated, any case).

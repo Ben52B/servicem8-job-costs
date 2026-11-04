@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS processed_mail (
   mail_key    TEXT PRIMARY KEY,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Outlook (Microsoft 365) mailbox connected to a business, read-only.
+CREATE TABLE IF NOT EXISTS outlook (
+  account_key    TEXT PRIMARY KEY,
+  email          TEXT,
+  name           TEXT,
+  access_token   TEXT,
+  refresh_token  TEXT,
+  expires_at     TEXT,
+  connected_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  last_received  TEXT,
+  last_check     TEXT,
+  error          TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_alloc_item ON allocations(item_id);
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON items(invoice_id);
 `;
@@ -264,6 +277,7 @@ function migrateColumns(db) {
   add('sm8_link', 'TEXT');               // 'pulled' (came from the diary) | 'pushed' (copied there by Job Costs)
   add('sm8_missing', 'INTEGER NOT NULL DEFAULT 0'); // the diary file was deleted in ServiceM8
   add('diary_pending', 'INTEGER NOT NULL DEFAULT 0'); // needs a look by the diary copier
+  add('purchase_kind', 'TEXT');          // Claude's guess: 'job' | 'stock' | 'unclear'
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
   for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
@@ -449,6 +463,25 @@ function createRepo(db, dataDir) {
     },
 
     /** ServiceM8 access for an account, from approving the add-on (OAuth). */
+    // ----- Outlook -----
+    saveOutlook(accountKey, f) {
+      const key = accountKey ?? '';
+      db.prepare('INSERT INTO outlook (account_key) VALUES (?) ON CONFLICT (account_key) DO NOTHING').run(key);
+      const cols = { email: f.email, name: f.name, access_token: f.accessToken, refresh_token: f.refreshToken, expires_at: f.expiresAt,
+        connected_at: f.connectedAt, last_received: f.lastReceived, last_check: f.lastCheck, error: f.error };
+      const keys = Object.keys(cols).filter((k) => cols[k] !== undefined);
+      if (keys.length) db.prepare(`UPDATE outlook SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE account_key = ?`).run(...keys.map((k) => cols[k]), key);
+    },
+    getOutlook(accountUUID) {
+      return db.prepare('SELECT * FROM outlook WHERE account_key = ?').get(accountUUID ?? '') || null;
+    },
+    listOutlookConnections() {
+      return db.prepare('SELECT * FROM outlook WHERE refresh_token IS NOT NULL').all();
+    },
+    removeOutlook(accountUUID) {
+      db.prepare('DELETE FROM outlook WHERE account_key = ?').run(accountUUID ?? '');
+    },
+
     saveTokens(accountUUID, { accessToken, refreshToken, expiresIn }) {
       repo.ensureAccount(accountUUID);
       db.prepare(`UPDATE accounts SET sm8_access_token = ?, sm8_refresh_token = COALESCE(?, sm8_refresh_token), sm8_expires_at = ?
@@ -595,13 +628,13 @@ function createRepo(db, dataDir) {
       tx(() => {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
             document_type = ?, supplier = ?, supplier_abn = ?, invoice_number = ?, invoice_date = ?,
-            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?,
+            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?, purchase_kind = ?,
             category = CASE WHEN category_manual = 1 THEN category ELSE ? END
           WHERE id = ?`).run(
           x.document_type || null, x.supplier_name || null, x.supplier_abn || null, x.invoice_number || null,
           x.invoice_date || null, x.due_date || null, x.currency || null,
           x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null,
-          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, invoiceCategory(items), id,
+          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, x.purchase_kind || null, invoiceCategory(items), id,
         );
         db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
@@ -1055,6 +1088,8 @@ function createRepo(db, dataDir) {
             ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,
           left_amount: round2(left.reduce((s, l) => s + l.trace.left_amount, 0)),
           suggestion: sj && untouched ? { job_uuid: sj.job_uuid, job_number: sj.job_number, job_title: sj.job_title, reason: inv.suggestion_reason, is_stock: !!sj.is_stock } : null,
+          // No job found, but it reads like a restock order: suggest stock.
+          looks_like_stock: !sj && untouched && !inv.kept_as_stock && inv.purchase_kind === 'stock',
           lines: left.map((l) => ({
             item_id: l.id, description: l.description, unit: l.unit, quantity: l.trace.quantity, cost: l.cost,
             unit_cost: l.trace.quantity ? round2(l.cost / l.trace.quantity) : null, trace: l.trace,

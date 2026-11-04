@@ -24,6 +24,13 @@ if (config.imapUser && config.imapPassword) {
   startMailboxPoller({ config, repo, onMail: (mail) => app.locals.processMail(mail, { fallbackToOnlyAccount: true }) });
   console.log(`Checking mailbox ${config.imapUser} at ${config.imapHost} every ${config.imapPollSeconds}s`);
 }
+// Outlook (Microsoft 365) inbox, once it's connected from the card.
+if (config.msClientId && config.msClientSecret) {
+  const tick = () => app.locals.checkOutlook().then((n) => { if (n) console.log(`Outlook: ${n} new email${n === 1 ? '' : 's'} with possible invoices`); })
+    .catch((e) => console.error(`Outlook check failed: ${e.message}`));
+  setTimeout(tick, 5000);
+  setInterval(tick, Math.max(60, config.outlookPollSeconds) * 1000);
+}
 app.listen(config.port, () => {
   console.log(`Job Costs listening on :${config.port}`);
   console.log(`ServiceM8 callback URL: ${config.publicUrl}/servicem8/addon`);

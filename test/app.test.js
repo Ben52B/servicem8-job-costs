@@ -33,12 +33,13 @@ const DOOR = {
 const fakeAnalyzer = {
   async analyzeFile({ fileName }) {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
+    if (/quote/.test(fileName)) return { ...DOOR, document_type: 'quote', invoice_number: 'Q-1' };
     if (/receipt/.test(fileName)) {
       return { is_financial_document: true, document_type: 'receipt', supplier_name: 'Bunnings', invoice_number: 'R-1', total: 55, tax: 5, payment_status: 'paid',
         references: [], items: [{ description: 'Dynabolts', category: 'materials', line_total: 50 }] };
     }
     if (/motors/.test(fileName)) {
-      return { is_financial_document: true, supplier_name: 'Merlin', invoice_number: 'M-1', total: 3410, tax: 310, payment_status: 'unpaid', references: ['Stock order'],
+      return { is_financial_document: true, supplier_name: 'Merlin', invoice_number: 'M-1', total: 3410, tax: 310, payment_status: 'unpaid', references: ['Stock order'], purchase_kind: 'stock',
         items: [{ description: 'Merlin opener', category: 'materials', quantity: 10, unit: 'ea', line_total: 3000 }, { description: 'Delivery', category: 'freight', line_total: 100 }] };
     }
     if (/posts-ref/.test(fileName)) {
@@ -65,6 +66,7 @@ const JOBS = {
   'job-207974A': { jobNumber: '207974A', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 9225 },
   'job-207974B': { jobNumber: '207974 B', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 0 },
   'job-555B': { jobNumber: '555B', jobTitle: 'Orphan part' },
+  'ol-job-b': { jobNumber: '208777', jobTitle: '3 Lake Rd, Kew' },
 };
 let jobCounter = 300000;
 const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), status: 'Work Order' });
@@ -108,7 +110,8 @@ async function openCard(jobUUID, accountUUID = 'acc-1') {
   const page = await fetch(`${base}/card?t=${encodeURIComponent(t)}`);
   assert.equal(page.status, 200);
   const boot = JSON.parse((await page.text()).match(/const BOOT = (\{.*?\});\n/)[1]);
-  assert.equal(boot.token, t);
+  // Same job (the two tokens can differ if they were made a second apart)
+  assert.equal(jwt.decode(boot.token).jobUUID, jwt.decode(t).jobUUID);
   return boot.token;
 }
 
@@ -749,6 +752,74 @@ test('ServiceM8 job diary: whole invoices are copied with a note, shared ones ar
   const kept = repo.getInvoice(man.id).sm8_attachment_uuid;
   await api(tB, `/invoices/${man.id}?completely=1`, { method: 'DELETE' });
   assert.ok(diary.files.some((f) => f.uuid === kept));
+});
+
+test('Outlook: connect once, invoices from the inbox wait in the Inbox with a suggested job or stock; other emails are ignored', async () => {
+  const pdf = (name) => ({ name, contentType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 ' + name), inline: false });
+  const inbox = [
+    { id: 'm1', internetMessageId: '<m1@x>', subject: 'Tax invoice for 208777', from: { emailAddress: { name: 'Door Supplies', address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: 'Please find attached' }, files: [pdf('invoice.pdf')] },
+    { id: 'm2', internetMessageId: '<m2@x>', subject: 'Team BBQ Friday', from: { emailAddress: { address: 'boss@x.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: false, body: { content: 'Bring a salad. '.repeat(10) }, files: [] },
+    { id: 'm3', internetMessageId: '<m3@x>', subject: 'Brochure', from: { emailAddress: { address: 'news@x.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: 'New range' }, files: [pdf('notinvoice.pdf')] },
+    { id: 'm4', internetMessageId: '<m4@x>', subject: 'Your order', from: { emailAddress: { address: 'sales@merlin.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('motors.pdf')] },
+    { id: 'm5', internetMessageId: '<m5@x>', subject: 'Quote 55', from: { emailAddress: { address: 'sales@x.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('quote.pdf')] },
+  ];
+  const calls = { list: 0 };
+  const fakeGraph = {
+    authorizeUrl: ({ clientId, redirectUri, state }) => `https://login.microsoftonline.com/t/oauth2/v2.0/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
+    exchangeCode: async (appCfg, { code }) => { assert.equal(code, 'ms-code'); assert.equal(appCfg.clientSecret, 'ms-secret'); return { accessToken: 'ms-at', refreshToken: 'ms-rt', expiresAt: new Date(Date.now() + 3600e3).toISOString() }; },
+    refreshTokens: async () => ({ accessToken: 'ms-at2', refreshToken: 'ms-rt2', expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
+    fetchMe: async () => ({ email: 'accounts@doorimage.com.au', name: 'Accounts' }),
+    listMessages: async (token) => { assert.ok(token.startsWith('ms-at')); calls.list++; return inbox; },
+    listAttachments: async (token, id) => inbox.find((m) => m.id === id).files,
+  };
+  const cfg = { ...config, msClientId: 'ms-client', msClientSecret: 'ms-secret', msTenantId: 'tenant-1' };
+  const app3 = createApp({ config: cfg, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, outlookApi: fakeGraph });
+  const srv = await new Promise((r) => { const x = app3.listen(0, () => r(x)); });
+  const b3 = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    await openCard('ol-job', 'acc-ol');
+    const t = await openCard('ol-job-b', 'acc-ol'); // job #208777
+    // Not connected yet: the card offers the button
+    let st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.deepEqual([st.available, st.connected], [true, false]);
+    // Connect: Microsoft sign-in, then back
+    const go = await fetch(`${b3}/outlook/connect?t=${encodeURIComponent(t)}`, { redirect: 'manual' });
+    assert.equal(go.status, 302);
+    const loc = new URL(go.headers.get('location'));
+    assert.equal(loc.searchParams.get('redirect_uri'), 'http://test/outlook/callback');
+    assert.equal((await fetch(`${b3}/outlook/callback?code=ms-code&state=forged`)).status, 400);
+    const cb = await fetch(`${b3}/outlook/callback?code=ms-code&state=${loc.searchParams.get('state')}`);
+    assert.equal(cb.status, 200);
+    assert.match(await cb.text(), /Outlook is connected/);
+    await app3.locals.checkOutlook();
+    await processor.idle();
+
+    const mine = () => repo.db.prepare("SELECT * FROM invoices WHERE account_uuid = 'acc-ol' AND source = 'outlook'").all();
+    const kept = mine();
+    assert.deepEqual(kept.map((i) => i.file_name).sort(), ['invoice.pdf', 'motors.pdf'], 'BBQ email, brochure and quote are not kept');
+    const unassigned = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    const door = unassigned.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
+    assert.equal(door.suggestion.job_number, '208777', 'job number in the subject');
+    assert.equal(door.looks_like_stock, false);
+    const merlin = unassigned.invoices.find((i) => i.supplier === 'Merlin');
+    assert.equal(merlin.suggestion, null);
+    assert.equal(merlin.looks_like_stock, true, 'no job, reads like a restock order');
+    // Nothing goes on a job until approved
+    assert.equal((await summary(t)).invoices.length, 0);
+    assert.equal((await post(t, `/suggestions/${door.id}/accept`)).status, 200);
+    assert.equal((await summary(t)).invoices.length, 1);
+
+    // Checking again doesn't add the same emails twice
+    await app3.locals.checkOutlook();
+    await processor.idle();
+    assert.equal(mine().length, 2);
+    st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.equal(st.connected, true);
+    assert.equal(st.email, 'accounts@doorimage.com.au');
+    assert.equal(st.error, null);
+  } finally {
+    srv.close();
+  }
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {
