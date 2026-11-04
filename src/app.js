@@ -593,6 +593,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       res.json({ ok: true, ...r });
     });
 
+  // PDF.js, for drawing invoice PDFs in the preview (browsers won't show PDFs inside ServiceM8's window).
+  app.use('/vendor/pdfjs', express.static(path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'build'), {
+    index: false, maxAge: '7d',
+    setHeaders: (res, file) => { if (file.endsWith('.mjs')) res.type('text/javascript'); },
+  }));
   app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));
   app.get('/', (req, res) => res.type('text').send('Job Costs add-on for ServiceM8 is running.'));
 

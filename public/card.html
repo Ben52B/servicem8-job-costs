@@ -148,6 +148,8 @@
   .preview iframe { flex: 1; border: 0; width: 100%; background: #525659; }
   .preview .img { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
   .preview .img img { max-width: 100%; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, .12); }
+  .preview .pdf { flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; }
+  .preview .pdf canvas { width: 100%; background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, .12); }
 
   /* Add costs window */
   .overlay { position: fixed; inset: 0; background: rgba(13, 43, 36, .45); display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; z-index: 20; overflow: auto; }
@@ -509,8 +511,41 @@ function renderPreview() {
   }
   const url = fileUrl(inv.id);
   const mime = inv.mime_type || '';
-  const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>` : `<iframe src="${url}${mime === 'application/pdf' ? '#view=FitH' : ''}" title="Invoice"></iframe>`;
+  const isPdf = mime === 'application/pdf';
+  const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>`
+    : isPdf ? '<div class="img pdf" id="pdfHolder"><div class="empty"><span class="spin"></span></div></div>'
+    : `<iframe src="${url}" title="Invoice"></iframe>`;
   el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn small" href="${url}" target="_blank" rel="noopener">Open</a></div>${body}`;
+  if (isPdf) drawPdf(url, $('#pdfHolder'), key);
+}
+
+// Draw PDF pages ourselves: Chrome won't show PDFs inside ServiceM8's window.
+let pdfjsPromise = null;
+const loadPdfjs = () => (pdfjsPromise ||= import('/vendor/pdfjs/pdf.min.mjs').then((lib) => {
+  lib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+  return lib;
+}));
+async function drawPdf(url, holder, key) {
+  try {
+    const lib = await loadPdfjs();
+    const doc = await lib.getDocument({ url, isEvalSupported: false }).promise;
+    if (state.previewKey !== key || !holder.isConnected) return;
+    holder.innerHTML = '';
+    const width = Math.max(200, holder.clientWidth - 24);
+    for (let n = 1; n <= Math.min(doc.numPages, 10); n++) {
+      const pg = await doc.getPage(n);
+      const scale = (width / pg.getViewport({ scale: 1 }).width) * (window.devicePixelRatio || 1);
+      const vp = pg.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      holder.appendChild(canvas);
+      await pg.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      if (state.previewKey !== key || !holder.isConnected) return;
+    }
+    if (doc.numPages > 10) holder.insertAdjacentHTML('beforeend', `<div class="muted">${doc.numPages - 10} more pages – click Open to see them all.</div>`);
+  } catch (e) {
+    if (holder.isConnected) holder.innerHTML = '<div class="empty">Couldn’t show this PDF here.<br>Click <b>Open</b> to view it.</div>';
+  }
 }
 
 // ---------- Add costs window ----------

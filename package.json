@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.3",
     "mailparser": "^3.14.1",
     "multer": "^2.5.0",
+    "pdfjs-dist": "^4.10.38",
     "zod": "^4.6.7"
   },
   "private": true,
