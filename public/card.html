@@ -247,6 +247,9 @@ const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14
 const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
 const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand' };
 const fileUrl = (id) => `/api/invoices/${id}/file?t=${encodeURIComponent(BOOT.token)}`;
+// PDFs open in our own viewer (Chrome won't show PDFs opened from ServiceM8's window); photos open as they are.
+const viewUrl = (inv) => (inv.mime_type === 'application/pdf'
+  ? `/viewer.html?id=${inv.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(inv.file_name || 'Invoice')}` : fileUrl(inv.id));
 const catOptions = (sel) => BOOT.categories.map((c) => `<option value="${c}" ${c === sel ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('');
 const reasonOptions = (sel, empty = 'No screw-up') => `<option value="">${empty}</option>` + BOOT.reasons.map((r) => `<option value="${r.code}" ${r.code === sel ? 'selected' : ''}>⚠ ${esc(r.label)}</option>`).join('');
 
@@ -406,7 +409,7 @@ function renderStockDetail(inv, el) {
     h += `<div class="d-total">Invoice ${money(inv.total_ex ?? inv.total)} ex GST · used ${money(inv.used)} · <b>${money(inv.left)} still in stock</b></div>`;
   }
   h += `<div class="actions">
-      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv.id)}" target="_blank" rel="noopener">View invoice</a><button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
+      ${inv.file_path ? `<a class="btn only-sm" href="${viewUrl(inv)}" target="_blank" rel="noopener">View invoice</a><button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
       <span class="spacer"></span><button class="danger link" data-ask-delete="${inv.id}">Remove from this order</button></div>`;
   if (state.confirmDel === inv.id) {
@@ -474,7 +477,7 @@ function renderDetail() {
   if (inv.notes) h += `<div class="note">${esc(inv.notes)}</div>`;
   if (inv.email_from) h += `<div class="muted" style="margin-top:10px;font-size:12px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
-      ${inv.file_path ? `<a class="btn only-sm" href="${fileUrl(inv.id)}" target="_blank" rel="noopener">View invoice</a>` : ''}
+      ${inv.file_path ? `<a class="btn only-sm" href="${viewUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
       ${inv.file_path ? `<button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
       ${ready && inv.items.length ? `<select class="pill-select" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
@@ -516,7 +519,7 @@ function renderPreview() {
   const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>`
     : isPdf ? '<div class="img pdf" id="pdfHolder"><div class="empty"><span class="spin"></span></div></div>'
     : `<iframe src="${url}" title="Invoice"></iframe>`;
-  el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn small" href="${url}" target="_blank" rel="noopener">Open</a></div>${body}`;
+  el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn small" href="${viewUrl(inv)}" target="_blank" rel="noopener">Open</a></div>${body}`;
   if (isPdf) drawPdf(url, $('#pdfHolder'), key);
 }
 

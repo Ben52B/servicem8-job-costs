@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoice</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #525659; font: 14px/1.4 "Segoe UI", -apple-system, Roboto, Arial, sans-serif; color: #fff; }
+  .bar { position: sticky; top: 0; z-index: 2; display: flex; gap: 10px; align-items: center; padding: 10px 16px; background: #17312b; }
+  .bar b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 6px 12px; background: #10b981; color: #fff; cursor: pointer; }
+  #pages { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 12px 40px; }
+  canvas, img { max-width: min(1000px, 100%); width: 100%; background: #fff; box-shadow: 0 3px 14px rgba(0, 0, 0, .35); }
+  img { width: auto; }
+  .msg { padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="bar"><b id="name">Invoice</b><button id="zoomOut" title="Smaller">−</button><button id="zoomIn" title="Bigger">+</button><button id="print">🖨 Print</button></div>
+<div id="pages"><div class="msg">Loading…</div></div>
+<script type="module">
+// Shows an invoice PDF by drawing its pages (Chrome won't show PDFs opened from ServiceM8's window).
+const q = new URLSearchParams(location.search);
+const id = Number(q.get('id'));
+const url = `/api/invoices/${id}/file?t=${encodeURIComponent(q.get('t') || '')}`;
+const pages = document.getElementById('pages');
+document.getElementById('name').textContent = q.get('name') || 'Invoice';
+document.title = q.get('name') || 'Invoice';
+let width = Math.min(1000, window.innerWidth - 24);
+
+async function show() {
+  try {
+    const lib = await import('/vendor/pdfjs/pdf.min.mjs');
+    lib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
+    const doc = await lib.getDocument({ url, isEvalSupported: false }).promise;
+    pages.innerHTML = '';
+    for (let n = 1; n <= doc.numPages; n++) {
+      const pg = await doc.getPage(n);
+      const scale = (width / pg.getViewport({ scale: 1 }).width) * (window.devicePixelRatio || 1);
+      const vp = pg.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      canvas.style.width = width + 'px';
+      pages.appendChild(canvas);
+      await pg.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    }
+  } catch (e) {
+    pages.innerHTML = '<div class="msg">Couldn’t show this invoice. Close this tab and click Job Costs again (the session may have expired).</div>';
+  }
+}
+document.getElementById('zoomIn').onclick = () => { width = Math.round(width * 1.25); show(); };
+document.getElementById('zoomOut').onclick = () => { width = Math.max(300, Math.round(width / 1.25)); show(); };
+document.getElementById('print').onclick = () => window.print();
+show();
+</script>
+</body>
+</html>

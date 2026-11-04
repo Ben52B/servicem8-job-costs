@@ -75,7 +75,9 @@ async function load() {
 }
 
 const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}${j.is_stock ? ' (stock order)' : ''}`;
-const fileLink = (i) => (i.file_path ? `<a class="btn" href="/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">View</a>` : '');
+const fileLink = (i) => (!i.file_path ? '' : `<a class="btn" href="${i.mime_type === 'application/pdf'
+  ? `/viewer.html?id=${i.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(i.supplier || 'Invoice')}`
+  : `/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}`}" target="_blank" rel="noopener">View</a>`);
 
 function render() {
   $('#address').innerHTML = data.inboxAddress
