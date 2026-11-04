@@ -237,7 +237,74 @@ async function fetchAccount(accessToken) {
   }
 }
 
+// ---------- Job diary: attachments and notes ----------
+
+async function sm8(method, path, accessToken, { json, body, headers = {}, raw = false } = {}) {
+  const res = await fetch(`${API_BASE}/${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', ...(json ? { 'Content-Type': 'application/json' } : {}), ...headers },
+    body: json ? JSON.stringify(json) : body,
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) {
+    const text = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200);
+    throw new Error(`ServiceM8 said ${res.status}${text ? ': ' + text : ''}`);
+  }
+  if (raw) return res;
+  const t = await res.text();
+  return { uuid: res.headers.get('x-record-uuid'), data: t ? (() => { try { return JSON.parse(t); } catch { return t; } })() : null };
+}
+
+/** PDFs and photos attached to these jobs (the job's diary files). */
+async function listJobFiles(jobUUIDs, accessToken) {
+  const out = [];
+  for (const jobUUID of jobUUIDs) {
+    const filter = encodeURIComponent(`related_object_uuid eq '${jobUUID}'`);
+    const { data } = await sm8('GET', `attachment.json?%24filter=${filter}`, accessToken);
+    for (const a of [].concat(data || [])) {
+      out.push({
+        uuid: a.uuid, job_uuid: jobUUID, name: a.attachment_name || 'File', file_type: a.file_type || '',
+        active: String(a.active) !== '0', date: a.timestamp || a.edit_date || null,
+      });
+    }
+  }
+  return out;
+}
+
+async function downloadJobFile(attachmentUUID, accessToken) {
+  const res = await sm8('GET', `Attachment/${encodeURIComponent(attachmentUUID)}.file`, accessToken, { raw: true, headers: { Accept: '*/*' } });
+  return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') || '' };
+}
+
+/** Attach a file to a job (it shows in the job's diary). Returns the attachment's uuid. */
+async function addJobFile({ jobUUID, name, buffer, contentType }, accessToken) {
+  const ext = (String(name).match(/\.[a-z0-9]{2,5}$/i) || ['.pdf'])[0].toLowerCase();
+  const created = await sm8('POST', 'attachment.json', accessToken, {
+    json: { related_object: 'job', related_object_uuid: jobUUID, attachment_name: name, file_type: ext, active: 1 },
+  });
+  if (!created.uuid) throw new Error('ServiceM8 didn\u2019t return the new attachment');
+  const fd = new FormData();
+  fd.append('file', new Blob([buffer], { type: contentType || 'application/octet-stream' }), name);
+  try {
+    await sm8('POST', `Attachment/${created.uuid}.file`, accessToken, { body: fd });
+  } catch (e) {
+    if (!/said 4\d\d/.test(e.message) || /said 40[13]/.test(e.message)) throw e;
+    // Some accounts want the file itself as the body rather than a form.
+    await sm8('POST', `Attachment/${created.uuid}.file`, accessToken, { body: buffer, headers: { 'Content-Type': contentType || 'application/octet-stream' } });
+  }
+  return created.uuid;
+}
+
+async function addJobNote({ jobUUID, text }, accessToken) {
+  const created = await sm8('POST', 'note.json', accessToken, { json: { related_object: 'job', related_object_uuid: jobUUID, note: text, active: 1 } });
+  return created.uuid || null;
+}
+
+const removeJobFile = (uuid, accessToken) => sm8('DELETE', `attachment/${encodeURIComponent(uuid)}.json`, accessToken);
+const removeJobNote = (uuid, accessToken) => sm8('DELETE', `note/${encodeURIComponent(uuid)}.json`, accessToken);
+
 module.exports = {
   verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken, fullPriceFromLines, findJobByNumber,
   authorizeUrl, exchangeCode, refreshAccessToken, fetchAccount,
+  listJobFiles, downloadJobFile, addJobFile, addJobNote, removeJobFile, removeJobNote,
 };

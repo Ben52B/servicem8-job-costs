@@ -16,6 +16,8 @@ const processor = createProcessor({ repo, analyzer });
 const app = createApp({ config, repo, processor });
 
 processor.resumeStuck();
+// Copy invoices that are wholly on one job to its ServiceM8 job diary.
+app.locals.startDiaryWorker(30);
 
 // Free email-in: check the invoice mailbox every couple of minutes.
 if (config.imapUser && config.imapPassword) {

@@ -255,6 +255,15 @@ function migrateColumns(db) {
   if (!jobCols.includes('stock_manual')) db.exec('ALTER TABLE jobs ADD COLUMN stock_manual INTEGER');
   // The stock order job an invoice in stock came in on.
   if (!cols(db, 'invoices').includes('stock_job_uuid')) db.exec('ALTER TABLE invoices ADD COLUMN stock_job_uuid TEXT');
+  // Link to the ServiceM8 job diary: the file there (pulled from it, or copied to it) and our note.
+  const ic = cols(db, 'invoices');
+  const add = (c, type) => { if (!ic.includes(c)) db.exec(`ALTER TABLE invoices ADD COLUMN ${c} ${type}`); };
+  add('sm8_attachment_uuid', 'TEXT');
+  add('sm8_note_uuid', 'TEXT');
+  add('sm8_job_uuid', 'TEXT');           // the job whose diary holds it
+  add('sm8_link', 'TEXT');               // 'pulled' (came from the diary) | 'pushed' (copied there by Job Costs)
+  add('sm8_missing', 'INTEGER NOT NULL DEFAULT 0'); // the diary file was deleted in ServiceM8
+  add('diary_pending', 'INTEGER NOT NULL DEFAULT 0'); // needs a look by the diary copier
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
   for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
@@ -349,6 +358,16 @@ function createRepo(db, dataDir) {
     _withoutSplitParts(jobs) {
       const numbers = new Set(jobs.map((j) => String(j.job_number)));
       return jobs.filter((j) => { const main = mainJobNumber(j.job_number); return !main || !numbers.has(main); });
+    },
+
+    /** This job and its split parts (#207974A, #207974B…) we know of. */
+    familyJobUUIDs(jobUUID) {
+      const job = repo.getJob(jobUUID);
+      if (!job) return [jobUUID];
+      const parts = repo.splitParts(job.account_uuid, job.job_number);
+      const uuids = parts.length ? db.prepare(`SELECT job_uuid FROM jobs WHERE account_uuid IS ? AND job_number IN (${parts.map(() => '?').join(',')})`)
+        .all(job.account_uuid, ...parts).map((r) => r.job_uuid) : [];
+      return [jobUUID, ...uuids];
     },
 
     isStockJob(jobUUID) {
@@ -513,7 +532,43 @@ function createRepo(db, dataDir) {
     /** Put a file on an invoice that was added by hand; it is then read like any other. */
     attachFile(id, { fileName, filePath, mimeType }) {
       db.prepare(`UPDATE invoices SET file_name = ?, file_path = ?, mime_type = ?, source = 'upload',
-          attached_later = 1 WHERE id = ?`).run(fileName, filePath, mimeType, id);
+          attached_later = 1, diary_pending = 1 WHERE id = ?`).run(fileName, filePath, mimeType, id);
+    },
+
+    // ----- ServiceM8 job diary -----
+
+    /** The one job that has ALL of this invoice (shared / partly used invoices return null). */
+    wholeJobOf(invoiceId) {
+      const items = db.prepare('SELECT id FROM items WHERE invoice_id = ?').all(invoiceId);
+      if (!items.length) return null;
+      let job = null;
+      for (const it of items) {
+        const list = db.prepare('SELECT job_uuid, fraction FROM allocations WHERE item_id = ?').all(it.id);
+        if (list.length !== 1 || list[0].fraction < 1 - EPS) return null;
+        if (job && job !== list[0].job_uuid) return null;
+        job = list[0].job_uuid;
+      }
+      return job;
+    },
+
+    listDiaryPending() {
+      return db.prepare("SELECT * FROM invoices WHERE diary_pending = 1 AND status = 'ready'").all();
+    },
+
+    setDiary(id, fields) {
+      const keys = Object.keys(fields);
+      if (!keys.length) return;
+      db.prepare(`UPDATE invoices SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => fields[k]), id);
+    },
+
+    /** Invoices whose file came from / went to this job's diary (to spot ones deleted there). */
+    diaryLinked(jobUUIDs) {
+      if (!jobUUIDs.length) return [];
+      return db.prepare(`SELECT * FROM invoices WHERE sm8_attachment_uuid IS NOT NULL AND sm8_job_uuid IN (${jobUUIDs.map(() => '?').join(',')})`).all(...jobUUIDs);
+    },
+
+    invoiceByAttachment(attachmentUUID) {
+      return db.prepare('SELECT * FROM invoices WHERE sm8_attachment_uuid = ?').get(attachmentUUID);
     },
 
     /** Save what Claude read from the document, replacing any earlier result. */
@@ -673,7 +728,7 @@ function createRepo(db, dataDir) {
           const left = repo.leftOf(it.id);
           if (left > EPS) repo.addShare(it.id, jobUUID, left, fields);
         }
-        db.prepare('UPDATE invoices SET suggested_job_uuid = NULL, suggestion_reason = NULL WHERE id = ?').run(invoiceId);
+        db.prepare('UPDATE invoices SET suggested_job_uuid = NULL, suggestion_reason = NULL, diary_pending = 1 WHERE id = ?').run(invoiceId);
       });
     },
 
@@ -871,6 +926,8 @@ function createRepo(db, dataDir) {
         const cats = [...new Set(lines.map((l) => l.category))];
         return {
           ...inv,
+          in_diary: !!((inv.sm8_attachment_uuid || inv.sm8_note_uuid) && !inv.sm8_missing),
+          diary_missing: !!inv.sm8_missing,
           total_ex: exGst(inv.total, inv.tax),
           refs: parseJson(inv.refs, []),
           items: lines,

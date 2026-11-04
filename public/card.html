@@ -245,7 +245,7 @@ const qty = (n) => String(+(+n).toFixed(3));
 const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other', mixed: 'Mixed' };
 const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14b8a6', equipment_hire: '#f97316', freight: '#06b6d4', fees: '#94a3b8', other: '#64748b' };
 const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
-const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand' };
+const SOURCE_LABEL = { email: 'Emailed', upload: 'Uploaded', manual: 'Added by hand', diary: 'From the ServiceM8 diary' };
 const fileUrl = (id) => `/api/invoices/${id}/file?t=${encodeURIComponent(BOOT.token)}`;
 // PDFs open in our own viewer (Chrome won't show PDFs opened from ServiceM8's window); photos open as they are.
 const viewUrl = (inv) => (inv.mime_type === 'application/pdf'
@@ -288,7 +288,11 @@ function render() {
   const isStock = !!state.data.stock;
   $('#stockToggle').checked = isStock;
   $('#stockSwitch').classList.toggle('on', isStock);
-  $('#stockBanner').innerHTML = isStock ? `<div class="stock-banner">📦 This is a stock order job. Its invoices go into stock, not onto this job as costs. Other jobs take items from them with ＋ Add costs.</div>` : '';
+  $('#stockBanner').innerHTML = (isStock ? `<div class="stock-banner">📦 This is a stock order job. Its invoices go into stock, not onto this job as costs. Other jobs take items from them with ＋ Add costs.</div>` : '')
+    + state.data.invoices.filter((i) => i.diary_missing).map((i) => `<div class="suggest"><div class="srow"><div><b>🗑 ${esc(i.supplier || i.file_name || 'An invoice')}${i.invoice_number ? ' #' + esc(i.invoice_number) : ''}</b> was deleted from the ServiceM8 job diary.
+      <div class="why">Remove it from Job Costs too?</div></div>
+      <div class="acts"><button class="solid-danger small" data-diary-remove="${i.id}">Remove from Job Costs</button><button class="small" data-diary-keep="${i.id}">Keep it here</button></div></div></div>`).join('')
+    + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '');
   $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
   $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
   renderSuggestions();
@@ -376,7 +380,7 @@ function renderList() {
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
-      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   $('#emailBox').innerHTML = d.inboxAddress
@@ -486,7 +490,7 @@ function renderDetail() {
       <button class="danger link" data-ask-delete="${inv.id}">Remove from job</button>
     </div>`;
   if (state.confirmDel === inv.id) {
-    h += `<div class="confirm-bar">Take this ${inv.other_jobs.length ? 'job’s share' : 'invoice'} off the job? It goes back to “Not assigned yet”.<span class="spacer"></span>
+    h += `<div class="confirm-bar">Take this ${inv.other_jobs.length ? 'job’s share' : 'invoice'} off the job? It goes back to “Not assigned yet”.${inv.in_diary ? `<label style="display:flex;align-items:center;gap:6px;font-weight:600"><input type="checkbox" id="alsoDiary"> Also remove it from the ServiceM8 job diary</label>` : ''}<span class="spacer"></span>
       <button class="solid-danger" data-delete="${inv.id}">Remove from job</button>${inv.other_jobs.length ? '' : `<button class="danger" data-delete-all="${inv.id}">Delete invoice</button>`}<button data-cancel>Cancel</button></div>`;
   }
   if (state.editing === inv.id) {
@@ -564,6 +568,21 @@ async function loadUnassigned() {
   if (state.modal) renderModal();
 }
 function closeModal() { state.modal = null; $('#modalRoot').innerHTML = ''; }
+async function loadDiary() {
+  state.modal.diary = null; state.modal.diaryError = null; renderModal();
+  try { const r = await api('/diary'); if (state.modal) state.modal.diary = r.files; } catch (x) { if (state.modal) state.modal.diaryError = x.message; }
+  if (state.modal) renderModal();
+}
+function renderDiary() {
+  const m = state.modal;
+  if (m.diaryError) return `<div class="empty"><div style="font-size:30px">⚠</div>${esc(m.diaryError)}</div>`;
+  if (!m.diary) return '<div class="empty"><span class="spin"></span> Looking in the job diary…</div>';
+  if (!m.diary.length) return '<div class="empty"><div style="font-size:30px">📎</div><b>No PDFs or photos in this job’s diary.</b><br>Files attached to the job in ServiceM8 show up here.</div>';
+  return `<div class="muted" style="margin-bottom:8px">PDFs and photos attached to this job in ServiceM8. Add one and it’s read like an upload.</div>` + m.diary.map((f) => `<div class="pick"><div class="top"><div>
+      <div class="t">${esc(f.name)}${f.job_number && f.job_number !== state.data.job.job_number ? ` <span class="chip c-stock">#${esc(f.job_number)}</span>` : ''}</div>
+      <div class="sub">${f.date ? esc(String(f.date).slice(0, 10)) : ''}${f.pushed ? ' · copied there by Job Costs' : ''}</div></div>
+      <div class="take">${f.invoice_id ? '<span class="chip c-paid">✓ Added</span>' : `<button class="primary small" data-diary-add="${esc(f.uuid)}">Add</button>`}</div></div></div>`).join('');
+}
 
 function renderModal() {
   const m = state.modal;
@@ -573,9 +592,10 @@ function renderModal() {
   if (m.tab === 'pick') body = renderPick();
   if (m.tab === 'upload') body = `<label class="bigdrop" id="bigdrop"><input type="file" id="fileInput" multiple accept="application/pdf,image/*" hidden><div style="font-size:30px">⬆</div><b>Drop invoice files here</b>or click to choose PDFs or photos.<br>They're read automatically and go on this job.</label>`;
   if (m.tab === 'type') body = renderManual();
+  if (m.tab === 'diary') body = renderDiary();
   $('#modalRoot').innerHTML = `<div class="overlay" data-overlay><div class="modal" role="dialog" aria-label="Add costs">
     <div class="m-head"><div><h2>${state.data.stock ? 'Add stock invoice to order' : 'Add costs to Job'} #${esc(state.data.job.job_number || '')}</h2><div class="muted">${state.data.stock ? 'Pick an invoice that came in by email, upload a file, or type one in. It goes into stock.' : 'Pick from invoices not assigned to a job yet, upload a file, or type one in.'}</div></div><button data-close>✕</button></div>
-    <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button></div>
+    <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button><button class="${m.tab === 'diary' ? 'on' : ''}" data-tab="diary">📎 From ServiceM8 diary</button></div>
     <div id="modalBody">${body}</div></div></div>`;
   if (m.tab === 'upload') wireDrop($('#bigdrop'), (files) => { closeModal(); uploadFiles(files); });
   if (m.tab === 'pick') { const s = $('#pickSearch'); if (s) { s.value = m.search; s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
@@ -663,7 +683,7 @@ document.addEventListener('click', async (e) => {
     if (ds.select) { state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; return render(); }
     if (ds.add !== undefined) return openAdd('pick');
     if (ds.close !== undefined) return closeModal();
-    if (ds.tab) { state.modal.tab = ds.tab; renderModal(); if (ds.tab === 'pick' && !state.modal.list) loadUnassigned(); return; }
+    if (ds.tab) { state.modal.tab = ds.tab; renderModal(); if (ds.tab === 'pick' && !state.modal.list) loadUnassigned(); if (ds.tab === 'diary') loadDiary(); return; }
     if (ds.expand) { const s = state.modal.expanded; const id = Number(ds.expand); s.has(id) ? s.delete(id) : s.add(id); return renderModal(); }
     if (ds.takeAll) {
       const id = Number(ds.takeAll);
@@ -698,8 +718,23 @@ document.addEventListener('click', async (e) => {
     if (ds.attach) { state.attachTo = Number(ds.attach); $('#attachInput').value = ''; return $('#attachInput').click(); }
     if (ds.askDelete) { state.confirmDel = Number(ds.askDelete); return renderDetail(); }
     if (ds.cancel !== undefined) { state.confirmDel = null; state.editing = null; state.draft = {}; return renderDetail(); }
-    if (ds.delete) { await api(`/invoices/${ds.delete}`, { method: 'DELETE' }); toast('Taken off this job – it’s back in “Not assigned yet”'); state.confirmDel = null; state.selected = null; return load(); }
-    if (ds.deleteAll) { await api(`/invoices/${ds.deleteAll}?completely=1`, { method: 'DELETE' }); toast('Invoice deleted'); state.confirmDel = null; state.selected = null; return load(); }
+    if (ds.delete || ds.deleteAll) {
+      const diary = $('#alsoDiary')?.checked ? 'diary=1' : '';
+      const r = await api(`/invoices/${ds.delete || ds.deleteAll}?${[ds.deleteAll ? 'completely=1' : '', diary].filter(Boolean).join('&')}`, { method: 'DELETE' });
+      toast(r.diaryWarning || (ds.deleteAll ? 'Invoice deleted' : 'Taken off this job – it’s back in “Not assigned yet”') + (diary ? ' and removed from the diary' : ''));
+      state.confirmDel = null; state.selected = null; return load();
+    }
+    if (ds.diaryRemove) {
+      const inv = state.data.invoices.find((i) => i.id === Number(ds.diaryRemove));
+      await api(`/invoices/${ds.diaryRemove}${inv && !inv.other_jobs.length ? '?completely=1' : ''}`, { method: 'DELETE' });
+      toast('Removed from Job Costs'); state.selected = null; return load();
+    }
+    if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }
+    if (ds.diaryAdd) {
+      t.disabled = true; t.textContent = 'Adding…';
+      const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
+      closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
+    }
     if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
     if (ds.mkOpen) { state.mkOpen = Number(ds.mkOpen); renderDetail(); const sel = $('#detail [data-autofocus]'); sel?.focus(); try { sel?.showPicker(); } catch {} return; }
     if (ds.mkCancel !== undefined) { state.mkOpen = null; return renderDetail(); }

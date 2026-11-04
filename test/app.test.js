@@ -71,13 +71,25 @@ const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { j
 const findJobByNumberImpl = async (num) => Object.keys(JOBS).find((u) => JOBS[u].jobNumber === num) || null;
 const fetchActiveJobsImpl = async () => [{ jobUUID: 'never-opened', jobNumber: '208999', jobTitle: '5 Pine Rd, Coburg', status: 'Work Order' }];
 
-let server, base, repo, processor, dataDir;
+// A pretend ServiceM8 job diary.
+const diary = { files: [], notes: [], calls: [] };
+let diaryN = 0;
+const fakeDiary = {
+  async listJobFiles(jobUUIDs) { diary.calls.push('list'); return diary.files.filter((f) => jobUUIDs.includes(f.job_uuid)); },
+  async downloadJobFile(uuid) { diary.calls.push('download:' + uuid); return { buffer: Buffer.from('%PDF-1.4 diary'), contentType: 'application/pdf' }; },
+  async addJobFile({ jobUUID, name }) { const uuid = 'att-' + ++diaryN; diary.files.push({ uuid, job_uuid: jobUUID, name, file_type: '.pdf', active: true }); return uuid; },
+  async addJobNote({ jobUUID, text }) { const uuid = 'note-' + ++diaryN; diary.notes.push({ uuid, job_uuid: jobUUID, text }); return uuid; },
+  async removeJobFile(uuid) { diary.calls.push('rmfile:' + uuid); diary.files = diary.files.filter((f) => f.uuid !== uuid); },
+  async removeJobNote(uuid) { diary.calls.push('rmnote:' + uuid); diary.notes = diary.notes.filter((n) => n.uuid !== uuid); },
+};
+
+let server, base, repo, processor, dataDir, app;
 
 before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-'));
   repo = openDb(dataDir);
   processor = createProcessor({ repo, analyzer: fakeAnalyzer, log: { error() {} } });
-  const app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl });
+  app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -644,6 +656,93 @@ test('split jobs (#207974, #207974A…) are one job; the price is the full job w
   // An invoice mentioning the split part is suggested for the main job
   await email(t, { subject: 'Gate motor for job 207974A', file: 'door-207974.pdf' });
   assert.equal(latestInvoice().suggested_job_uuid, 'job-207974');
+});
+
+test('ServiceM8 job diary: whole invoices are copied with a note, shared ones aren\u2019t; pull from the diary; ask on removal', async () => {
+  const tA = await openCard('diary-a', 'acc-diary');
+  const tB = await openCard('diary-b', 'acc-diary');
+
+  // An upload that's all on job A: copied to A's diary, with a note
+  const [up] = await upload(tA, 'invoice.pdf');
+  await app.locals.syncDiary();
+  let inv = repo.getInvoice(up);
+  assert.equal(inv.sm8_link, 'pushed');
+  assert.equal(inv.sm8_job_uuid, 'diary-a');
+  assert.ok(diary.files.some((f) => f.uuid === inv.sm8_attachment_uuid && f.job_uuid === 'diary-a'));
+  const note = diary.notes.find((n) => n.uuid === inv.sm8_note_uuid);
+  assert.match(note.text, /Door Supplies Pty Ltd invoice #INV-100 added – \$3,000\.00 ex GST/);
+  assert.equal((await summary(tA)).invoices.find((i) => i.id === up).in_diary, true);
+  // Nothing more happens on the next run (no copies twice)
+  const before = diary.files.length + diary.notes.length;
+  await app.locals.syncDiary();
+  assert.equal(diary.files.length + diary.notes.length, before);
+
+  // A shared invoice (10 motors over two jobs) stays in Job Costs only
+  const r = await email(tA, { file: 'motors.pdf', subject: 'Stock order' });
+  const motors = repo.getInvoice(r.created?.[0] ?? latestInvoice().id);
+  const motor = repo.db.prepare("SELECT id FROM items WHERE invoice_id = ? AND description = 'Merlin opener'").get(motors.id);
+  assert.equal((await post(tA, '/assign', { item_id: motor.id, quantity: 1 })).status, 200);
+  assert.equal((await post(tB, '/assign', { item_id: motor.id, quantity: 2 })).status, 200);
+  await app.locals.syncDiary();
+  assert.equal(repo.getInvoice(motors.id).sm8_attachment_uuid, null);
+  assert.equal(repo.getInvoice(motors.id).sm8_note_uuid, null);
+
+  // A typed-in invoice gets a note only; its file goes up when it's attached later
+  const man = await post(tB, '/invoices/manual', { supplier: 'Bunnings', total: 110 }).then((x) => x.json());
+  await app.locals.syncDiary();
+  inv = repo.getInvoice(man.id);
+  assert.ok(inv.sm8_note_uuid);
+  assert.equal(inv.sm8_attachment_uuid, null);
+  assert.match(diary.notes.find((n) => n.uuid === inv.sm8_note_uuid).text, /typed in, no file/);
+  const fd = new FormData();
+  fd.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'receipt.pdf');
+  await api(tB, `/invoices/${man.id}/file`, { method: 'POST', body: fd });
+  await processor.idle();
+  await app.locals.syncDiary();
+  const inv2 = repo.getInvoice(man.id);
+  assert.ok(inv2.sm8_attachment_uuid);
+  assert.equal(inv2.sm8_note_uuid, inv.sm8_note_uuid, 'no second note');
+
+  // Pull a file from the job diary (one someone attached in ServiceM8)
+  diary.files.push({ uuid: 'att-photo', job_uuid: 'diary-a', name: 'Supplier invoice.pdf', file_type: '.pdf', active: true });
+  diary.files.push({ uuid: 'att-doc', job_uuid: 'diary-a', name: 'Notes.docx', file_type: '.docx', active: true });
+  let list = (await json(tA, '/diary')).files;
+  assert.ok(!list.some((f) => f.uuid === 'att-doc'), 'only PDFs and photos');
+  assert.equal(list.find((f) => f.uuid === 'att-photo').invoice_id, null);
+  assert.ok(list.find((f) => f.uuid === repo.getInvoice(up).sm8_attachment_uuid).invoice_id, 'one copied there shows as added');
+  const imp = await post(tA, '/diary/att-photo/import').then((x) => x.json());
+  await processor.idle();
+  assert.ok(imp.id);
+  assert.equal(repo.getInvoice(imp.id).sm8_link, 'pulled');
+  assert.ok((await summary(tA)).invoices.some((i) => i.id === imp.id), 'it goes on the job');
+  assert.equal((await post(tA, '/diary/att-photo/import').then((x) => x.json())).already, true);
+  const notes = diary.notes.length;
+  await app.locals.syncDiary();
+  assert.equal(diary.notes.length, notes, 'a file from the diary is not copied back');
+  list = (await json(tA, '/diary')).files;
+  assert.equal(list.find((f) => f.uuid === 'att-photo').invoice_id, imp.id);
+
+  // Deleted in the diary: noticed when the card opens, and you're asked
+  diary.files = diary.files.filter((f) => f.uuid !== 'att-photo');
+  await openCard('diary-a', 'acc-diary');
+  let s = await summary(tA);
+  assert.equal(s.invoices.find((i) => i.id === imp.id).diary_missing, true);
+  assert.equal((await post(tA, `/invoices/${imp.id}/diary-keep`)).status, 200);
+  s = await summary(tA);
+  assert.equal(s.invoices.find((i) => i.id === imp.id).diary_missing, false);
+  assert.equal(s.invoices.find((i) => i.id === imp.id).in_diary, false);
+
+  // Removing in Job Costs can also remove it from the diary
+  const fileUUID = repo.getInvoice(up).sm8_attachment_uuid;
+  const noteUUID = repo.getInvoice(up).sm8_note_uuid;
+  const del = await api(tA, `/invoices/${up}?completely=1&diary=1`, { method: 'DELETE' }).then((x) => x.json());
+  assert.equal(del.deleted, true);
+  assert.equal(del.diaryWarning, null);
+  assert.ok(diary.calls.includes('rmfile:' + fileUUID) && diary.calls.includes('rmnote:' + noteUUID));
+  // ...or leave it there
+  const kept = repo.getInvoice(man.id).sm8_attachment_uuid;
+  await api(tB, `/invoices/${man.id}?completely=1`, { method: 'DELETE' });
+  assert.ok(diary.files.some((f) => f.uuid === kept));
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

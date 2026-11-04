@@ -38,7 +38,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8 }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -145,6 +145,95 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return t.accessToken;
   }
 
+  // ---------- ServiceM8 job diary ----------
+  const eventTokens = new Map(); // account -> access token from the last click (used if there's no saved approval)
+  const diaryErrors = new Map(); // account -> why copying to the diary failed (shown on the card)
+  const diaryToken = (accountUUID) => accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
+  const diaryProblem = (e) => (/\b(401|403)\b/.test(e.message)
+    ? 'ServiceM8 didn\u2019t allow Job Costs to use the job diary. Open the add-on\u2019s install link again and approve it.'
+    : `Couldn\u2019t reach the ServiceM8 job diary (${e.message}).`);
+  const fmt = (n) => (Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function diaryNoteText(inv) {
+    const ex = Number(inv.total || 0) - Number(inv.tax || 0);
+    const what = `${inv.supplier || 'Supplier'} invoice${inv.invoice_number ? ' #' + inv.invoice_number : ''}`;
+    return `Job Costs: ${what} added \u2013 $${fmt(ex)} ex GST${inv.file_path ? '' : ' (typed in, no file)'}.`;
+  }
+
+  /**
+   * Copy invoices that are wholly on one job to that job's ServiceM8 diary (file + a note).
+   * Shared invoices, stock, and files that came from the diary stay in Job Costs only.
+   */
+  let diaryRunning = null;
+  let diaryAgain = false;
+  const diaryRetryAt = new Map(); // invoice -> don't try again before (after a failure)
+  function syncDiary() {
+    if (diaryRunning) { diaryAgain = true; return diaryRunning; } // a run is going: it goes round once more
+    diaryRunning = (async () => {
+      try {
+        do {
+          diaryAgain = false;
+          await diaryPass();
+        } while (diaryAgain);
+      } catch (e) {
+        console.error(`Diary copier: ${e.message}`);
+      } finally {
+        diaryRunning = null;
+      }
+    })();
+    return diaryRunning;
+  }
+  async function diaryPass() {
+    for (const inv of repo.listDiaryPending()) {
+      const jobUUID = repo.wholeJobOf(inv.id);
+      if (inv.sm8_link === 'pulled' || !jobUUID || repo.isStockJob(jobUUID)
+        || (inv.sm8_job_uuid && inv.sm8_job_uuid !== jobUUID) || inv.sm8_missing
+        || (inv.sm8_note_uuid && (inv.sm8_attachment_uuid || !inv.file_path))) {
+        repo.setDiary(inv.id, { diary_pending: 0 });
+        continue;
+      }
+      if ((diaryRetryAt.get(inv.id) || 0) > Date.now()) continue; // failed a moment ago
+      const token = await diaryToken(inv.account_uuid);
+      if (!token) continue; // not approved yet: try again later
+      try {
+        const fields = { sm8_job_uuid: jobUUID, sm8_link: 'pushed' };
+        if (inv.file_path && !inv.sm8_attachment_uuid) {
+          const buffer = fs.readFileSync(path.join(repo.filesDir, inv.file_path));
+          fields.sm8_attachment_uuid = await diaryApi.addJobFile({ jobUUID, name: inv.file_name || 'Invoice.pdf', buffer, contentType: inv.mime_type }, token);
+          repo.setDiary(inv.id, fields);
+        }
+        if (!inv.sm8_note_uuid) {
+          try {
+            fields.sm8_note_uuid = await diaryApi.addJobNote({ jobUUID, text: diaryNoteText(inv) }, token);
+          } catch (e) {
+            if (!fields.sm8_attachment_uuid && !inv.sm8_attachment_uuid) throw e;
+            console.error(`Diary note for invoice ${inv.id} not added: ${e.message}`); // the file is there; the note is a nice-to-have
+          }
+        }
+        repo.setDiary(inv.id, { ...fields, diary_pending: 0 });
+        diaryErrors.delete(inv.account_uuid ?? null);
+        diaryRetryAt.delete(inv.id);
+      } catch (e) {
+        console.error(`Copy to ServiceM8 diary failed for invoice ${inv.id}: ${e.message}`);
+        diaryErrors.set(inv.account_uuid ?? null, diaryProblem(e));
+        diaryRetryAt.set(inv.id, Date.now() + 5 * 60000);
+      }
+    }
+  }
+  let diaryKick = null;
+  const kickDiary = () => { if (!diaryKick) diaryKick = setTimeout(() => { diaryKick = null; syncDiary(); }, 1500); };
+  app.locals.syncDiary = syncDiary;
+  app.locals.startDiaryWorker = (seconds = 30) => setInterval(syncDiary, seconds * 1000).unref();
+
+  /** Spot invoices whose diary file was deleted in ServiceM8 (asked about on the card). */
+  async function checkDiaryDeletions(jobUUID, token) {
+    const jobs = repo.familyJobUUIDs(jobUUID);
+    const linked = repo.diaryLinked(jobs).filter((i) => i.sm8_attachment_uuid && !i.sm8_missing);
+    if (!linked.length || !token) return;
+    const live = new Set((await diaryApi.listJobFiles(jobs, token)).filter((f) => f.active).map((f) => f.uuid));
+    for (const inv of linked) if (!live.has(inv.sm8_attachment_uuid)) repo.setDiary(inv.id, { sm8_missing: 1 });
+  }
+
   const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
   const sm8Notes = new Map(); // job -> why ServiceM8 info is missing (shown on the card)
   const htmlPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
@@ -240,11 +329,16 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       }
     }
     repo.ensureAccount(job.account_uuid);
+    if (event.accessToken) eventTokens.set(job.account_uuid ?? null, event.accessToken);
     // Remember what ServiceM8 said, so the window can explain a missing price.
     sm8Notes.set(job.job_uuid, partNote || (!token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
       : (info && info.linesError) || (!info ? 'Couldn\u2019t read this job from ServiceM8.' : null)));
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
-    const sync = syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {});
+    const sync = Promise.all([
+      syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {}),
+      checkDiaryDeletions(job.job_uuid, token).catch((e) => console.error(`Diary check failed: ${e.message}`)),
+    ]);
+    kickDiary();
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
     // The window shows our page (from our own address, so everything on it works),
     // and asks ServiceM8 to make the window big enough.
@@ -285,11 +379,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const api = express.Router();
   api.use(express.json({ limit: '100kb' }));
   api.use(requireSession);
+  // After any change, the diary copier takes a look (it only acts on invoices flagged for it).
+  api.use((req, res, next) => { if (req.method !== 'GET') res.on('finish', kickDiary); next(); });
 
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     const acc = repo.ensureAccount(req.account);
     res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: sm8Notes.get(req.job.job_uuid) || null,
+      diaryNote: diaryErrors.get(req.account) || null,
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
       jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });
   });
@@ -403,20 +500,78 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
 
   // Take an invoice off this job (it goes back to "not assigned yet"),
   // or with ?completely=1 delete it, if no other job has part of it.
-  api.delete('/invoices/:id', (req, res) => {
+  // ?diary=1 also removes its file and note from the ServiceM8 job diary.
+  api.delete('/invoices/:id', async (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
     if (req.query.completely) {
       const others = repo.jobsOnInvoice(inv.id).filter((j) => j.job_uuid !== req.job.job_uuid);
       if (others.length) return res.status(409).json({ error: `Other jobs have part of this invoice (${jobList(others)}). Take it off those jobs first.` });
+    }
+    let diaryWarning = null;
+    if (req.query.diary && (inv.sm8_attachment_uuid || inv.sm8_note_uuid)) {
+      try {
+        const token = await diaryToken(req.account);
+        if (!token) throw new Error('401');
+        const gone = (e) => /\b404\b/.test(e.message); // already deleted there: fine
+        if (inv.sm8_attachment_uuid && !inv.sm8_missing) await diaryApi.removeJobFile(inv.sm8_attachment_uuid, token).catch((e) => { if (!gone(e)) throw e; });
+        if (inv.sm8_note_uuid) await diaryApi.removeJobNote(inv.sm8_note_uuid, token).catch((e) => { if (!gone(e)) throw e; });
+        repo.setDiary(inv.id, { sm8_attachment_uuid: null, sm8_note_uuid: null, sm8_job_uuid: null, sm8_link: null, sm8_missing: 0, diary_pending: 0 });
+      } catch (e) {
+        diaryWarning = `Removed from Job Costs, but not from the ServiceM8 diary: ${diaryProblem(e)}`;
+      }
+    }
+    if (req.query.completely) {
       repo.deleteInvoice(inv.id);
-      return res.json({ ok: true, deleted: true });
+      return res.json({ ok: true, deleted: true, diaryWarning });
     }
     repo.removeFromJob(inv.id, req.job.job_uuid);
     if (inv.stock_job_uuid === req.job.job_uuid) repo.unlinkStock(inv.id);
     // An upload that was never read can't be "unassigned" – it's simply removed.
     if (inv.status !== 'ready' && inv.origin_job_uuid === req.job.job_uuid) repo.deleteInvoice(inv.id);
+    res.json({ ok: true, diaryWarning });
+  });
+
+  // Deleted in the ServiceM8 diary, but keep it in Job Costs: forget the link.
+  api.post('/invoices/:id/diary-keep', (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    repo.setDiary(inv.id, { sm8_attachment_uuid: null, sm8_note_uuid: null, sm8_job_uuid: null, sm8_link: null, sm8_missing: 0, diary_pending: 0 });
     res.json({ ok: true });
+  });
+
+  // PDFs and photos in this job's ServiceM8 diary (and its split parts'), to add as invoices.
+  async function diaryFiles(req) {
+    const token = await diaryToken(req.account);
+    if (!token) { const e = new Error('Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'); e.status = 400; throw e; }
+    const files = (await diaryApi.listJobFiles(repo.familyJobUUIDs(req.job.job_uuid), token))
+      .filter((f) => f.active && isSupported(f.name + (/\.[a-z0-9]+$/i.test(f.name) ? '' : f.file_type), guessMime(f.name + (/\.[a-z0-9]+$/i.test(f.name) ? '' : f.file_type))));
+    return { token, files };
+  }
+  api.get('/diary', async (req, res) => {
+    let r;
+    try { r = await diaryFiles(req); } catch (e) { return res.status(e.status || 502).json({ error: e.status ? e.message : diaryProblem(e) }); }
+    const jobs = new Map(repo.familyJobUUIDs(req.job.job_uuid).map((u) => [u, repo.getJob(u)?.job_number || null]));
+    res.json({
+      files: r.files.map((f) => {
+        const inv = repo.invoiceByAttachment(f.uuid);
+        return { uuid: f.uuid, name: f.name, date: f.date, job_number: jobs.get(f.job_uuid), invoice_id: inv ? inv.id : null, pushed: inv?.sm8_link === 'pushed' };
+      }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
+    });
+  });
+  api.post('/diary/:uuid/import', async (req, res) => {
+    const existing = repo.invoiceByAttachment(req.params.uuid);
+    if (existing && (existing.account_uuid ?? null) === req.account) return res.json({ id: existing.id, already: true });
+    let r;
+    try { r = await diaryFiles(req); } catch (e) { return res.status(e.status || 502).json({ error: e.status ? e.message : diaryProblem(e) }); }
+    const f = r.files.find((x) => x.uuid === req.params.uuid);
+    if (!f) return res.status(404).json({ error: 'That file isn\u2019t in this job\u2019s diary' });
+    let file;
+    try { file = await diaryApi.downloadJobFile(f.uuid, r.token); } catch (e) { return res.status(502).json({ error: diaryProblem(e) }); }
+    const name = /\.[a-z0-9]+$/i.test(f.name) ? f.name : f.name + (f.file_type || '');
+    const inv = addInvoiceFile({ accountUUID: req.account, originJobUUID: req.job.job_uuid, source: 'diary', name, contentType: file.contentType, buffer: file.buffer });
+    repo.setDiary(inv.id, { sm8_attachment_uuid: f.uuid, sm8_job_uuid: f.job_uuid, sm8_link: 'pulled' });
+    res.status(201).json({ id: inv.id });
   });
 
   api.get('/invoices/:id/file', (req, res) => {

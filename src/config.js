@@ -13,7 +13,7 @@ const config = {
   servicem8AppSecret: process.env.SERVICEM8_APP_SECRET || '',
   servicem8AppId: (process.env.SERVICEM8_APP_ID || '').trim(),
   // What the add-on may read in ServiceM8 (asked for once, when it's installed).
-  servicem8Scopes: (process.env.SERVICEM8_SCOPES || 'read_jobs read_customers read_job_materials').trim(),
+  servicem8Scopes: (process.env.SERVICEM8_SCOPES || 'read_jobs read_customers read_job_materials manage_attachments').trim(),
   claudeModel: process.env.CLAUDE_MODEL || 'claude-opus-5-5',
   claudeEffort: process.env.CLAUDE_EFFORT || 'medium',
   inboundBaseAddress: (process.env.INBOUND_BASE_ADDRESS || '').trim().toLowerCase(),
