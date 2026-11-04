@@ -597,15 +597,15 @@ function renderDiary() {
     const thumb = f.is_photo ? `<a href="${viewUrl(f)}" target="_blank" rel="noopener"><img src="${fileUrl(f)}" loading="lazy" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>`
       : `<a href="${viewUrl(f)}" target="_blank" rel="noopener" style="width:64px;height:64px;border-radius:10px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:26px;text-decoration:none;background:var(--line2)">📄</a>`;
     return `<div class="pick"><div class="top" style="align-items:center"><div style="display:flex;gap:12px;align-items:center">${thumb}<div>
-      <div class="t">${esc(title)}${f.job_number && f.job_number !== state.data.job.job_number ? ` <span class="chip c-stock">#${esc(f.job_number)}</span>` : ''}</div>
+      <div class="t">${esc(title)}${f.kind === 'quote' ? ' <span class="chip c-stock">Quote</span>' : ''}${f.job_number && f.job_number !== state.data.job.job_number ? ` <span class="chip c-stock">#${esc(f.job_number)}</span>` : ''}</div>
       <div class="sub">${vague(f.name) ? esc(f.name) + ' · ' : esc(when(f.date)) + ' · '}<a href="${viewUrl(f)}" target="_blank" rel="noopener">👁 View</a>${f.pushed ? ' · copied there by Job Costs' : ''}</div></div></div>
       <div class="take">${f.invoice_id ? '<span class="chip c-paid">✓ Added</span>' : `<button class="primary small" data-diary-add="${esc(f.uuid)}">Add</button>`}</div></div></div>`;
   };
-  const shown = m.diary.filter((f) => f.kind === 'file' || f.invoice_id);
+  const shown = m.diary.filter((f) => f.kind !== 'own' || f.invoice_id);
   const hidden = m.diary.filter((f) => !shown.includes(f));
-  return `<div class="muted" style="margin-bottom:8px">Supplier PDFs and photos attached to this job in ServiceM8. Click a file to look at it; <b>Add</b> reads it like an upload.</div>`
+  return `<div class="muted" style="margin-bottom:8px">Supplier and subcontractor PDFs and photos attached to this job in ServiceM8. Click a file to look at it; <b>Add</b> reads it like an upload.</div>`
     + (shown.length ? shown.map(row).join('') : '<div class="empty">No supplier files in this job’s diary.</div>')
-    + (hidden.length ? `<div style="margin:10px 0"><button class="mk-link" data-diary-hidden>${m.showHidden ? 'Hide' : 'Show'} ${hidden.length} quote${hidden.length === 1 ? '' : 's'} / your own ServiceM8 invoice${hidden.length === 1 ? '' : 's'}</button></div>`
+    + (hidden.length ? `<div style="margin:10px 0"><button class="mk-link" data-diary-hidden>${m.showHidden ? 'Hide' : 'Show'} your own ServiceM8 quotes / invoices (${hidden.length})</button></div>`
       + (m.showHidden ? hidden.map(row).join('') : '') : '');
 }
 
