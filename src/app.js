@@ -342,6 +342,42 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       return reply(`<div style="font-family:sans-serif;padding:16px"><b>Could not open Job Costs</b><p>${String(e.message).replace(/</g, '&lt;')}</p>
         <p>Check SERVICEM8_APP_SECRET in Render matches the add-on's App Secret.</p></div>`);
     }
+    // ServiceM8 only waits a few seconds for an answer. Get the job's details from ServiceM8 if that's
+    // quick; otherwise open the window straight away and finish in the background.
+    let job = null;
+    try {
+      const work = prepareClick(event);
+      work.catch((e) => console.error(`Job Costs click (background): ${e.message}`))
+        .finally(() => { for (const [k, v] of sm8Notes) if (v === LOADING) sm8Notes.delete(k); });
+      job = await Promise.race([work, new Promise((r) => setTimeout(() => r(null), config.clickTimeoutMs || 5000))]);
+    } catch (e) {
+      console.error(`Job Costs click: ${e.message}`);
+    }
+    if (!job) {
+      job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID });
+      const main = mainJobNumber(job.job_number);
+      const mainUUID = main && repo.findJobByNumber(job.account_uuid, main);
+      if (mainUUID) job = repo.getJob(mainUUID);
+      if (!sm8Notes.get(job.job_uuid)) sm8Notes.set(job.job_uuid, LOADING);
+    }
+    // The window shows our page (from our own address, so everything on it works),
+    // and asks ServiceM8 to make the window big enough.
+    const url = `${config.publicUrl}/card?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
+    reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
+<script>try {
+  // As big as fits on this screen (laptops with display scaling are smaller than 1320 x 860).
+  // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
+  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 100));
+  var h = Math.max(480, Math.min(820, (screen.availHeight || 860) - 260));
+  SMClient.init().resizeWindow(w, h);
+} catch (e) {}</script>
+<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
+  });
+
+  const LOADING = '__loading__'; // details still coming from ServiceM8 (the card checks again shortly)
+
+  /** Everything a click needs from ServiceM8: the job, its price, split parts, the job list. Returns the job to show. */
+  async function prepareClick(event) {
     const claimed = repo.claimPendingTokens(event.accountUUID);
     let token = await accessTokenFor(event.accountUUID, event.accessToken);
     let info = await fetchJobImpl(event.jobUUID, token);
@@ -380,19 +416,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     ]);
     kickDiary();
     await Promise.race([sync, new Promise((r) => setTimeout(r, 1500))]);
-    // The window shows our page (from our own address, so everything on it works),
-    // and asks ServiceM8 to make the window big enough.
-    const url = `${config.publicUrl}/card?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
-    reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
-<script>try {
-  // As big as fits on this screen (laptops with display scaling are smaller than 1320 x 860).
-  // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
-  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 100));
-  var h = Math.max(480, Math.min(820, (screen.availHeight || 860) - 260));
-  SMClient.init().resizeWindow(w, h);
-} catch (e) {}</script>
-<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
-  });
+    return job;
+  }
 
   // The Job Costs window itself (opened inside ServiceM8's window, using the click's session).
   app.get('/card', (req, res) => {
@@ -431,7 +456,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     const acc = repo.ensureAccount(req.account);
-    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: sm8Notes.get(req.job.job_uuid) || null,
+    const note = sm8Notes.get(req.job.job_uuid) || null;
+    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
       diaryNote: diaryErrors.get(req.account) || null,
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
       jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });

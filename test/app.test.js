@@ -922,6 +922,33 @@ test('upload supplier invoices to the Inbox: the job number on each is found in 
   assert.ok(repo.jobsOnInvoice(b.id).some((j) => j.job_number === '206594'));
 });
 
+test('a slow ServiceM8 never stops the window opening: details finish in the background', async () => {
+  let release;
+  const slow = new Promise((r) => { release = r; });
+  const app4 = createApp({ config: { ...config, clickTimeoutMs: 200 }, repo, processor, diaryApi: fakeDiary, findJobByNumberImpl,
+    fetchJobImpl: async () => { await slow; return { jobNumber: '209001', jobTitle: '1 Slow St', quoteAmount: 4000 }; },
+    fetchActiveJobsImpl: async () => [] });
+  const srv = await new Promise((r) => { const x = app4.listen(0, () => r(x)); });
+  const b4 = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const ev = jwt.sign({ eventName: 'job_costs_open', eventArgs: { jobUUID: 'slow-job' }, auth: { accountUUID: 'acc-slow', accessToken: 'x' } }, SECRET);
+    const started = Date.now();
+    const r = await fetch(`${b4}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev });
+    assert.ok(Date.now() - started < 2000, 'answered quickly');
+    const { eventResponse } = await r.json();
+    const t = decodeURIComponent(eventResponse.match(/<iframe src="[^"]+t=([^"]+)"/)[1]);
+    let s = await fetch(`${b4}/api/job`, { headers: { Authorization: `Bearer ${t}` } }).then((x) => x.json());
+    assert.equal(s.sm8Loading, true, 'the card knows details are still coming');
+    release();
+    await new Promise((r2) => setTimeout(r2, 100));
+    s = await fetch(`${b4}/api/job`, { headers: { Authorization: `Bearer ${t}` } }).then((x) => x.json());
+    assert.equal(s.sm8Loading, false);
+    assert.equal(s.job.job_number, '209001');
+  } finally {
+    srv.close();
+  }
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

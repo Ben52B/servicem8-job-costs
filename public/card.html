@@ -275,7 +275,7 @@ async function load() {
     render();
   } catch (e) { toast(e.message); }
   clearTimeout(state.pollTimer);
-  if (state.data && state.data.totals.processing > 0) state.pollTimer = setTimeout(load, 3000);
+  if (state.data && (state.data.totals.processing > 0 || state.data.sm8Loading)) state.pollTimer = setTimeout(load, 3000);
 }
 
 const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.selected) || null;
