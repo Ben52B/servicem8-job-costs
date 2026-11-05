@@ -386,7 +386,7 @@ function renderList() {
   const o = state.outlook;
   const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
   const outlookHtml = !o || !o.available ? ''
-    : o.connected ? `<div style="margin-top:8px">📥 Reading Outlook: <b>${esc(o.email || '')}</b>${o.lastCheck ? ` · checked ${ago(o.lastCheck)}` : ''}${o.error ? `<div style="color:var(--bad)">⚠ ${esc(o.error)} <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Reconnect</a></div>` : ''}</div>`
+    : o.connected ? `<div style="margin-top:8px">📥 Reading Outlook: <b>${esc(o.email || '')}</b>${o.lastCheck ? ` · checked ${ago(o.lastCheck)}` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener" title="Connect a different mailbox">Change</a>${o.error ? `<div style="color:var(--bad)">⚠ ${esc(o.error)} <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Reconnect</a></div>` : ''}</div>`
     : `<div style="margin-top:8px"><a class="btn small" href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">📥 Connect Outlook</a> <span class="muted">to pick up invoices from your inbox</span></div>`;
   $('#emailBox').innerHTML = (d.inboxAddress
     ? `Email invoices for any job to:<div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button class="small" data-copy>Copy</button></div>`
