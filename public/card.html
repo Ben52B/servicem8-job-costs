@@ -881,8 +881,8 @@ $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#inboxLink').href = '/inbox?t=' + encodeURIComponent(BOOT.token);
 if (BOOT.embedded && window.SMClient) {
   try {
-    const w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 60));
-    const h = Math.max(500, Math.min(860, (screen.availHeight || 860) - 140));
+    const w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 100));
+    const h = Math.max(480, Math.min(820, (screen.availHeight || 860) - 260));
     window.SMClient.init().resizeWindow(w, h);
   } catch (e) { /* not inside ServiceM8 */ }
 }

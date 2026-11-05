@@ -127,12 +127,26 @@ async function findJobByNumber(jobNumber, accessToken) {
 
 async function fetchJob(jobUUID, accessToken) {
   if (!accessToken) return null;
-  try {
+  fetchJob.lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await readJob(jobUUID, accessToken);
+    } catch (e) {
+      fetchJob.lastError = e.name === 'TimeoutError' ? 'ServiceM8 took too long to answer' : e.message;
+      console.error(`Reading job ${jobUUID} from ServiceM8 failed (try ${attempt}): ${fetchJob.lastError}`);
+      if (/\b(401|403|404)\b/.test(e.message)) break; // trying again won't help
+    }
+  }
+  return null;
+}
+
+async function readJob(jobUUID, accessToken) {
+  {
     const res = await fetch(`${API_BASE}/job/${encodeURIComponent(jobUUID)}.json`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error(`ServiceM8 said ${res.status}`);
     const job = await res.json();
     return {
       ...(await jobNames(job, accessToken)),
@@ -146,8 +160,6 @@ async function fetchJob(jobUUID, accessToken) {
       })()),
       status: job.status || null,
     };
-  } catch {
-    return null;
   }
 }
 

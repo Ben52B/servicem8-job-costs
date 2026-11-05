@@ -349,7 +349,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (event.accessToken) eventTokens.set(job.account_uuid ?? null, event.accessToken);
     // Remember what ServiceM8 said, so the window can explain a missing price.
     sm8Notes.set(job.job_uuid, partNote || (!token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
-      : (info && info.linesError) || (!info ? 'Couldn\u2019t read this job from ServiceM8.' : null)));
+      : (info && info.linesError) || (!info ? `Couldn\u2019t read this job from ServiceM8${fetchJobImpl.lastError ? ` (${fetchJobImpl.lastError})` : ''}. Close Job Costs and open it again to retry.` : null)));
     // Sync jobs in the background; wait at most a moment so the card opens quickly.
     const sync = Promise.all([
       syncJobs(job.account_uuid, token, { force: claimed }).catch(() => {}),
@@ -363,11 +363,12 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
 <script>try {
   // As big as fits on this screen (laptops with display scaling are smaller than 1320 x 860).
-  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 60));
-  var h = Math.max(500, Math.min(860, (screen.availHeight || 860) - 140));
+  // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
+  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 100));
+  var h = Math.max(480, Math.min(820, (screen.availHeight || 860) - 260));
   SMClient.init().resizeWindow(w, h);
 } catch (e) {}</script>
-<iframe src="${url}" title="Job Costs" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
+<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
   });
 
   // The Job Costs window itself (opened inside ServiceM8's window, using the click's session).
