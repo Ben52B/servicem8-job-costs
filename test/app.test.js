@@ -949,8 +949,25 @@ test('a slow ServiceM8 never stops the window opening: details finish in the bac
   }
 });
 
+test('Bills: find invoices across jobs and mark several paid at once', async () => {
+  const t = await openCard('gl-home', 'acc-gl');
+  let { bills } = await json(t, '/bills');
+  const gl = bills.filter((b) => /Gliderol/.test(b.supplier));
+  assert.equal(gl.length, 2);
+  assert.ok(gl.some((b) => b.jobs.some((j) => j.job_number === '206594')));
+  assert.ok(gl.every((b) => b.payment_state === 'unpaid'));
+  assert.equal((await post(t, '/bills/paid', { ids: gl.map((b) => b.id), paid: true })).status, 200);
+  ({ bills } = await json(t, '/bills'));
+  assert.ok(bills.filter((b) => /Gliderol/.test(b.supplier)).every((b) => b.payment_state === 'paid' && b.paid_at));
+  // another business's invoice can't be touched
+  const other = repo.db.prepare("SELECT id FROM invoices WHERE account_uuid = 'acc-1' AND status = 'ready' LIMIT 1").get();
+  const r = await post(t, '/bills/paid', { ids: [other.id], paid: true }).then((x) => x.json());
+  assert.equal(r.updated, 0);
+  assert.equal((await fetch(`${base}/bills?t=${encodeURIComponent(t)}`)).status, 200);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

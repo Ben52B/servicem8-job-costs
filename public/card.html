@@ -208,6 +208,7 @@
     <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
     <a class="btn" id="inboxLink">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
+    <a class="btn" id="billsLink">🧾 Bills</a>
     <a class="btn" id="reportsLink">📊 Reports</a>
   </header>
   <section id="stockBanner"></section>
@@ -905,6 +906,7 @@ function wireDrop(el, onFiles) {
 wireDrop($('#aside'), uploadFiles);
 
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
+$('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
 $('#inboxLink').href = '/inbox?t=' + encodeURIComponent(BOOT.token);
 if (BOOT.embedded && window.SMClient) {
   try {

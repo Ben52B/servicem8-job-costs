@@ -15,7 +15,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -429,7 +429,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox']) {
+  for (const name of ['report', 'inbox', 'bills']) {
     app.get(`/${name}`, (req, res) => {
       if (!jobFromToken(req.query.t)) {
         return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');
@@ -884,6 +884,21 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     } catch (e) {
       res.status(502).json({ error: e.message });
     }
+  });
+
+  // Bills: every invoice of the business, to find them and mark several paid at once.
+  api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
+  api.post('/bills/paid', (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger).slice(0, 500) : [];
+    if (!ids.length || typeof req.body?.paid !== 'boolean') return res.status(400).json({ error: 'Choose invoices first' });
+    let n = 0;
+    for (const id of ids) {
+      const inv = repo.getInvoice(id);
+      if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
+      repo.setInvoicePaid(id, req.body.paid);
+      n++;
+    }
+    res.json({ ok: true, updated: n });
   });
 
   // Reports across all jobs of the business.

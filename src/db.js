@@ -695,6 +695,30 @@ function createRepo(db, dataDir) {
       return db.prepare('SELECT items.*, invoices.account_uuid FROM items JOIN invoices ON invoices.id = items.invoice_id WHERE items.id = ?').get(id);
     },
 
+    /** Every read invoice of the business, for the Bills page: who, how much, which jobs, paid or not. */
+    listBills(accountUUID) {
+      const invs = db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND status = 'ready' ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(accountUUID);
+      if (!invs.length) return [];
+      const ids = invs.map((i) => i.id).join(',');
+      const paid = new Map(db.prepare(`SELECT invoice_id, COUNT(*) AS n, SUM(paid) AS p, MAX(paid_at) AS at FROM items WHERE invoice_id IN (${ids}) GROUP BY invoice_id`).all()
+        .map((r) => [r.invoice_id, r]));
+      const jobs = new Map();
+      for (const r of db.prepare(`SELECT DISTINCT items.invoice_id, jobs.job_uuid, jobs.job_number FROM allocations JOIN items ON items.id = allocations.item_id
+          LEFT JOIN jobs ON jobs.job_uuid = allocations.job_uuid WHERE items.invoice_id IN (${ids})`).all()) {
+        if (!jobs.has(r.invoice_id)) jobs.set(r.invoice_id, []);
+        jobs.get(r.invoice_id).push({ job_uuid: r.job_uuid, job_number: r.job_number });
+      }
+      return invs.map((i) => {
+        const p = paid.get(i.id) || { n: 0, p: 0 };
+        return {
+          id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, due_date: i.due_date,
+          total: i.total, total_ex: exGst(i.total, i.tax), file_path: i.file_path, mime_type: i.mime_type, source: i.source,
+          jobs: jobs.get(i.id) || [], in_stock: !!i.kept_as_stock, paid_at: p.at || null,
+          payment_state: !p.n ? 'unpaid' : p.p >= p.n ? 'paid' : p.p > 0 ? 'part' : 'unpaid',
+        };
+      });
+    },
+
     setInvoicePaid(id, paid) {
       db.prepare('UPDATE items SET paid = ?, paid_at = ? WHERE invoice_id = ?')
         .run(paid ? 1 : 0, paid ? new Date().toISOString() : null, id);
