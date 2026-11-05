@@ -43,7 +43,10 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
       repo.saveExtraction(id, result);
       // Uploaded on a job: it goes on that job. Emailed: suggest a job for it.
       if (inv.origin_job_uuid) repo.assignToOrigin(id);
-      else repo.suggestJob(id);
+      else if (!repo.suggestJob(id) && api.lookupJobs) {
+        // A job number on it that Job Costs hasn't seen yet (e.g. a completed job): ask ServiceM8.
+        try { if (await api.lookupJobs(id)) repo.suggestJob(id); } catch (e) { log.error(`Job lookup for invoice ${id}: ${e.message}`); }
+      }
     } catch (e) {
       if (inv.source === 'outlook' && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
@@ -54,7 +57,8 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
     }
   }
 
-  return {
+  const api = {
+    lookupJobs: null, // set by the app: (invoiceId) => found a job?
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);
@@ -68,6 +72,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
       return running || queue.length ? new Promise((r) => idleWaiters.push(r)) : Promise.resolve();
     },
   };
+  return api;
 }
 
 function friendlyError(e) {

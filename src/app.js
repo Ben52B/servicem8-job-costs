@@ -235,6 +235,28 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     for (const inv of linked) if (!live.has(inv.sm8_attachment_uuid)) repo.setDiary(inv.id, { sm8_missing: 1 });
   }
 
+  /** A job by its number: one Job Costs knows, or else looked up in ServiceM8 (and remembered). */
+  async function jobByNumber(accountUUID, number) {
+    const known = repo.findJobByNumber(accountUUID, number);
+    if (known) return repo.getJob(known);
+    const token = await accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
+    if (!token) return null;
+    const uuid = await findJobByNumberImpl(String(number), token);
+    if (!uuid) return null;
+    const info = await fetchJobImpl(uuid, token);
+    return repo.ensureJob({ jobUUID: uuid, accountUUID, ...(withStockFlag(info) || {}), jobNumber: (info && info.jobNumber) || String(number) });
+  }
+  // Invoices with a job number Job Costs hasn't seen (e.g. completed jobs): look them up.
+  processor.lookupJobs = app.locals.lookupJobs = async (invoiceId) => {
+    const inv = repo.getInvoice(invoiceId);
+    let found = false;
+    for (const n of repo.jobNumbersOn(invoiceId)) {
+      if (repo.findJobByNumber(inv.account_uuid, n)) continue;
+      if (await jobByNumber(inv.account_uuid, n).catch(() => null)) found = true;
+    }
+    return found;
+  };
+
   const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
   const sm8Notes = new Map(); // job -> why ServiceM8 info is missing (shown on the card)
   const htmlPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
@@ -756,17 +778,30 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
       recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config) });
   });
-  api.post('/inbox/:id/assign', (req, res) => {
+  api.post('/inbox/:id/assign', async (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
-    const job = repo.getJob(String(req.body?.job_uuid || ''));
+    // { job_uuid } from the list, or { job_number } typed in (looked up in ServiceM8 if needed)
+    let job = req.body?.job_uuid ? repo.getJob(String(req.body.job_uuid)) : null;
+    const typed = String(req.body?.job_number || '').trim().replace(/^#/, '');
+    if (!job && typed) {
+      job = await jobByNumber(req.account, typed).catch(() => null);
+      if (!job) return res.status(404).json({ error: `Job #${typed} wasn\u2019t found in ServiceM8` });
+    }
     if (!job || (job.account_uuid ?? null) !== req.account) return res.status(400).json({ error: 'Choose a job' });
     const c = parseCategory(req.body?.category);
     if (c.error) return res.status(400).json({ error: c.error });
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
     repo.assignWhole(inv.id, job.job_uuid, { category: c.category || inv.category });
     repo.markApproved(inv.id, job.is_stock ? null : job.job_uuid);
-    res.json({ ok: true });
+    res.json({ ok: true, job_number: job.job_number });
+  });
+  // Upload invoices straight into the Inbox (read, then a job is suggested for each).
+  api.post('/inbox/upload', upload.array('files', 30), (req, res) => {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'No files received' });
+    const created = files.map((f) => addInvoiceFile({ accountUUID: req.account, source: 'upload', name: f.originalname, contentType: f.mimetype, buffer: f.buffer }));
+    res.status(201).json({ created: created.map((i) => i.id) });
   });
   api.post('/inbox/:id/stock', (req, res) => {
     const inv = accountInvoice(req, res);

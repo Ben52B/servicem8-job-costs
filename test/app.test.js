@@ -33,6 +33,11 @@ const DOOR = {
 const fakeAnalyzer = {
   async analyzeFile({ fileName }) {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
+    if (/Tax_Invoice_S/.test(fileName)) {
+      const ref = fileName.match(/ref(\d+(?:-\d)?)/)[1];
+      return { ...DOOR, supplier_name: 'Gliderol International Pty Ltd', invoice_number: fileName.match(/S\d+/)[0], references: [ref], total: 1348.6, tax: 122.6,
+        items: [{ description: 'AA roller door 2100x4840', category: 'materials', line_total: 1226 }] };
+    }
     if (/quote/.test(fileName)) return { ...DOOR, document_type: 'quote', invoice_number: 'Q-1' };
     if (/remittance/.test(fileName)) return { ...DOOR, document_type: 'remittance', invoice_number: 'R-9' };
     if (/receipt/.test(fileName)) {
@@ -68,6 +73,8 @@ const JOBS = {
   'job-207974B': { jobNumber: '207974 B', jobTitle: '4 Gate Rd, Brighton', quoteAmount: 0 },
   'job-555B': { jobNumber: '555B', jobTitle: 'Orphan part' },
   'ol-job-b': { jobNumber: '208777', jobTitle: '3 Lake Rd, Kew' },
+  'done-job': { jobNumber: '207835', jobTitle: '2/92 Chute St, Mordialloc' },
+  'other-job': { jobNumber: '206594', jobTitle: '6 Debbie Court' },
 };
 let jobCounter = 300000;
 const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { jobNumber: String(jobCounter++), jobTitle: `${uuid} Rd` }), status: 'Work Order' });
@@ -891,6 +898,28 @@ test('an invoice that is only the text of an email shows as a readable page', as
   assert.match(html, /came as the text of an email/);
   assert.match(html, /<a href="https:\/\/paydirect\.myob\.com\/pay\/abc\?x=1&amp;y=2"[^>]*>🔗 link<\/a>/);
   assert.ok(!html.includes('<https://'), 'raw link brackets are gone');
+});
+
+test('upload supplier invoices to the Inbox: the job number on each is found in ServiceM8, even for completed jobs', async () => {
+  const t = await openCard('gl-home', 'acc-gl');
+  processor.lookupJobs = app.locals.lookupJobs; // other test apps share this processor
+  const fd = new FormData();
+  fd.append('files', new Blob(['%PDF-1.4 a'], { type: 'application/pdf' }), 'Tax_Invoice_S667778_ref207835.pdf');
+  fd.append('files', new Blob(['%PDF-1.4 b'], { type: 'application/pdf' }), 'Tax_Invoice_S668018_ref999999.pdf');
+  const up = await api(t, '/inbox/upload', { method: 'POST', body: fd });
+  assert.equal(up.status, 201);
+  await processor.idle();
+  await new Promise((r) => setTimeout(r, 50));
+  const ib = await json(t, '/inbox');
+  const a = ib.invoices.find((i) => i.invoice_number === 'S667778');
+  assert.equal(a.suggestion.job_number, '207835', 'job never opened in Job Costs, found in ServiceM8');
+  const b = ib.invoices.find((i) => i.invoice_number === 'S668018');
+  assert.equal(b.suggestion, null, 'no such job');
+  // Type the job number yourself
+  assert.equal((await post(t, `/inbox/${b.id}/assign`, { job_number: '404040' })).status, 404);
+  const r = await post(t, `/inbox/${b.id}/assign`, { job_number: '206594' }).then((x) => x.json());
+  assert.equal(r.job_number, '206594');
+  assert.ok(repo.jobsOnInvoice(b.id).some((j) => j.job_number === '206594'));
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

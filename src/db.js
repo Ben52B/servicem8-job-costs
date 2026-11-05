@@ -360,6 +360,14 @@ function createRepo(db, dataDir) {
       return moved;
     },
 
+    /** Job numbers written on an invoice (references, email subject, file name), e.g. "207932-1" → 207932. */
+    jobNumbersOn(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv) return [];
+      const text = [parseJson(inv.refs, []).join(' | '), inv.email_subject, inv.file_name].filter(Boolean).join(' | ');
+      return [...new Set([...text.matchAll(/(?:^|[^0-9A-Za-z])(\d{6})(?![0-9])/g)].map((m) => m[1]))].slice(0, 4);
+    },
+
     findJobByNumber(accountUUID, jobNumber) {
       return db.prepare('SELECT job_uuid FROM jobs WHERE account_uuid IS ? AND job_number = ? LIMIT 1').get(accountUUID, String(jobNumber))?.job_uuid || null;
     },
@@ -812,8 +820,11 @@ function createRepo(db, dataDir) {
       const inv = repo.getInvoice(invoiceId);
       if (!inv || inv.status !== 'ready') return null;
       const dismissed = new Set(parseJson(inv.dismissed_jobs, []));
-      const jobs = db.prepare(`SELECT * FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL
-        AND COALESCE(sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(inv.account_uuid).filter((j) => !dismissed.has(j.job_uuid));
+      // A job number written on the invoice counts for any job (also completed ones);
+      // a matching address only for jobs still open.
+      const jobs = db.prepare(`SELECT * FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL`).all(inv.account_uuid)
+        .filter((j) => !dismissed.has(j.job_uuid));
+      const isOpen = (j) => ['Quote', 'Work Order'].includes(j.sm8_status || 'Work Order');
       const activeJobs = repo._withoutSplitParts(jobs);
       const places = [
         ['the email subject', inv.email_subject],
@@ -831,7 +842,7 @@ function createRepo(db, dataDir) {
           for (const [where, text] of places) if (text && re.test(text)) { best = { score: 3, reason: `Found “${num}” in ${where}` }; break; }
         }
         const jobAddr = addressKey(j.job_title);
-        if (!best && site && jobAddr && site.number === jobAddr.number && site.street === jobAddr.street) {
+        if (!best && isOpen(j) && site && jobAddr && site.number === jobAddr.number && site.street === jobAddr.street) {
           best = { score: 2, reason: `Site address matches ${String(j.job_title).split(',')[0]}` };
         }
         if (best) scored.push({ job: j, ...best });

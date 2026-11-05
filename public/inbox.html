@@ -48,7 +48,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><label class="btn" style="margin-left:auto;background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
   <div class="address" id="address"></div>
   <div class="muted" id="outlookBar" style="margin:-8px 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
@@ -105,7 +105,7 @@ function render() {
   $('#address').style.display = $('#address').innerHTML ? '' : 'none';
   const fresh = data.invoices.filter((i) => i.untouched && !i.kept_as_stock);
   const stock = data.invoices.filter((i) => !(i.untouched && !i.kept_as_stock) && !i.duplicate_of);
-  const jobOptions = (sel) => `<option value="">Choose job…</option>` + data.jobs.map((j) => `<option value="${esc(j.job_uuid)}" ${j.job_uuid === sel ? 'selected' : ''}>${esc(jobLabel(j))}</option>`).join('');
+  const jobOptions = (sel) => `<option value="">Choose job…</option><option value="__type">✎ Type a job number…</option>` + data.jobs.map((j) => `<option value="${esc(j.job_uuid)}" ${j.job_uuid === sel ? 'selected' : ''}>${esc(jobLabel(j))}</option>`).join('');
   let h = `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
   if (!fresh.length && !data.pending.length) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {
@@ -150,8 +150,19 @@ function render() {
 }
 
 document.addEventListener('change', async (e) => {
+  if (e.target.id === 'inboxUpload') return uploadToInbox(e.target.files);
   const sel = e.target.closest('select[data-assign-select]'); if (!sel || !sel.value) return;
-  try { await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: sel.value }) }); toast('Added to ' + sel.options[sel.selectedIndex].textContent); } catch (x) { toast(x.message); }
+  try {
+    if (sel.value === '__type') {
+      const n = (prompt('Job number (e.g. 206594)') || '').trim();
+      if (!n) { sel.value = ''; return; }
+      const r = await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n }) });
+      toast('Added to #' + (r.job_number || n));
+    } else {
+      await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: sel.value }) });
+      toast('Added to ' + sel.options[sel.selectedIndex].textContent);
+    }
+  } catch (x) { toast(x.message); }
   load();
 });
 document.addEventListener('click', async (e) => {
@@ -180,6 +191,23 @@ document.addEventListener('click', async (e) => {
     }
   } catch (x) { toast(x.message); }
 });
+async function uploadToInbox(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  toast(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
+  try {
+    const res = await fetch('/api/inbox/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + BOOT.token } });
+    const b = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(b.error || 'Upload failed');
+    toast(`Reading ${b.created.length} invoice${b.created.length === 1 ? '' : 's'}… each gets a suggested job`);
+  } catch (x) { toast(x.message); }
+  $('#inboxUpload').value = '';
+  load();
+}
+// Drop files anywhere on the page
+document.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+document.addEventListener('drop', (e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); uploadToInbox(e.dataTransfer.files); } });
 load();
 // New invoices (e.g. from Outlook) show up without reloading, unless you're in the middle of choosing something.
 setInterval(() => { if (!document.activeElement || !document.activeElement.matches('select, input')) load(); }, 60000);
