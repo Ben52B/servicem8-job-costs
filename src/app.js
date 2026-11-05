@@ -338,21 +338,23 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     try {
       event = verifyEvent(req.body, config.servicem8AppSecret);
     } catch (e) {
-      console.error(`ServiceM8 click rejected: ${e.message}`);
+      console.error(`ServiceM8 click rejected: ${e.message} (body ${String(req.body || '').length} chars, type ${req.get('content-type') || '-'})`);
       return reply(`<div style="font-family:sans-serif;padding:16px"><b>Could not open Job Costs</b><p>${String(e.message).replace(/</g, '&lt;')}</p>
         <p>Check SERVICEM8_APP_SECRET in Render matches the add-on's App Secret.</p></div>`);
     }
     // ServiceM8 only waits a few seconds for an answer. Get the job's details from ServiceM8 if that's
     // quick; otherwise open the window straight away and finish in the background.
     let job = null;
+    const t0 = Date.now();
     try {
       const work = prepareClick(event);
       work.catch((e) => console.error(`Job Costs click (background): ${e.message}`))
         .finally(() => { for (const [k, v] of sm8Notes) if (v === LOADING) sm8Notes.delete(k); });
-      job = await Promise.race([work, new Promise((r) => setTimeout(() => r(null), config.clickTimeoutMs || 5000))]);
+      job = await Promise.race([work, new Promise((r) => setTimeout(() => r(null), config.clickTimeoutMs || 3000))]);
     } catch (e) {
       console.error(`Job Costs click: ${e.message}`);
     }
+    console.log(`Job Costs click: job ${event.jobUUID} answered in ${Date.now() - t0} ms${job ? '' : ' (details still loading)'}`);
     if (!job) {
       job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID });
       const main = mainJobNumber(job.job_number);
