@@ -78,7 +78,7 @@ Create a key at <https://console.anthropic.com> and set `ANTHROPIC_API_KEY`.
 
 ### 4. Outlook (Microsoft 365): read the inbox where invoices arrive
 
-Job Costs reads your Outlook inbox (read-only: it never changes, moves or deletes emails) every 2 minutes. Each PDF or photo is read by Claude; real invoices and receipts go to the Job Costs **Inbox** with a suggested job (job number or site address on the invoice) or **📦 Looks like stock**, and wait for your OK. Quotes, statements, brochures and normal emails are ignored. It starts with the last 3 days of email.
+Job Costs reads your Outlook inbox (read-only: it never changes, moves or deletes emails) every 2 minutes, Monday–Friday 6am–6pm Melbourne time (change with `OUTLOOK_DAYS`, `OUTLOOK_FROM_HOUR`, `OUTLOOK_TO_HOUR`, `OUTLOOK_TIMEZONE`). **↻ Check now** on the card or the Inbox checks straight away, any time. Remittances are skipped too. Approved the wrong one? The Inbox lists **Recently approved** invoices with **Undo**. Possible duplicates (same supplier and invoice number, or same supplier, amount and date) are flagged with the job the other copy is on. Each PDF or photo is read by Claude; real invoices and receipts go to the Job Costs **Inbox** with a suggested job (job number or site address on the invoice) or **📦 Looks like stock**, and wait for your OK. Quotes, statements, brochures and normal emails are ignored. It starts with the last 3 days of email.
 
 One-time setup in Microsoft (about 10 minutes, as a Microsoft 365 admin):
 

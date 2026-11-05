@@ -32,9 +32,13 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         context: { emailFrom: inv.email_from, emailSubject: inv.email_subject },
       });
       // From the Outlook inbox: keep only real bills (quotes, statements and other PDFs are dropped quietly).
-      if (inv.source === 'outlook' && ['quote', 'statement'].includes(result.document_type)) {
+      if (inv.source === 'outlook' && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
         log.log?.(`Outlook: "${inv.file_name}" is a ${result.document_type}, not kept`);
         return repo.deleteInvoice(id);
+      }
+      // A remittance (payment advice) is not a cost, wherever it came from.
+      if (result.document_type === 'remittance') {
+        return repo.setInvoiceError(id, 'This is a remittance (a payment advice), not a bill, so it isn\u2019t added as a cost. Delete it.');
       }
       repo.saveExtraction(id, result);
       // Uploaded on a job: it goes on that job. Emailed: suggest a job for it.

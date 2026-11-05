@@ -32,6 +32,11 @@ const config = {
   msClientSecret: process.env.MS_CLIENT_SECRET || '',
   msTenantId: (process.env.MS_TENANT_ID || 'organizations').trim(),
   outlookPollSeconds: Number(process.env.OUTLOOK_POLL_SECONDS || 120),
+  // When Outlook is checked automatically (the "Check now" button works any time).
+  outlookTimezone: (process.env.OUTLOOK_TIMEZONE || 'Australia/Melbourne').trim(),
+  outlookDays: (process.env.OUTLOOK_DAYS || 'mon,tue,wed,thu,fri').toLowerCase().split(',').map((d) => d.trim().slice(0, 3)).filter(Boolean),
+  outlookFromHour: Number(process.env.OUTLOOK_FROM_HOUR ?? 6),
+  outlookToHour: Number(process.env.OUTLOOK_TO_HOUR ?? 18),
   devMode: bool(process.env.DEV_MODE),
   // Stock orders are opened as their own ServiceM8 job. A job counts as a stock order job
   // when its client name or category name contains one of these (comma separated, any case).

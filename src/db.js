@@ -278,6 +278,9 @@ function migrateColumns(db) {
   add('sm8_missing', 'INTEGER NOT NULL DEFAULT 0'); // the diary file was deleted in ServiceM8
   add('diary_pending', 'INTEGER NOT NULL DEFAULT 0'); // needs a look by the diary copier
   add('purchase_kind', 'TEXT');          // Claude's guess: 'job' | 'stock' | 'unclear'
+  // Approved from the Inbox (so it can be undone): when, and onto which job (null = stock).
+  add('approved_at', 'TEXT');
+  add('approved_job_uuid', 'TEXT');
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
   for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
@@ -853,6 +856,55 @@ function createRepo(db, dataDir) {
     },
 
     /** Leave an invoice unassigned on purpose (stock); it stops showing as new in the inbox. */
+    // ----- approvals from the Inbox (can be undone) -----
+    markApproved(invoiceId, jobUUID) {
+      db.prepare("UPDATE invoices SET approved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), approved_job_uuid = ? WHERE id = ?").run(jobUUID || null, invoiceId);
+    },
+    listRecentlyApproved(accountUUID, days = 14) {
+      return db.prepare(`SELECT invoices.*, jobs.job_number, jobs.job_title FROM invoices LEFT JOIN jobs ON jobs.job_uuid = invoices.approved_job_uuid
+        WHERE invoices.account_uuid IS ? AND approved_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ?) ORDER BY approved_at DESC LIMIT 30`)
+        .all(accountUUID, `-${days} days`).map((i) => ({
+          id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, total_ex: exGst(i.total, i.tax),
+          approved_at: i.approved_at, job_uuid: i.approved_job_uuid, job_number: i.job_number, job_title: i.job_title, to_stock: !i.approved_job_uuid,
+          file_path: i.file_path, mime_type: i.mime_type, possible_duplicate: repo.possibleDuplicate(i),
+        }));
+    },
+    /** Put an approved invoice back in the Inbox. */
+    undoApproval(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv || !inv.approved_at) return null;
+      tx(() => {
+        if (inv.approved_job_uuid) repo.removeFromJob(invoiceId, inv.approved_job_uuid);
+        db.prepare('UPDATE invoices SET kept_as_stock = 0, stock_job_uuid = NULL, approved_at = NULL, approved_job_uuid = NULL WHERE id = ?').run(invoiceId);
+      });
+      return inv;
+    },
+
+    /**
+     * Another invoice that looks like the same bill: same supplier and invoice number, or
+     * (when a number is missing) same supplier, amount and date. Says which job(s) it's on.
+     */
+    possibleDuplicate(inv) {
+      if (!inv || !inv.supplier) return null;
+      const sup = String(inv.supplier).trim().toLowerCase();
+      const others = db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND id != ? AND status = 'ready' AND LOWER(TRIM(supplier)) = ?`).all(inv.account_uuid, inv.id, sup);
+      let match = null; let reason = null;
+      if (inv.invoice_number) {
+        // "INV-00003379" and "3379" are the same number
+        const norm = (n) => String(n).replace(/\D/g, '').replace(/^0+/, '') || String(n).toLowerCase().replace(/[^0-9a-z]/g, '');
+        match = others.find((o) => o.invoice_number && norm(o.invoice_number) === norm(inv.invoice_number));
+        if (match) reason = 'same supplier and invoice number';
+      }
+      if (!match && inv.total != null) {
+        match = others.find((o) => o.total != null && Math.abs(o.total - inv.total) < 0.01 && (o.invoice_date || null) === (inv.invoice_date || null)
+          && (!o.invoice_number || !inv.invoice_number));
+        if (match) reason = 'same supplier, amount and date';
+      }
+      if (!match) return null;
+      const jobs = repo.jobsOnInvoice(match.id).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number }));
+      return { id: match.id, invoice_number: match.invoice_number, reason, jobs, in_stock: !!match.kept_as_stock, in_inbox: !jobs.length && !match.kept_as_stock };
+    },
+
     keepAsStock(invoiceId) {
       db.prepare('UPDATE invoices SET kept_as_stock = 1, suggested_job_uuid = NULL, suggestion_reason = NULL WHERE id = ?').run(invoiceId);
     },
@@ -1083,7 +1135,7 @@ function createRepo(db, dataDir) {
         out.push({
           id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
           total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
-          untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
+          untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf, possible_duplicate: untouched ? repo.possibleDuplicate(inv) : null,
           stock_job: inv.stock_job_uuid && jobsById.get(inv.stock_job_uuid)
             ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,
           left_amount: round2(left.reduce((s, l) => s + l.trace.left_amount, 0)),

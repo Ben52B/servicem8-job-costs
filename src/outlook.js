@@ -160,4 +160,20 @@ function startOutlookPoller({ repo, config, onMail, log = console, seconds = 120
   return { stop: () => clearInterval(timer), tick };
 }
 
-module.exports = { graphApi, checkOutlook, startOutlookPoller, pickFiles, SCOPES };
+/** Is now within the automatic checking hours (e.g. Mon–Fri 6am–6pm Melbourne time)? */
+function inCheckingHours(config, now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-AU', { timeZone: config.outlookTimezone || 'Australia/Melbourne', weekday: 'short', hour: 'numeric', hourCycle: 'h23' })
+    .formatToParts(now).map((p) => [p.type, p.value]));
+  const day = String(parts.weekday).toLowerCase().slice(0, 3);
+  const hour = Number(parts.hour);
+  const days = config.outlookDays || ['mon', 'tue', 'wed', 'thu', 'fri'];
+  return days.includes(day) && hour >= (config.outlookFromHour ?? 6) && hour < (config.outlookToHour ?? 18);
+}
+function scheduleText(config) {
+  const days = config.outlookDays || ['mon', 'tue', 'wed', 'thu', 'fri'];
+  const d = days.join(',') === 'mon,tue,wed,thu,fri' ? 'Mon–Fri' : days.map((x) => x[0].toUpperCase() + x.slice(1)).join(', ');
+  const h = (n) => (n === 0 ? '12am' : n < 12 ? `${n}am` : n === 12 ? '12pm' : `${n - 12}pm`);
+  return `every ${Math.round(Math.max(60, config.outlookPollSeconds || 120) / 60)} min, ${d} ${h(config.outlookFromHour ?? 6)}–${h(config.outlookToHour ?? 18)}`;
+}
+
+module.exports = { graphApi, checkOutlook, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };

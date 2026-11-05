@@ -248,8 +248,10 @@ const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
 const SOURCE_LABEL = { email: 'Emailed', outlook: 'From Outlook', upload: 'Uploaded', manual: 'Added by hand', diary: 'From the ServiceM8 diary' };
 const fileUrl = (id) => `/api/invoices/${id}/file?t=${encodeURIComponent(BOOT.token)}`;
 // PDFs open in our own viewer (Chrome won't show PDFs opened from ServiceM8's window); photos open as they are.
+const isText = (inv) => /^text\//.test(inv.mime_type || '');
 const viewUrl = (inv) => (inv.mime_type === 'application/pdf'
-  ? `/viewer.html?id=${inv.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(inv.file_name || 'Invoice')}` : fileUrl(inv.id));
+  ? `/viewer.html?id=${inv.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(inv.file_name || 'Invoice')}`
+  : fileUrl(inv.id) + (isText(inv) ? '&view=html' : ''));
 const catOptions = (sel) => BOOT.categories.map((c) => `<option value="${c}" ${c === sel ? 'selected' : ''}>${CAT_LABEL[c] || c}</option>`).join('');
 const reasonOptions = (sel, empty = 'No screw-up') => `<option value="">${empty}</option>` + BOOT.reasons.map((r) => `<option value="${r.code}" ${r.code === sel ? 'selected' : ''}>⚠ ${esc(r.label)}</option>`).join('');
 
@@ -385,7 +387,7 @@ function renderList() {
   const o = state.outlook;
   const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
   const outlookHtml = !o || !o.available ? ''
-    : o.connected ? `<div style="margin-top:8px">📥 Reading Outlook: <b>${esc(o.email || '')}</b>${o.lastCheck ? ` · checked ${ago(o.lastCheck)}` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener" title="Connect a different mailbox">Change</a>${o.error ? `<div style="color:var(--bad)">⚠ ${esc(o.error)} <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Reconnect</a></div>` : ''}</div>`
+    : o.connected ? `<div style="margin-top:8px">📥 Reading Outlook: <b>${esc(o.email || '')}</b>${o.lastCheck ? ` · checked ${ago(o.lastCheck)}` : ''} <span class="muted">(${esc(o.hours || '')})</span> · <button class="mk-link" data-check-now>↻ Check now</button> · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener" title="Connect a different mailbox">Change</a>${o.error ? `<div style="color:var(--bad)">⚠ ${esc(o.error)} <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Reconnect</a></div>` : ''}</div>`
     : `<div style="margin-top:8px"><a class="btn small" href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">📥 Connect Outlook</a> <span class="muted">to pick up invoices from your inbox</span></div>`;
   $('#emailBox').innerHTML = (d.inboxAddress
     ? `Email invoices for any job to:<div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button class="small" data-copy>Copy</button></div>`
@@ -544,7 +546,7 @@ function renderPreview() {
   const isPdf = mime === 'application/pdf';
   const body = mime.startsWith('image/') ? `<div class="img"><img src="${url}" alt="Invoice"></div>`
     : isPdf ? '<div class="img pdf" id="pdfHolder"><div class="empty"><span class="spin"></span></div></div>'
-    : `<iframe src="${url}" title="Invoice"></iframe>`;
+    : `<iframe src="${url}${isText(inv) ? '&view=html' : ''}" title="Invoice"></iframe>`;
   el.innerHTML = `<div class="p-bar"><span>${esc(inv.file_name || 'Invoice')}</span><a class="btn small" href="${viewUrl(inv)}" target="_blank" rel="noopener">Open</a></div>${body}`;
   if (isPdf) drawPdf(url, $('#pdfHolder'), key);
 }
@@ -766,6 +768,14 @@ document.addEventListener('click', async (e) => {
       const inv = state.data.invoices.find((i) => i.id === Number(ds.diaryRemove));
       await api(`/invoices/${ds.diaryRemove}${inv && !inv.other_jobs.length ? '?completely=1' : ''}`, { method: 'DELETE' });
       toast('Removed from Job Costs'); state.selected = null; return load();
+    }
+    if (ds.checkNow !== undefined) {
+      t.disabled = true; t.textContent = 'Checking…';
+      try {
+        const r = await post('/outlook/check');
+        toast(r.found ? `Found ${r.found} email${r.found === 1 ? '' : 's'} with possible invoices – reading them now` : 'Nothing new in Outlook');
+      } finally { await loadOutlook(); setTimeout(checkInbox, 8000); }
+      return checkInbox();
     }
     if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
     if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }

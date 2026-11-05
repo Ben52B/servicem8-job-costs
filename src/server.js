@@ -28,8 +28,11 @@ if (config.imapUser && config.imapPassword) {
 if (config.msClientId && config.msClientSecret) {
   const tick = () => app.locals.checkOutlook().then((n) => { if (n) console.log(`Outlook: ${n} new email${n === 1 ? '' : 's'} with possible invoices`); })
     .catch((e) => console.error(`Outlook check failed: ${e.message}`));
-  setTimeout(tick, 5000);
-  setInterval(tick, Math.max(60, config.outlookPollSeconds) * 1000);
+  const { inCheckingHours } = require('./outlook');
+  // Only in working hours (Mon–Fri 6am–6pm by default); "Check now" in the app works any time.
+  const maybeTick = () => { if (inCheckingHours(config)) tick(); };
+  setTimeout(maybeTick, 5000);
+  setInterval(maybeTick, Math.max(60, config.outlookPollSeconds) * 1000);
 }
 app.listen(config.port, () => {
   console.log(`Job Costs listening on :${config.port}`);

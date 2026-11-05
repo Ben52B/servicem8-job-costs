@@ -34,6 +34,7 @@ const fakeAnalyzer = {
   async analyzeFile({ fileName }) {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
     if (/quote/.test(fileName)) return { ...DOOR, document_type: 'quote', invoice_number: 'Q-1' };
+    if (/remittance/.test(fileName)) return { ...DOOR, document_type: 'remittance', invoice_number: 'R-9' };
     if (/receipt/.test(fileName)) {
       return { is_financial_document: true, document_type: 'receipt', supplier_name: 'Bunnings', invoice_number: 'R-1', total: 55, tax: 5, payment_status: 'paid',
         references: [], items: [{ description: 'Dynabolts', category: 'materials', line_total: 50 }] };
@@ -820,10 +821,39 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     assert.equal((await post(t, `/suggestions/${door.id}/accept`)).status, 200);
     assert.equal((await summary(t)).invoices.length, 1);
 
+    // The same bill again (number written differently): flagged, with the job the first one is on
+    inbox.push({ id: 'm6', internetMessageId: '<m6@x>', subject: 'Copy of invoice 208777', from: { emailAddress: { address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('invoice.pdf')] });
+    let r6 = await fetch(`${b3}/api/outlook/check`, { method: 'POST', headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.equal(r6.found, 1, 'Check now works');
+    await processor.idle();
+    let ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    const copy = ib.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
+    assert.equal(copy.possible_duplicate.reason, 'same supplier and invoice number');
+    assert.deepEqual(copy.possible_duplicate.jobs.map((j) => j.job_number), ['208777']);
+    // Approved by mistake: it's listed under "Recently approved" and can be undone
+    assert.equal((await post(t, `/inbox/${copy.id}/assign`, { job_uuid: 'ol-job-b' })).status, 200);
+    ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.ok(ib.recent.some((x) => x.id === copy.id && x.job_number === '208777' && x.possible_duplicate));
+    assert.equal((await summary(t)).invoices.length, 2);
+    assert.equal((await post(t, `/inbox/${copy.id}/undo`)).status, 200);
+    assert.equal((await summary(t)).invoices.length, 1);
+    ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.ok(ib.invoices.some((x) => x.id === copy.id), 'back in the Inbox');
+    assert.ok(!ib.recent.some((x) => x.id === copy.id));
+    // Go straight to a job from the Inbox
+    const op = await fetch(`${b3}/api/jobs/ol-job-b/open`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.equal(jwt.decode(op.token).jobUUID, 'ol-job-b');
+    assert.equal((await fetch(`${b3}/api/jobs/job-a/open`, { headers: { Authorization: `Bearer ${t}` } })).status, 404, 'another business\u2019s job');
+    // Remittances from Outlook are dropped
+    inbox.push({ id: 'm7', internetMessageId: '<m7@x>', subject: 'Remittance advice 208777', from: { emailAddress: { address: 'x@y.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('remittance.pdf')] });
+    await app3.locals.checkOutlook();
+    await processor.idle();
+    assert.ok(!mine().some((i) => i.file_name === 'remittance.pdf'));
+
     // Checking again doesn't add the same emails twice
     await app3.locals.checkOutlook();
     await processor.idle();
-    assert.equal(mine().length, 2);
+    assert.equal(mine().length, 3);
     st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(st.connected, true);
     assert.equal(st.email, 'accounts@doorimage.com.au');
@@ -831,6 +861,36 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
   } finally {
     srv.close();
   }
+});
+
+test('Outlook is checked automatically only Mon–Fri 6am–6pm Melbourne time', () => {
+  const { inCheckingHours, scheduleText } = require('../src/outlook');
+  const cfg = { outlookTimezone: 'Australia/Melbourne', outlookDays: ['mon', 'tue', 'wed', 'thu', 'fri'], outlookFromHour: 6, outlookToHour: 18, outlookPollSeconds: 120 };
+  // 2026-11-04 is a Wednesday; Melbourne is UTC+11 in November
+  assert.equal(inCheckingHours(cfg, new Date('2026-11-03T22:30:00Z')), true, 'Wed 9:30am');
+  assert.equal(inCheckingHours(cfg, new Date('2026-11-03T18:30:00Z')), false, 'Wed 5:30am');
+  assert.equal(inCheckingHours(cfg, new Date('2026-11-04T07:30:00Z')), false, 'Wed 6:30pm');
+  assert.equal(inCheckingHours(cfg, new Date('2026-11-07T00:00:00Z')), false, 'Saturday 11am');
+  assert.equal(scheduleText(cfg), 'every 2 min, Mon–Fri 6am–6pm');
+});
+
+test('an invoice that is only the text of an email shows as a readable page', async () => {
+  const t = await openCard('text-job', 'acc-text');
+  const { inboxAddress: addr } = await summary(t);
+  await fetch(`${base}/inbound/email?key=mailkey`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ From: 'Invoices@apps.myob.com', To: addr, ToFull: [{ Email: addr }], Subject: 'Invoice 00003379', Attachments: [],
+      TextBody: 'INV-00003379 for $1,650.00\nView invoice <https://paydirect.myob.com/pay/abc?x=1&y=2>\nTotal amount (inc. tax) $1,650.00 ' + 'x'.repeat(40) }),
+  });
+  await processor.idle();
+  const inv = latestInvoice();
+  assert.match(inv.mime_type, /^text\//);
+  const page = await fetch(`${base}/api/invoices/${inv.id}/file?t=${encodeURIComponent(t)}&view=html`);
+  assert.match(page.headers.get('content-type'), /html/);
+  const html = await page.text();
+  assert.match(html, /came as the text of an email/);
+  assert.match(html, /<a href="https:\/\/paydirect\.myob\.com\/pay\/abc\?x=1&amp;y=2"[^>]*>🔗 link<\/a>/);
+  assert.ok(!html.includes('<https://'), 'raw link brackets are gone');
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

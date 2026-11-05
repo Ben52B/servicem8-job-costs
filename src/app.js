@@ -451,7 +451,9 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const inv = accountInvoice(req, res, b.invoice_id);
       if (!inv) return;
       if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+      const untouched = !repo.jobsOnInvoice(inv.id).length && !inv.kept_as_stock;
       repo.assignWhole(inv.id, req.job.job_uuid, fields);
+      if (untouched) repo.markApproved(inv.id, repo.isStockJob(req.job.job_uuid) ? null : req.job.job_uuid);
       return res.json({ ok: true, invoice_id: inv.id });
     }
     const item = accountItem(req, res, b.item_id);
@@ -531,19 +533,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const others = repo.jobsOnInvoice(inv.id).filter((j) => j.job_uuid !== req.job.job_uuid);
       if (others.length) return res.status(409).json({ error: `Other jobs have part of this invoice (${jobList(others)}). Take it off those jobs first.` });
     }
-    let diaryWarning = null;
-    if (req.query.diary && (inv.sm8_attachment_uuid || inv.sm8_note_uuid)) {
-      try {
-        const token = await diaryToken(req.account);
-        if (!token) throw new Error('401');
-        const gone = (e) => /\b404\b/.test(e.message); // already deleted there: fine
-        if (inv.sm8_attachment_uuid && !inv.sm8_missing) await diaryApi.removeJobFile(inv.sm8_attachment_uuid, token).catch((e) => { if (!gone(e)) throw e; });
-        if (inv.sm8_note_uuid) await diaryApi.removeJobNote(inv.sm8_note_uuid, token).catch((e) => { if (!gone(e)) throw e; });
-        repo.setDiary(inv.id, { sm8_attachment_uuid: null, sm8_note_uuid: null, sm8_job_uuid: null, sm8_link: null, sm8_missing: 0, diary_pending: 0 });
-      } catch (e) {
-        diaryWarning = `Removed from Job Costs, but not from the ServiceM8 diary: ${diaryProblem(e)}`;
-      }
-    }
+    const diaryWarning = req.query.diary ? await removeFromDiary(inv, req.account) : null;
     if (req.query.completely) {
       repo.deleteInvoice(inv.id);
       return res.json({ ok: true, deleted: true, diaryWarning });
@@ -554,6 +544,22 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (inv.status !== 'ready' && inv.origin_job_uuid === req.job.job_uuid) repo.deleteInvoice(inv.id);
     res.json({ ok: true, diaryWarning });
   });
+
+  /** Take an invoice's file and note out of the ServiceM8 diary. Returns a warning if that failed. */
+  async function removeFromDiary(inv, accountUUID) {
+    if (!inv.sm8_attachment_uuid && !inv.sm8_note_uuid) return null;
+    try {
+      const token = await diaryToken(accountUUID);
+      if (!token) throw new Error('401');
+      const gone = (e) => /\b404\b/.test(e.message); // already deleted there: fine
+      if (inv.sm8_attachment_uuid && !inv.sm8_missing) await diaryApi.removeJobFile(inv.sm8_attachment_uuid, token).catch((e) => { if (!gone(e)) throw e; });
+      if (inv.sm8_note_uuid) await diaryApi.removeJobNote(inv.sm8_note_uuid, token).catch((e) => { if (!gone(e)) throw e; });
+      repo.setDiary(inv.id, { sm8_attachment_uuid: null, sm8_note_uuid: null, sm8_job_uuid: null, sm8_link: null, sm8_missing: 0, diary_pending: 0 });
+      return null;
+    } catch (e) {
+      return `Removed from Job Costs, but not from the ServiceM8 diary: ${diaryProblem(e)}`;
+    }
+  }
 
   // Deleted in the ServiceM8 diary, but keep it in Job Costs: forget the link.
   api.post('/invoices/:id/diary-keep', (req, res) => {
@@ -637,6 +643,19 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     const inv = accountInvoice(req, res);
     if (!inv) return;
     if (!inv.file_path) return res.status(404).json({ error: 'No file' });
+    // An invoice that was only the text of an email: show it as a readable page with working links.
+    if (req.query.view === 'html' && /^text\//.test(inv.mime_type || '')) {
+      const text = fs.readFileSync(path.join(repo.filesDir, inv.file_path), 'utf8');
+      const escHtml = (x) => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const body = escHtml(text)
+        .replace(/&lt;(https?:\/\/[^\s&]+(?:&amp;[^\s&]+)*)&gt;/g, (m, u) => ` <a href="${u}" target="_blank" rel="noopener noreferrer">🔗 link</a>`)
+        .replace(/(^|\s)(https?:\/\/\S{60,})/g, (m, sp, u) => `${sp}<a href="${u}" target="_blank" rel="noopener noreferrer">🔗 link</a>`)
+        .replace(/\n{3,}/g, '\n\n');
+      res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+      return res.type('html').send(`<!doctype html><meta charset="utf-8"><body style="margin:0;background:#fff;font:13.5px/1.55 'Segoe UI',Arial,sans-serif;color:#17312b">
+        <div style="padding:14px 18px;background:#f4f7f6;border-bottom:1px solid #e3ece9;font-size:12px;color:#6b8a82">📧 This invoice came as the text of an email (no PDF attached).${inv.email_from ? ' From ' + escHtml(inv.email_from) : ''}</div>
+        <div style="padding:16px 18px;white-space:pre-wrap;word-break:break-word">${body}</div></body>`);
+    }
     res.type(inv.mime_type || 'application/octet-stream');
     res.set('Content-Disposition', `inline; filename="${safeName(inv.file_name)}"`);
     res.sendFile(path.join(repo.filesDir, inv.file_path));
@@ -721,6 +740,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     const inv = accountInvoice(req, res);
     if (!inv) return;
     repo.assignWhole(inv.id, req.job.job_uuid, { category: inv.category });
+    repo.markApproved(inv.id, repo.isStockJob(req.job.job_uuid) ? null : req.job.job_uuid);
     res.json({ ok: true });
   });
   api.post('/suggestions/:id/dismiss', (req, res) => {
@@ -733,7 +753,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   // ---------- Inbox (all invoices not assigned yet, for the whole business) ----------
   api.get('/inbox', (req, res) => {
     const acc = repo.ensureAccount(req.account);
-    res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config) });
+    res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
+      recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config) });
   });
   api.post('/inbox/:id/assign', (req, res) => {
     const inv = accountInvoice(req, res);
@@ -744,13 +765,31 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (c.error) return res.status(400).json({ error: c.error });
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
     repo.assignWhole(inv.id, job.job_uuid, { category: c.category || inv.category });
+    repo.markApproved(inv.id, job.is_stock ? null : job.job_uuid);
     res.json({ ok: true });
   });
   api.post('/inbox/:id/stock', (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
     repo.keepAsStock(inv.id);
+    repo.markApproved(inv.id, null);
     res.json({ ok: true });
+  });
+  // Approved by mistake: back to the Inbox (and out of the ServiceM8 diary if it was copied there).
+  api.post('/inbox/:id/undo', async (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    if (!inv.approved_at) return res.status(400).json({ error: 'This invoice wasn\u2019t approved from the Inbox' });
+    const diaryWarning = inv.sm8_link === 'pushed' ? await removeFromDiary(inv, req.account) : null;
+    repo.undoApproval(inv.id);
+    repo.suggestJob(inv.id);
+    res.json({ ok: true, diaryWarning });
+  });
+  // Open another job's Job Costs (e.g. to check a possible duplicate there).
+  api.get('/jobs/:uuid/open', (req, res) => {
+    const job = repo.getJob(String(req.params.uuid));
+    if (!job || (job.account_uuid ?? null) !== req.account) return res.status(404).json({ error: 'Job not found' });
+    res.json({ token: sessionToken(job.job_uuid), job_number: job.job_number });
   });
   api.delete('/inbox/:id', (req, res) => {
     const inv = accountInvoice(req, res);
@@ -766,10 +805,22 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   // Outlook connection status (shown on the card and the Inbox).
   api.get('/outlook', (req, res) => {
     const o = repo.getOutlook(req.account);
-    res.json({ available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token),
+    res.json({ available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), hours: outlook.scheduleText(config),
       email: o?.email || null, lastCheck: o?.last_check || null, error: o?.error || null });
   });
   api.delete('/outlook', (req, res) => { repo.removeOutlook(req.account); res.json({ ok: true }); });
+  // "Check now": look in Outlook straight away (any day, any time).
+  api.post('/outlook/check', async (req, res) => {
+    if (!repo.getOutlook(req.account)) return res.status(400).json({ error: 'Outlook isn\u2019t connected yet' });
+    try {
+      const found = await app.locals.checkOutlook();
+      const o = repo.getOutlook(req.account);
+      if (o?.error) return res.status(502).json({ error: o.error });
+      res.json({ ok: true, found });
+    } catch (e) {
+      res.status(502).json({ error: e.message });
+    }
+  });
 
   // Reports across all jobs of the business.
   api.get('/report', (req, res) => {

@@ -35,6 +35,9 @@
   .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
   .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
   .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
   .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
   .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -47,6 +50,7 @@
 <div class="wrap">
   <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
   <div class="address" id="address"></div>
+  <div class="muted" id="outlookBar" style="margin:-8px 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -68,7 +72,9 @@ async function api(path, opts = {}) {
   return body;
 }
 
+let outlookStatus = null;
 async function load() {
+  api('/outlook').then((o) => { outlookStatus = o; renderOutlook(); }).catch(() => {});
   try { data = await api('/inbox'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   clearTimeout(timer);
   if (data.pending.some((p) => p.status === 'processing')) timer = setTimeout(load, 3000);
@@ -77,12 +83,26 @@ async function load() {
 const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}${j.is_stock ? ' (stock order)' : ''}`;
 const fileLink = (i) => (!i.file_path ? '' : `<a class="btn" href="${i.mime_type === 'application/pdf'
   ? `/viewer.html?id=${i.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(i.supplier || 'Invoice')}`
-  : `/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}`}" target="_blank" rel="noopener">View</a>`);
+  : `/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}${/^text\//.test(i.mime_type || '') ? '&view=html' : ''}`}" target="_blank" rel="noopener">View</a>`);
+const openJob = (uuid, num) => (uuid ? `<button class="lnk" data-open-job="${esc(uuid)}" title="Open this job's Job Costs">Open job #${esc(num || '?')} ↗</button>` : '');
+// Where the possible duplicate is, with a button to go and look.
+function dupNote(d, skipJob) {
+  if (!d) return '';
+  const where = d.jobs.length ? `already on ${d.jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ')}` : d.in_stock ? 'already in stock' : 'also here in the Inbox';
+  return `<div class="trace"><span class="dup">⚠ Possible duplicate (${esc(d.reason)}${d.invoice_number ? ', #' + esc(d.invoice_number) : ''}) – ${where}</span>${d.jobs.filter((j) => j.job_uuid !== skipJob).map((j) => openJob(j.job_uuid, j.job_number)).join('')}</div>`;
+}
+const agoText = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+function renderOutlook() {
+  const o = outlookStatus;
+  $('#outlookBar').innerHTML = !o || !o.connected ? ''
+    : `📥 Reading Outlook <b>${esc(o.email || '')}</b> (${esc(o.hours || '')})${o.lastCheck ? ' · checked ' + agoText(o.lastCheck) : ''} <button data-check-now>↻ Check now</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
+}
 
 function render() {
   $('#address').innerHTML = data.inboxAddress
     ? `<span>Send or forward every supplier invoice to</span><code id="addr">${esc(data.inboxAddress)}</code><button data-copy>Copy</button><span class="muted">Tip: put the job number on your orders (e.g. “PO 208126”) and invoices get matched automatically.</span>`
-    : '<span class="muted">Email-in is not set up on the server yet.</span>';
+    : (outlookStatus && outlookStatus.connected ? '' : '<span class="muted">Email-in is not set up on the server yet.</span>');
+  $('#address').style.display = $('#address').innerHTML ? '' : 'none';
   const fresh = data.invoices.filter((i) => i.untouched && !i.kept_as_stock);
   const stock = data.invoices.filter((i) => !(i.untouched && !i.kept_as_stock) && !i.duplicate_of);
   const jobOptions = (sel) => `<option value="">Choose job…</option>` + data.jobs.map((j) => `<option value="${esc(j.job_uuid)}" ${j.job_uuid === sel ? 'selected' : ''}>${esc(jobLabel(j))}</option>`).join('');
@@ -98,12 +118,25 @@ function render() {
     h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total_ex ?? i.total)} ex GST</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
       <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from, i.source === 'outlook' && 'from Outlook'].filter(Boolean).join(' · '))}</div>
       ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}
-      ${i.looks_like_stock ? '<div class="trace"><span class="left">💡 Looks like stock – no job number or site on it, and it reads like a restock order</span></div>' : ''}</div>
+      ${i.looks_like_stock ? '<div class="trace"><span class="left">💡 Looks like stock – no job number or site on it, and it reads like a restock order</span></div>' : ''}
+      ${dupNote(i.possible_duplicate, s && s.job_uuid)}</div>
       <div class="acts">${fileLink(i)}
         ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>` : ''}
         <select id="j-${i.id}" data-assign-select="${i.id}">${jobOptions('').replace('Choose job…', s ? 'Change job…' : 'Choose job…')}</select>
         <button class="${i.looks_like_stock ? 'primary' : ''}" data-stock="${i.id}" title="Not for one job – keep it to take items from later">${i.looks_like_stock ? '✓ ' : ''}📦 Send to stock</button>
-        ${i.duplicate_of ? `<button class="danger" data-del="${i.id}">Delete</button>` : ''}</div></div>`;
+        ${s && !s.is_stock ? openJob(s.job_uuid, s.job_number) : ''}
+        <button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
+  }
+  const recent = data.recent || [];
+  if (recent.length) {
+    h += `<h2>Recently approved <span class="muted" style="font-weight:600;font-size:12px">last 14 days – approved the wrong one? Undo puts it back above</span></h2><div class="recent">`;
+    for (const r of recent) {
+      h += `<div class="item"><div><div class="t">${esc(r.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(r.total_ex ?? r.total)} ex GST</span></div>
+        <div class="sub">${esc([r.invoice_number && '#' + r.invoice_number, fmtDate(r.invoice_date)].filter(Boolean).join(' · '))} → <b>${r.to_stock ? '📦 stock' : 'job #' + esc(r.job_number || '?')}</b> · ${agoText(r.approved_at)}</div>
+        ${dupNote(r.possible_duplicate, r.job_uuid)}</div>
+        <div class="acts">${fileLink(r)}${r.to_stock ? '' : openJob(r.job_uuid, r.job_number)}<button data-undo="${r.id}">↶ Undo</button></div></div>`;
+    }
+    h += '</div>';
   }
   h += `<h2>Stock & leftovers</h2>`;
   if (!stock.length) h += '<div class="empty">Nothing left over. When only part of an invoice is used, the rest shows here.</div>';
@@ -133,7 +166,18 @@ document.addEventListener('click', async (e) => {
       await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: job }) }); toast('Added to the job'); return load();
     }
     if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Sent to stock – take items from it on any job'); return load(); }
-    if (d.del) { await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load(); }
+    if (d.del) {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
+      await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load();
+    }
+    if (d.undo) { const r = await api(`/inbox/${d.undo}/undo`, { method: 'POST' }); toast(r.diaryWarning || 'Back in the Inbox'); return load(); }
+    if (d.openJob) { const r = await api(`/jobs/${encodeURIComponent(d.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); return; }
+    if (d.checkNow !== undefined) {
+      b.disabled = true; b.textContent = 'Checking…';
+      const r = await api('/outlook/check', { method: 'POST' });
+      toast(r.found ? `Found ${r.found} email${r.found === 1 ? '' : 's'} with possible invoices – reading them now` : 'Nothing new in Outlook');
+      return load();
+    }
   } catch (x) { toast(x.message); }
 });
 load();

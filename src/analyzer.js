@@ -7,7 +7,7 @@ const CATEGORIES = ['materials', 'subcontractor', 'labour', 'equipment_hire', 'f
 
 const InvoiceSchema = z.object({
   is_financial_document: z.boolean().describe('False if this is not an invoice, receipt, bill, credit note or similar.'),
-  document_type: z.enum(['invoice', 'tax_invoice', 'receipt', 'credit_note', 'quote', 'statement', 'other']),
+  document_type: z.enum(['invoice', 'tax_invoice', 'receipt', 'credit_note', 'quote', 'statement', 'remittance', 'other']).describe('"remittance" for a remittance advice / payment confirmation (says a payment was made), which is not a bill.'),
   supplier_name: z.string().nullable().describe('The business that issued the document (the seller), not the customer.'),
   supplier_abn: z.string().nullable().describe('Supplier ABN / tax number if shown.'),
   invoice_number: z.string().nullable(),
