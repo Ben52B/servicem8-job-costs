@@ -761,6 +761,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     res.json({ ok: true });
   });
 
+  api.get('/inbox-count', (req, res) => res.json({ count: repo.inboxCount(req.account) }));
+
   // Outlook connection status (shown on the card and the Inbox).
   api.get('/outlook', (req, res) => {
     const o = repo.getOutlook(req.account);

@@ -45,7 +45,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
   <div class="address" id="address"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
@@ -137,6 +137,8 @@ document.addEventListener('click', async (e) => {
   } catch (x) { toast(x.message); }
 });
 load();
+// New invoices (e.g. from Outlook) show up without reloading, unless you're in the middle of choosing something.
+setInterval(() => { if (!document.activeElement || !document.activeElement.matches('select, input')) load(); }, 60000);
 </script>
 </body>
 </html>

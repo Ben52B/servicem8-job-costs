@@ -207,8 +207,8 @@
   <header>
     <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
-    <a class="btn" id="inboxLink" target="_blank" rel="noopener">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
-    <a class="btn" id="reportsLink" target="_blank" rel="noopener">📊 Reports</a>
+    <a class="btn" id="inboxLink">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
+    <a class="btn" id="reportsLink">📊 Reports</a>
   </header>
   <section id="stockBanner"></section>
   <section id="suggest"></section>
@@ -282,8 +282,7 @@ function render() {
   const j = state.data.job || {};
   const parts = state.data.splitParts || [];
   $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number + (parts.length ? ` (+ ${parts.map((p) => '#' + p).join(', ')})` : '') : '', j.job_title].filter(Boolean).join(' · ');
-  const badge = $('#inboxBadge');
-  badge.hidden = !state.data.inboxCount; badge.textContent = state.data.inboxCount || '';
+  showInboxCount(state.data.inboxCount);
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
   const isStock = !!state.data.stock;
   $('#stockToggle').checked = isStock;
@@ -391,6 +390,20 @@ function renderList() {
   $('#emailBox').innerHTML = (d.inboxAddress
     ? `Email invoices for any job to:<div class="row"><code id="inbox">${esc(d.inboxAddress)}</code><button class="small" data-copy>Copy</button></div>`
     : (o && o.connected ? '' : 'Email-in is not set up on the server yet.')) + outlookHtml;
+}
+// The Inbox badge keeps itself up to date, and says when new invoices arrive.
+let lastInboxCount = null;
+function showInboxCount(n) {
+  const badge = $('#inboxBadge');
+  badge.hidden = !n; badge.textContent = n || '';
+  if (lastInboxCount != null && n > lastInboxCount) {
+    toast(`📨 ${n - lastInboxCount} new invoice${n - lastInboxCount === 1 ? '' : 's'} in the Inbox`);
+    $('#inboxLink').animate([{ transform: 'scale(1)' }, { transform: 'scale(1.12)' }, { transform: 'scale(1)' }], { duration: 600, iterations: 3 });
+  }
+  lastInboxCount = n;
+}
+async function checkInbox() {
+  try { const r = await api('/inbox-count'); showInboxCount(r.count); } catch {}
 }
 async function loadOutlook() {
   try { state.outlook = await api('/outlook'); if (state.data) renderList(); } catch {}
@@ -889,6 +902,7 @@ if (BOOT.embedded && window.SMClient) {
 load();
 loadOutlook();
 setInterval(loadOutlook, 120000);
+setInterval(checkInbox, 60000);
 </script>
 </body>
 </html>
