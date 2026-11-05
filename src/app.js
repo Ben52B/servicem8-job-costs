@@ -361,7 +361,12 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     // and asks ServiceM8 to make the window big enough.
     const url = `${config.publicUrl}/card?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
     reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
-<script>try { SMClient.init().resizeWindow(1320, 860); } catch (e) {}</script>
+<script>try {
+  // As big as fits on this screen (laptops with display scaling are smaller than 1320 x 860).
+  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 60));
+  var h = Math.max(500, Math.min(860, (screen.availHeight || 860) - 140));
+  SMClient.init().resizeWindow(w, h);
+} catch (e) {}</script>
 <iframe src="${url}" title="Job Costs" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
   });
 
