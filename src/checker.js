@@ -1,0 +1,108 @@
+/**
+ * Statement check: Claude reads a supplier statement, then reviews every invoice on it
+ * against the supplier's price list, the business's own rules and the ServiceM8 job.
+ */
+const path = require('path');
+const Anthropic = require('@anthropic-ai/sdk');
+const { z } = require('zod');
+const { betaZodOutputFormat } = require('@anthropic-ai/sdk/helpers/beta/zod');
+const { fileToBlock } = require('./analyzer');
+
+const StatementSchema = z.object({
+  supplier_name: z.string().nullable().describe('The business that sent the statement.'),
+  account_number: z.string().nullable(),
+  statement_date: z.string().nullable().describe('YYYY-MM-DD'),
+  total_due: z.number().nullable(),
+  lines: z.array(z.object({
+    date: z.string().nullable().describe('YYYY-MM-DD. Australian statements use day/month/year.'),
+    reference: z.string().describe('The invoice / credit number exactly as printed, e.g. "S667642".'),
+    type: z.enum(['invoice', 'credit', 'payment', 'other']),
+    amount: z.number().describe('Amount including GST, as printed. Credits and payments negative.'),
+  })).describe('Every transaction line, once (statements often repeat the lines on a tear-off remittance slip: list them only once).'),
+});
+
+const ReviewSchema = z.object({
+  summary: z.string().describe('The bottom line in 1–3 sentences: is the statement OK to pay, and what needs doing first.'),
+  price_list_notes: z.string().nullable().describe('Anything about the price list itself, e.g. it looks out of date (most prices x% higher), or items not on it.'),
+  invoices: z.array(z.object({
+    reference: z.string().describe('The invoice number exactly as on the statement.'),
+    verdict: z.enum(['ok', 'check', 'problem', 'missing']).describe('ok = matches; check = worth a look; problem = wrong / needs action before paying; missing = no invoice to check.'),
+    headline: z.string().describe('One short line, e.g. "AA roller 2100×4840 Monument – $1,226 as quoted".'),
+    price: z.string().describe('Price check against the price list and the rules, with the figures. Say "no price list" if none fits.'),
+    job: z.string().describe('Check against the ServiceM8 job: right job, size, colour, type, quoted price, job status.'),
+    rules_applied: z.array(z.string()).describe('The rules (quoted briefly) that affected this invoice. Empty if none.'),
+    difference_ex_gst: z.number().nullable().describe('Invoiced minus expected, ex GST (positive = charged more than expected). null if unknown.'),
+  })),
+  actions: z.array(z.string()).describe('What to do before paying, most important first. Empty if nothing.'),
+});
+
+const REVIEW_PROMPT = `You check a supplier's monthly statement for a garage door installation business before it's paid.
+For every invoice on the statement you get the invoice itself (the PDF where available, plus the lines already read from it),
+the ServiceM8 job(s) it was assigned to (client, address, status and the job notes, which usually hold a "NEW DOOR CALCULATIONS"
+section with height H, width W, door type/colour and the door price quoted), the supplier's price list(s), and the business's rules.
+
+How to check:
+- RULES COME FIRST. The business's rules are agreements with suppliers (e.g. "job 207xxx: supplier bills 1 door only",
+  "job 207xxx: 20% off the price list"). Apply every rule that fits, and say which rules you used for each invoice.
+- Price: find the matching price in the price list. Door prices are grids by size band (height rows × width columns, in mm),
+  series (A / AA / B rollers; Essential / Native / Platinum sectionals) and finish/colour range; parts and extras have their own
+  tables and discounts. Read invoice sizes as HEIGHT x WIDTH (e.g. 2100X4840 = 2100 high, 4840 wide). Compare ex GST.
+- If most items are higher than the list by about the same percentage, the price list is probably older than the invoices
+  (a yearly price rise): say so once in price_list_notes, judge each item against the list plus that rise, and don't flag
+  each one as a problem.
+- Job: check the invoice's order/reference number is the job, and that size, colour and type match the job notes and the
+  quoted door price. Flag jobs that are Unsuccessful or point elsewhere (e.g. "invoiced through job 206594"),
+  missing measurements, a different size, or costs not in the quote.
+- Invoices marked as not found in Job Costs: verdict "missing".
+- Be specific and short. Always write job numbers as "job 207651" and use invoice numbers exactly as printed (e.g. S667642),
+  so they can be turned into links. Amounts in AUD; say ex or inc GST.`;
+
+function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', filesDir }) {
+  const client = new Anthropic(apiKey ? { apiKey } : {});
+  const common = { model, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
+
+  async function readStatement({ filePath, fileName, mimeType }) {
+    const response = await client.beta.messages.parse({
+      ...common,
+      max_tokens: 16000,
+      output_config: { effort: 'medium', format: betaZodOutputFormat(StatementSchema) },
+      messages: [{ role: 'user', content: [fileToBlock(filePath, fileName, mimeType), { type: 'text', text: 'Read this supplier statement.' }] }],
+    });
+    if (response.stop_reason === 'refusal') throw new Error('The statement could not be read (declined by the model).');
+    if (!response.parsed_output) throw new Error('Could not read the statement.');
+    return response.parsed_output;
+  }
+
+  /**
+   * data: { statement, lines: [{ reference, date, amount, invoice: {...} | null, jobs: [...] }], rules: [text], instructions }
+   * files: { priceLists: [{ supplier, name, file_path, mime_type }], invoices: [{ reference, file_path, file_name, mime_type }] }
+   */
+  async function review(data, { priceLists = [], invoiceFiles = [] } = {}) {
+    const content = [];
+    for (const p of priceLists) {
+      content.push({ type: 'text', text: `PRICE LIST – ${p.supplier}${p.name ? ` (${p.name})` : ''}:` });
+      content.push(fileToBlock(path.join(filesDir, p.file_path), p.name || 'price-list.pdf', p.mime_type));
+    }
+    for (const f of invoiceFiles) {
+      content.push({ type: 'text', text: `INVOICE ${f.reference} (the supplier's document):` });
+      content.push(fileToBlock(path.join(filesDir, f.file_path), f.file_name, f.mime_type));
+    }
+    content.push({ type: 'text', text: `THE CHECK (JSON):\n${JSON.stringify(data, null, 1)}\n\nReview every invoice line on the statement (one entry per reference).` });
+    const stream = client.beta.messages.stream({
+      ...common,
+      max_tokens: 64000,
+      system: REVIEW_PROMPT,
+      output_config: { effort, format: betaZodOutputFormat(ReviewSchema) },
+      messages: [{ role: 'user', content }],
+    });
+    const message = await stream.finalMessage();
+    if (message.stop_reason === 'refusal') throw new Error('The check could not be done (declined by the model).');
+    if (message.stop_reason === 'max_tokens') throw new Error('The statement is too long to check in one go. Narrow the dates and try again.');
+    if (!message.parsed_output) throw new Error('The check came back incomplete. Try again.');
+    return message.parsed_output;
+  }
+
+  return { readStatement, review };
+}
+
+module.exports = { createChecker, StatementSchema, ReviewSchema };

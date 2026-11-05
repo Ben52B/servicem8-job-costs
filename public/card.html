@@ -208,6 +208,7 @@
     <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
     <a class="btn" id="inboxLink">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
+    <a class="btn" id="checkLink">🔎 Statement check</a>
     <a class="btn" id="billsLink">🧾 Bills</a>
     <a class="btn" id="reportsLink">📊 Reports</a>
   </header>
@@ -272,6 +273,7 @@ async function load() {
   try {
     state.data = await api('/job');
     const ids = state.data.invoices.map((i) => i.id);
+    if (BOOT.select && ids.includes(BOOT.select)) { state.selected = BOOT.select; BOOT.select = null; } // opened on a given invoice
     if (!ids.includes(state.selected)) state.selected = ids[0] ?? null;
     render();
   } catch (e) { toast(e.message); }
@@ -907,6 +909,14 @@ wireDrop($('#aside'), uploadFiles);
 
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
+$('#checkLink').href = '/checks?t=' + encodeURIComponent(BOOT.token);
+// Opened from a statement check: a way back to it
+if (BOOT.back && /^check:\d+$/.test(BOOT.back)) {
+  const a = document.createElement('a');
+  a.className = 'btn'; a.textContent = '← Back to statement check';
+  a.href = `/checks?t=${encodeURIComponent(BOOT.token)}&id=${BOOT.back.split(':')[1]}`;
+  $('#checkLink').before(a);
+}
 $('#inboxLink').href = '/inbox?t=' + encodeURIComponent(BOOT.token);
 if (BOOT.embedded && window.SMClient) {
   try {

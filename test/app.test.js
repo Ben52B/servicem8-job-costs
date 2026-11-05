@@ -966,8 +966,82 @@ test('Bills: find invoices across jobs and mark several paid at once', async () 
   assert.equal((await fetch(`${base}/bills?t=${encodeURIComponent(t)}`)).status, 200);
 });
 
+test('statement check: price lists and rules are kept per business; each statement line is matched to its invoice and job, then reviewed', async () => {
+  const seen = {};
+  const fakeChecker = {
+    async readStatement() {
+      return { supplier_name: 'Gliderol International Pty Ltd', statement_date: '2026-09-30', total_due: 3000, account_number: '122640',
+        lines: [
+          { date: '2026-08-20', reference: 'S600000', type: 'invoice', amount: 21.56 },
+          { date: '2026-09-01', reference: 'S700001', type: 'invoice', amount: 1348.6 },
+          { date: '2026-09-22', reference: 'S799999', type: 'invoice', amount: 589.6 },
+          { date: '2026-09-01', reference: 'S700001', type: 'invoice', amount: 1348.6 }, // remittance slip repeat
+        ] };
+    },
+    async review(data, files) {
+      seen.data = data; seen.files = files;
+      return { summary: 'OK to pay except S799999. Check job 209500.', price_list_notes: null, actions: ['Ask Gliderol for S799999'],
+        invoices: [
+          { reference: 'S700001', verdict: 'ok', headline: 'AA roller as quoted', price: 'List $1,191 + 3%', job: 'Matches job 209500', rules_applied: ['1 door only'], difference_ex_gst: 0 },
+          { reference: 'S799999', verdict: 'missing', headline: 'Not in Job Costs', price: '', job: '', rules_applied: [], difference_ex_gst: null },
+        ] };
+    },
+  };
+  JOBS['chk-job'] = { jobNumber: '209500', jobTitle: '1 Check St', clientName: 'Jo Client' };
+  const app5 = createApp({ config, repo, processor, fetchJobImpl: async (u) => ({ ...JOBS[u], description: 'H 2100 W 4840 Door - $1226', status: 'Work Order' }),
+    fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, checker: fakeChecker });
+  const srv = await new Promise((r) => { const x = app5.listen(0, () => r(x)); });
+  const b5 = `http://127.0.0.1:${srv.address().port}`;
+  const call = (t, p, o = {}) => fetch(`${b5}/api${p}`, { ...o, headers: { Authorization: `Bearer ${t}`, ...(o.json ? { 'Content-Type': 'application/json' } : {}) }, body: o.json ? JSON.stringify(o.json) : o.body });
+  try {
+    const t = await openCard('chk-job', 'acc-chk');
+    repo.saveTokens('acc-chk', { accessToken: 'tok-chk', refreshToken: 'r', expiresIn: 3600 });
+    // the invoice, uploaded on the job
+    await upload(t, 'Tax_Invoice_S700001_ref209500.pdf');
+    // a price list and a rule
+    const fd = new FormData(); fd.append('supplier', 'Gliderol'); fd.append('file', new Blob(['%PDF-1.4 list'], { type: 'application/pdf' }), 'Gliderol 2026.pdf');
+    assert.equal((await call(t, '/price-lists', { method: 'POST', body: fd })).status, 201);
+    assert.equal((await call(t, '/rules', { method: 'POST', json: { text: 'Job 209500: Gliderol bills 1 door only' } })).status, 201);
+    const off = await call(t, '/rules', { method: 'POST', json: { text: 'old rule' } }).then((x) => x.json());
+    await call(t, `/rules/${off.id}`, { method: 'PATCH', json: { active: false } });
+    // another business sees none of it
+    const other = await openCard('job-a', 'acc-1');
+    const theirs = await call(other, '/checks').then((x) => x.json());
+    assert.equal(theirs.priceLists.length, 0);
+    assert.equal(theirs.rules.length, 0);
+
+    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st'], { type: 'application/pdf' }), 'Statement.pdf'); sf.append('date_from', '2026-09-01');
+    const { id } = await call(t, '/checks', { method: 'POST', body: sf }).then((x) => x.json());
+    let c;
+    for (let i = 0; i < 50; i++) { c = await call(t, `/checks/${id}`).then((x) => x.json()); if (c.status === 'done' || c.status === 'error') break; await new Promise((r) => setTimeout(r, 20)); }
+    assert.equal(c.status, 'done', c.error);
+    assert.deepEqual(c.matched.map((m) => m.reference), ['S700001', 'S799999'], 'August left out, repeat counted once');
+    assert.equal(c.matched[0].jobs[0].job_number, '209500');
+    assert.equal(c.matched[1].invoice, null);
+    assert.deepEqual(seen.data.rules, ['Job 209500: Gliderol bills 1 door only'], 'only rules that are on');
+    assert.equal(seen.data.lines[0].jobs[0].notes, 'H 2100 W 4840 Door - $1226');
+    assert.equal(seen.files.priceLists.length, 1);
+    assert.equal(seen.files.invoiceFiles[0].reference, 'S700001');
+    assert.equal(c.jobs['209500'], 'chk-job', 'job numbers in the report can be links');
+    assert.equal(c.result.invoices[0].verdict, 'ok');
+    // pay the OK ones
+    const paid = await call(t, `/checks/${id}/mark-paid`, { method: 'POST', json: { references: ['S700001'] } }).then((x) => x.json());
+    assert.equal(paid.updated, 1);
+    c = await call(t, `/checks/${id}`).then((x) => x.json());
+    assert.equal(c.matched[0].invoice.paid, true);
+    // the job card opens on that invoice, with a way back to the check
+    const page = await fetch(`${b5}/card?t=${encodeURIComponent(t)}&inv=${c.matched[0].invoice.id}&back=check:${id}`).then((x) => x.text());
+    const boot = JSON.parse(page.match(/const BOOT = (\{.*?\});\n/)[1]);
+    assert.equal(boot.select, c.matched[0].invoice.id);
+    assert.equal(boot.back, `check:${id}`);
+    assert.equal((await fetch(`${b5}/checks?t=${encodeURIComponent(t)}`)).status, 200);
+  } finally {
+    srv.close();
+  }
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

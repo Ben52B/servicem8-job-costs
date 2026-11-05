@@ -13,7 +13,9 @@ if (!config.sessionSecret) {
 const repo = openDb(config.dataDir);
 const analyzer = createAnalyzer({ model: config.claudeModel, effort: config.claudeEffort });
 const processor = createProcessor({ repo, analyzer });
-const app = createApp({ config, repo, processor });
+const { createChecker } = require('./checker');
+const checker = createChecker({ model: config.claudeModel, effort: 'high', filesDir: repo.filesDir });
+const app = createApp({ config, repo, processor, checker });
 
 processor.resumeStuck();
 // Copy invoices that are wholly on one job to its ServiceM8 job diary.

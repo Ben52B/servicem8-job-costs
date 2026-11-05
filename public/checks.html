@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statement check</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+</style>
+<style>
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 14px; }
+  .panel h2 { margin: 0 0 4px; }
+  .panel .hint { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  input[type=text], input[type=date], textarea { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 7px 10px; background: #fff; color: var(--ink); }
+  textarea { width: 100%; min-height: 64px; resize: vertical; }
+  .rule { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line2); }
+  .rule.off .txt { color: var(--muted); text-decoration: line-through; }
+  .rule .txt { white-space: pre-wrap; cursor: text; }
+  .lnk { background: none; border: 0; padding: 0 1px; color: var(--brand-dark); text-decoration: underline; cursor: pointer; font: inherit; font-weight: 700; box-shadow: none; }
+  table.t { width: 100%; border-collapse: collapse; }
+  table.t th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 700; padding: 8px; border-bottom: 1px solid var(--line); }
+  table.t td { padding: 8px; border-bottom: 1px solid var(--line2); vertical-align: top; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .v-ok { background: var(--brand-soft); color: var(--brand-dark); } .v-check { background: var(--warn-soft); color: #92400e; }
+  .v-problem { background: var(--bad-soft); color: var(--bad); } .v-missing { background: #f1f5f9; color: #475569; }
+  .v-done { background: var(--brand-soft); color: var(--brand-dark); } .v-error { background: var(--bad-soft); color: var(--bad); } .v-reading, .v-checking { background: var(--warn-soft); color: #92400e; }
+  .bottom { font-size: 15px; line-height: 1.5; background: #f0fdf7; border: 1px solid #c8eedd; border-radius: 14px; padding: 12px 14px; }
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 8px 14px; min-width: 110px; }
+  .kpi b { display: block; font-size: 20px; }
+  tr.detail td { background: #fbfdfc; font-size: 13px; }
+  tr.detail .lbl { color: var(--muted); font-weight: 700; font-size: 11.5px; text-transform: uppercase; letter-spacing: .3px; }
+  tr.main { cursor: pointer; }
+  ol.actions { margin: 6px 0 0; padding-left: 20px; } ol.actions li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>🔎 Statement check</h1><span class="muted">Check a supplier statement against your jobs, price lists and rules</span></header>
+  <div id="content"><div class="empty"><span class="spin"></span></div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (n == null || n === '' ? '' : (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' }));
+const fmtDate = (d) => d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const fmtWhen = (t) => t ? new Date(t).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 3000); }
+async function api(path, opts = {}) {
+  const isForm = opts.body instanceof FormData;
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body && !isForm ? { 'Content-Type': 'application/json' } : {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+const T = encodeURIComponent(BOOT.token);
+const VERDICT = { ok: '✓ OK', check: 'Check', problem: '⚠ Problem', missing: 'Not in Job Costs' };
+const STATUS = { reading: 'Reading the statement…', checking: 'Checking…', done: 'Done', error: 'Failed' };
+let home = null;      // rules, price lists, past checks
+let check = null;     // the open check
+let timer = null;
+let editingRule = null;
+const open = new Set();
+
+// ---------- every job number and invoice number in the report becomes a link ----------
+function linkify(text) {
+  const refs = (check.matched || []).map((m) => m.reference).filter(Boolean).sort((a, b) => b.length - a.length);
+  const refAlt = refs.map((r) => r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(`${refAlt ? `(${refAlt})(?![0-9A-Za-z])|` : ''}((?:job|jobs|#)\\s*#?\\s*)?\\b(2\\d{5})(?:-\\d)?\\b`, 'gi');
+  return esc(text).replace(re, (m, ref, pre, num) => {
+    if (ref) return `<button class="lnk" data-ref="${esc(ref)}">${esc(m)}</button>`;
+    if (num && check.jobs[num]) return `${pre || ''}<button class="lnk" data-job="${esc(num)}">${esc(m.slice((pre || '').length))}</button>`;
+    return m;
+  });
+}
+
+async function openJob(num, invoiceId) {
+  const uuid = check.jobs[num];
+  if (!uuid) return toast(`Job ${num} isn't in Job Costs yet`);
+  const r = await api(`/jobs/${encodeURIComponent(uuid)}/open`);
+  location.href = `/card?t=${encodeURIComponent(r.token)}${invoiceId ? '&inv=' + invoiceId : ''}&back=check:${check.id}`;
+}
+async function openRef(ref) {
+  const m = (check.matched || []).find((x) => x.reference.toLowerCase() === String(ref).toLowerCase());
+  if (!m || !m.invoice) return toast(`${ref} isn't in Job Costs – upload it in the Inbox`);
+  if (m.jobs.length) return openJob(m.jobs[0].job_number, m.invoice.id);
+  window.open(`/viewer.html?id=${m.invoice.id}&t=${T}&name=${encodeURIComponent(ref)}`, '_blank');
+}
+
+// ---------- home: new check, rules, price lists, past checks ----------
+function renderHome() {
+  const h = home;
+  const rules = h.rules.map((r) => `<div class="rule ${r.active ? '' : 'off'}">
+      <input type="checkbox" data-rule-on="${r.id}" ${r.active ? 'checked' : ''} title="Use this rule">
+      ${editingRule === r.id ? `<div><textarea id="ruleEdit">${esc(r.text)}</textarea><div class="row"><button class="primary" data-rule-save="${r.id}">Save</button><button data-rule-cancel>Cancel</button></div></div>`
+        : `<div class="txt" data-rule-edit="${r.id}" title="Click to change">${esc(r.text)}</div>`}
+      <button class="danger" data-rule-del="${r.id}" title="Delete this rule">🗑</button></div>`).join('');
+  const lists = h.priceLists.map((p) => `<tr><td><b>${esc(p.supplier)}</b></td><td>${esc(p.name || '')}</td><td>${esc(fmtDate(p.created_at))}</td>
+      <td><a class="lnk" href="${p.mime_type === 'application/pdf' ? `/viewer.html?pl=${p.id}&t=${T}&name=${encodeURIComponent(p.name || 'Price list')}` : `/api/price-lists/${p.id}/file?t=${T}`}" target="_blank" rel="noopener">View</a></td>
+      <td><button class="danger" data-pl-del="${p.id}">Delete</button></td></tr>`).join('');
+  const checks = h.checks.map((c) => `<tr class="main" data-open-check="${c.id}"><td>${esc(fmtWhen(c.created_at))}</td><td><b>${esc(c.supplier || c.file_name || 'Statement')}</b></td>
+      <td>${esc(fmtDate(c.statement_date))}${c.date_from || c.date_to ? `<div class="muted" style="font-size:11.5px">only ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</div>` : ''}</td>
+      <td class="num">${money(c.total_due)}</td><td><span class="chip v-${c.status}">${STATUS[c.status] || c.status}</span></td><td><button class="lnk">Open</button></td></tr>`).join('');
+  $('#content').innerHTML = `${h.available ? '' : '<div class="note bad">Statement checks need ANTHROPIC_API_KEY on the server.</div>'}
+  <div class="grid2"><div>
+    <div class="panel"><h2>New check</h2><div class="hint">Upload the supplier's statement. Job Costs finds each invoice on it, the job it's on in ServiceM8, checks the prices against the price list and your rules, and writes a report. Takes 1–3 minutes.</div>
+      <form id="newCheck">
+        <div class="row"><input type="file" name="statement" accept="application/pdf,image/*" required></div>
+        <div class="row"><span class="muted">Only invoices dated</span><input type="date" name="date_from"> <span class="muted">to</span> <input type="date" name="date_to"> <span class="muted" style="font-size:12px">(optional, e.g. only September)</span></div>
+        <div class="row" style="display:block"><textarea name="instructions" placeholder="Notes for this check only (optional), e.g. &quot;S668018 is the Danmar door for job 206594&quot;"></textarea></div>
+        <div class="row"><button class="primary" type="submit">🔎 Run check</button></div>
+      </form></div>
+    <div class="panel"><h2>Past checks</h2>${h.checks.length ? `<table class="t"><thead><tr><th>Run</th><th>Supplier</th><th>Statement</th><th class="num">Total due</th><th>Status</th><th></th></tr></thead><tbody>${checks}</tbody></table>` : '<div class="hint">No checks yet.</div>'}</div>
+  </div><div>
+    <div class="panel"><h2>Rules</h2><div class="hint">Agreements and exceptions to follow on every check. Untick a rule to pause it.</div>
+      ${rules || '<div class="hint">No rules yet.</div>'}
+      <div class="row" style="display:block;border-top:1px solid var(--line2);padding-top:10px"><textarea id="newRule" placeholder="e.g. Job 207932: Gliderol said they'll bill us for 1 door only
+e.g. Job 207659: Gliderol gives 20% off the price list"></textarea></div>
+      <div class="row"><button class="primary" data-rule-add>＋ Add rule</button></div></div>
+    <div class="panel"><h2>Price lists</h2><div class="hint">Your suppliers' price lists. They stay private to your business. Upload the newest one when a supplier changes prices.</div>
+      ${lists ? `<table class="t"><thead><tr><th>Supplier</th><th>File</th><th>Uploaded</th><th></th><th></th></tr></thead><tbody>${lists}</tbody></table>` : ''}
+      <form id="newList" class="row"><input type="text" name="supplier" placeholder="Supplier, e.g. Gliderol" required style="width:180px"><input type="file" name="file" accept="application/pdf,image/*" required><button type="submit">⬆ Upload</button></form></div>
+  </div></div>`;
+}
+
+// ---------- a check's report ----------
+function renderCheck() {
+  const c = check;
+  const back = `<div class="row" style="margin:0 0 10px"><button data-home>← All checks</button>
+    <a class="btn" href="/api/checks/${c.id}/file?t=${T}" target="_blank" rel="noopener">View statement</a>
+    ${['reading', 'checking'].includes(c.status) ? '' : `<button data-rerun title="Uses your current rules and price lists">↻ Run again</button>`}
+    <span style="flex:1"></span><button class="danger" data-del-check>Delete check</button></div>`;
+  const title = `<h2 style="margin:0 0 6px">${esc(c.supplier || c.file_name || 'Statement')}${c.statement_date ? ' · statement ' + esc(fmtDate(c.statement_date)) : ''}
+    ${c.date_from || c.date_to ? `<span class="muted" style="font-weight:600;font-size:13px"> · only invoices ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</span>` : ''}</h2>`;
+  if (c.status === 'reading' || c.status === 'checking') {
+    $('#content').innerHTML = back + title + `<div class="panel"><span class="spin"></span> <b>${STATUS[c.status]}</b> <span class="muted">${c.status === 'checking' ? 'Comparing every invoice with its job, the price list and your rules. This takes 1–3 minutes.' : ''}</span></div>`;
+    return;
+  }
+  if (c.status === 'error') {
+    $('#content').innerHTML = back + title + `<div class="note bad">${esc(c.error || 'The check failed.')}</div>`;
+    return;
+  }
+  const r = c.result || { invoices: [], actions: [] };
+  const byRef = new Map(r.invoices.map((x) => [String(x.reference).toLowerCase(), x]));
+  const rows = (c.matched || []).map((m) => ({ m, v: byRef.get(String(m.reference).toLowerCase()) || { verdict: m.invoice ? 'check' : 'missing', headline: '', price: '', job: '', rules_applied: [] } }));
+  const count = (v) => rows.filter((x) => x.v.verdict === v).length;
+  const total = rows.reduce((s, x) => s + (Number(x.m.amount) || 0), 0);
+  const okUnpaid = rows.filter((x) => x.v.verdict === 'ok' && x.m.invoice && !x.m.invoice.paid);
+  const allUnpaid = rows.filter((x) => x.m.invoice && !x.m.invoice.paid);
+  const table = rows.map(({ m, v }) => {
+    const isOpen = open.has(m.reference);
+    return `<tr class="main" data-toggle="${esc(m.reference)}"><td><button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button>${m.invoice && m.invoice.paid ? ' <span class="chip v-ok">Paid</span>' : ''}</td>
+      <td>${esc(fmtDate(m.date))}</td><td class="num">${money(m.amount)}</td>
+      <td>${m.jobs.length ? m.jobs.map((j) => `<button class="lnk" data-job="${esc(j.job_number)}" data-inv="${m.invoice ? m.invoice.id : ''}">#${esc(j.job_number)}</button>`).join(' ') : `<span class="muted">${m.invoice ? 'not on a job' : '–'}</span>`}</td>
+      <td><span class="chip v-${v.verdict}">${VERDICT[v.verdict] || v.verdict}</span></td>
+      <td>${linkify(v.headline || '')}${v.difference_ex_gst ? ` <span class="muted">(${v.difference_ex_gst > 0 ? '+' : ''}${money(v.difference_ex_gst)} ex GST)</span>` : ''} <span class="muted">${isOpen ? '▴' : '▾'}</span></td></tr>
+      ${isOpen ? `<tr class="detail"><td colspan="6"><div class="lbl">Price</div><div>${linkify(v.price || '–')}</div>
+        <div class="lbl" style="margin-top:6px">Job</div><div>${linkify(v.job || '–')}</div>
+        ${v.rules_applied && v.rules_applied.length ? `<div class="lbl" style="margin-top:6px">Rules used</div><div>${v.rules_applied.map((x) => '• ' + linkify(x)).join('<br>')}</div>` : ''}</td></tr>` : ''}`;
+  }).join('');
+  $('#content').innerHTML = back + title + `
+    <div class="bottom">${linkify(r.summary || '')}</div>
+    <div class="kpis"><div class="kpi"><span class="muted">Invoices</span><b>${rows.length}</b></div><div class="kpi"><span class="muted">Total inc GST</span><b>${money(total)}</b></div>
+      <div class="kpi"><span class="muted">✓ OK</span><b>${count('ok')}</b></div><div class="kpi"><span class="muted">Check</span><b>${count('check')}</b></div>
+      <div class="kpi"><span class="muted">⚠ Problem</span><b>${count('problem')}</b></div><div class="kpi"><span class="muted">Not in Job Costs</span><b>${count('missing')}</b></div></div>
+    ${r.actions && r.actions.length ? `<div class="panel"><h2>Before you pay</h2><ol class="actions">${r.actions.map((a) => `<li>${linkify(a)}</li>`).join('')}</ol></div>` : ''}
+    ${r.price_list_notes ? `<div class="panel"><h2>Price list</h2><div>${linkify(r.price_list_notes)}</div></div>` : ''}
+    <div class="panel"><h2>Each invoice <span class="muted" style="font-weight:600;font-size:12px">click a row for the details · invoice and job numbers open the job</span></h2>
+      <table class="t"><thead><tr><th>Invoice</th><th>Date</th><th class="num">Inc GST</th><th>Job</th><th>Result</th><th>What we found</th></tr></thead><tbody>${table}</tbody></table>
+      <div class="row" style="margin-top:12px">${okUnpaid.length ? `<button class="primary" data-pay="ok">✓ Mark the ${okUnpaid.length} OK invoice${okUnpaid.length === 1 ? '' : 's'} as paid</button>` : ''}
+        ${allUnpaid.length ? `<button data-pay="all">Mark all ${allUnpaid.length} as paid</button>` : '<span class="muted">All invoices found in Job Costs are paid.</span>'}</div></div>`;
+}
+
+async function loadHome() {
+  clearTimeout(timer);
+  check = null;
+  history.replaceState(null, '', `/checks?t=${T}`);
+  try { home = await api('/checks'); renderHome(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+async function loadCheck(id) {
+  clearTimeout(timer);
+  try { check = await api('/checks/' + id); } catch (e) { toast(e.message); return loadHome(); }
+  history.replaceState(null, '', `/checks?t=${T}&id=${id}`);
+  renderCheck();
+  if (['reading', 'checking'].includes(check.status)) timer = setTimeout(() => loadCheck(id), 4000);
+}
+
+document.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const b = f.querySelector('button[type=submit]');
+  b.disabled = true;
+  try {
+    if (f.id === 'newCheck') { const r = await api('/checks', { method: 'POST', body: new FormData(f) }); return loadCheck(r.id); }
+    if (f.id === 'newList') { await api('/price-lists', { method: 'POST', body: new FormData(f) }); toast('Price list saved'); return loadHome(); }
+  } catch (x) { toast(x.message); b.disabled = false; }
+});
+document.addEventListener('change', async (e) => {
+  if (e.target.dataset.ruleOn) { try { await api('/rules/' + e.target.dataset.ruleOn, { method: 'PATCH', body: JSON.stringify({ active: e.target.checked }) }); } catch (x) { toast(x.message); } return loadHome(); }
+});
+document.addEventListener('click', async (e) => {
+  const t = e.target.closest('button, [data-rule-edit], tr[data-open-check], tr[data-toggle]');
+  if (!t) return;
+  const d = t.dataset;
+  try {
+    if (d.ref) { e.stopPropagation(); return openRef(d.ref); }
+    if (d.job) { e.stopPropagation(); return openJob(d.job, Number(d.inv) || null); }
+    if (d.toggle) { open.has(d.toggle) ? open.delete(d.toggle) : open.add(d.toggle); return renderCheck(); }
+    if (d.openCheck) return loadCheck(d.openCheck);
+    if (d.home !== undefined) return loadHome();
+    if (d.ruleAdd !== undefined) {
+      const text = $('#newRule').value.trim();
+      if (!text) { $('#newRule').focus(); return toast('Write the rule first'); }
+      await api('/rules', { method: 'POST', body: JSON.stringify({ text }) }); toast('Rule added – used from the next check'); return loadHome();
+    }
+    if (d.ruleEdit) { editingRule = Number(d.ruleEdit); renderHome(); return $('#ruleEdit').focus(); }
+    if (d.ruleCancel !== undefined) { editingRule = null; return renderHome(); }
+    if (d.ruleSave) { await api('/rules/' + d.ruleSave, { method: 'PATCH', body: JSON.stringify({ text: $('#ruleEdit').value }) }); editingRule = null; return loadHome(); }
+    if (d.ruleDel) { if (!confirm('Delete this rule?')) return; await api('/rules/' + d.ruleDel, { method: 'DELETE' }); return loadHome(); }
+    if (d.plDel) { if (!confirm('Delete this price list?')) return; await api('/price-lists/' + d.plDel, { method: 'DELETE' }); return loadHome(); }
+    if (d.rerun !== undefined) { await api(`/checks/${check.id}/rerun`, { method: 'POST' }); toast('Running again with your current rules and price lists'); return loadCheck(check.id); }
+    if (d.delCheck !== undefined) { if (!confirm('Delete this check?')) return; await api(`/checks/${check.id}`, { method: 'DELETE' }); return loadHome(); }
+    if (d.pay) {
+      const rows = (check.matched || []).filter((m) => m.invoice && !m.invoice.paid);
+      const okRefs = new Set((check.result?.invoices || []).filter((x) => x.verdict === 'ok').map((x) => String(x.reference).toLowerCase()));
+      const refs = rows.filter((m) => d.pay === 'all' || okRefs.has(String(m.reference).toLowerCase())).map((m) => m.reference);
+      if (!confirm(`Mark ${refs.length} invoice${refs.length === 1 ? '' : 's'} as paid?`)) return;
+      const r = await api(`/checks/${check.id}/mark-paid`, { method: 'POST', body: JSON.stringify({ references: refs }) });
+      toast(`${r.updated} marked as paid`);
+      for (const m of check.matched) if (m.invoice && refs.includes(m.reference)) m.invoice.paid = true;
+      return renderCheck();
+    }
+  } catch (x) { toast(x.message); }
+});
+
+const startId = new URLSearchParams(location.search).get('id');
+if (startId) loadCheck(startId); else loadHome();
+</script>
+</body>
+</html>

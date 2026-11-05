@@ -24,7 +24,9 @@
 const q = new URLSearchParams(location.search);
 const id = Number(q.get('id'));
 const diary = q.get('diary'); // a file in the ServiceM8 job diary (not added yet)
+const pl = q.get('pl'); // a supplier price list
 const url = diary ? `/api/diary/${encodeURIComponent(diary)}/file?t=${encodeURIComponent(q.get('t') || '')}`
+  : pl ? `/api/price-lists/${encodeURIComponent(pl)}/file?t=${encodeURIComponent(q.get('t') || '')}`
   : `/api/invoices/${id}/file?t=${encodeURIComponent(q.get('t') || '')}`;
 const pages = document.getElementById('pages');
 document.getElementById('name').textContent = q.get('name') || 'Invoice';

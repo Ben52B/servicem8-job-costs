@@ -135,4 +135,4 @@ function createAnalyzer({ apiKey, model, effort }) {
   return { analyzeFile };
 }
 
-module.exports = { createAnalyzer, isSupported, guessMime, htmlToText, InvoiceSchema, CATEGORIES };
+module.exports = { createAnalyzer, isSupported, guessMime, htmlToText, fileToBlock, InvoiceSchema, CATEGORIES };

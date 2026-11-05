@@ -102,6 +102,42 @@ CREATE TABLE IF NOT EXISTS processed_mail (
   mail_key    TEXT PRIMARY KEY,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Statement checks: price lists, the rules to follow, and each check's report (per business).
+CREATE TABLE IF NOT EXISTS price_lists (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_key  TEXT NOT NULL,
+  supplier     TEXT NOT NULL,
+  name         TEXT,
+  file_path    TEXT NOT NULL,
+  mime_type    TEXT,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE TABLE IF NOT EXISTS check_rules (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_key  TEXT NOT NULL,
+  text         TEXT NOT NULL,
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE TABLE IF NOT EXISTS statement_checks (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_key    TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'reading',   -- reading | checking | done | error
+  file_name      TEXT,
+  file_path      TEXT,
+  mime_type      TEXT,
+  date_from      TEXT,
+  date_to        TEXT,
+  instructions   TEXT,
+  supplier       TEXT,
+  statement_date TEXT,
+  statement      TEXT,   -- JSON: what was read from the statement
+  matched        TEXT,   -- JSON: each statement line with the invoice and jobs found for it
+  result         TEXT,   -- JSON: the review
+  error          TEXT,
+  created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  finished_at    TEXT
+);
 -- Outlook (Microsoft 365) mailbox connected to a business, read-only.
 CREATE TABLE IF NOT EXISTS outlook (
   account_key    TEXT PRIMARY KEY,
@@ -474,6 +510,85 @@ function createRepo(db, dataDir) {
     },
 
     /** ServiceM8 access for an account, from approving the add-on (OAuth). */
+    itemsOf(invoiceId) {
+      return db.prepare('SELECT description, quantity, unit, unit_price, line_total, category, paid FROM items WHERE invoice_id = ? ORDER BY position, id').all(invoiceId);
+    },
+
+    // ----- statement checks -----
+    listPriceLists(accountUUID) {
+      return db.prepare('SELECT * FROM price_lists WHERE account_key = ? ORDER BY supplier, created_at DESC').all(accountUUID ?? '');
+    },
+    addPriceList(accountUUID, { supplier, name, filePath, mimeType }) {
+      const r = db.prepare('INSERT INTO price_lists (account_key, supplier, name, file_path, mime_type) VALUES (?, ?, ?, ?, ?)')
+        .run(accountUUID ?? '', supplier, name || null, filePath, mimeType || null);
+      return db.prepare('SELECT * FROM price_lists WHERE id = ?').get(Number(r.lastInsertRowid));
+    },
+    getPriceList(accountUUID, id) {
+      return db.prepare('SELECT * FROM price_lists WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '') || null;
+    },
+    deletePriceList(accountUUID, id) {
+      const row = repo.getPriceList(accountUUID, id);
+      if (!row) return null;
+      db.prepare('DELETE FROM price_lists WHERE id = ?').run(row.id);
+      fs.rm(path.join(repo.filesDir, row.file_path), { force: true }, () => {});
+      return row;
+    },
+    listRules(accountUUID) {
+      return db.prepare('SELECT * FROM check_rules WHERE account_key = ? ORDER BY id').all(accountUUID ?? '');
+    },
+    addRule(accountUUID, text) {
+      const r = db.prepare('INSERT INTO check_rules (account_key, text) VALUES (?, ?)').run(accountUUID ?? '', text);
+      return db.prepare('SELECT * FROM check_rules WHERE id = ?').get(Number(r.lastInsertRowid));
+    },
+    updateRule(accountUUID, id, { text, active }) {
+      const row = db.prepare('SELECT * FROM check_rules WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '');
+      if (!row) return null;
+      db.prepare('UPDATE check_rules SET text = ?, active = ? WHERE id = ?')
+        .run(text !== undefined ? text : row.text, active !== undefined ? (active ? 1 : 0) : row.active, row.id);
+      return db.prepare('SELECT * FROM check_rules WHERE id = ?').get(row.id);
+    },
+    deleteRule(accountUUID, id) {
+      return db.prepare('DELETE FROM check_rules WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0;
+    },
+    createCheck(accountUUID, f) {
+      const r = db.prepare(`INSERT INTO statement_checks (account_key, file_name, file_path, mime_type, date_from, date_to, instructions)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(accountUUID ?? '', f.fileName, f.filePath, f.mimeType || null, f.dateFrom || null, f.dateTo || null, f.instructions || null);
+      return repo.getCheck(accountUUID, Number(r.lastInsertRowid));
+    },
+    getCheck(accountUUID, id) {
+      const c = db.prepare('SELECT * FROM statement_checks WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '');
+      if (!c) return null;
+      return { ...c, statement: parseJson(c.statement, null), matched: parseJson(c.matched, null), result: parseJson(c.result, null) };
+    },
+    listChecks(accountUUID) {
+      return db.prepare(`SELECT id, status, file_name, supplier, statement_date, date_from, date_to, error, created_at, finished_at,
+        json_extract(statement, '$.total_due') AS total_due FROM statement_checks WHERE account_key = ? ORDER BY id DESC LIMIT 50`).all(accountUUID ?? '');
+    },
+    updateCheck(id, fields) {
+      const cols = { ...fields };
+      for (const k of ['statement', 'matched', 'result']) if (cols[k] !== undefined && cols[k] !== null && typeof cols[k] !== 'string') cols[k] = JSON.stringify(cols[k]);
+      const keys = Object.keys(cols);
+      if (keys.length) db.prepare(`UPDATE statement_checks SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
+    },
+    deleteCheck(accountUUID, id) {
+      const c = repo.getCheck(accountUUID, id);
+      if (!c) return false;
+      db.prepare('DELETE FROM statement_checks WHERE id = ?').run(c.id);
+      if (c.file_path) fs.rm(path.join(repo.filesDir, c.file_path), { force: true }, () => {});
+      return true;
+    },
+    /** The invoice with this number ("INV-00003379" = "3379"); the supplier breaks a tie. */
+    findInvoiceByNumber(accountUUID, number, supplier) {
+      const norm = (n) => String(n || '').replace(/\D/g, '').replace(/^0+/, '') || String(n || '').toLowerCase().replace(/[^0-9a-z]/g, '');
+      const want = norm(number);
+      if (!want) return null;
+      const all = db.prepare("SELECT * FROM invoices WHERE account_uuid IS ? AND status = 'ready' AND invoice_number IS NOT NULL").all(accountUUID)
+        .filter((i) => norm(i.invoice_number) === want);
+      if (all.length <= 1) return all[0] || null;
+      const word = String(supplier || '').toLowerCase().split(/\s+/)[0];
+      return all.find((i) => word && String(i.supplier || '').toLowerCase().includes(word)) || all[0];
+    },
+
     // ----- Outlook -----
     saveOutlook(accountKey, f) {
       const key = accountKey ?? '';

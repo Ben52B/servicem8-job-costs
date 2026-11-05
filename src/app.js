@@ -15,7 +15,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -39,7 +39,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -71,8 +71,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const sessionToken = (jobUUID) => jwt.sign({ jobUUID }, config.sessionSecret, { expiresIn: '12h' });
   const inject = (html, boot) => html.replace('/*__BOOT__*/null', JSON.stringify(boot).replace(/</g, '\\u003c'));
 
-  function renderCard(res, job, { embedded }) {
-    const boot = { token: sessionToken(job.job_uuid), embedded, categories: CATEGORIES, reasons: MISTAKE_REASONS };
+  function renderCard(res, job, { embedded, select = null, back = null }) {
+    const boot = { token: sessionToken(job.job_uuid), embedded, categories: CATEGORIES, reasons: MISTAKE_REASONS, select, back };
     const html = inject(PAGES.card, boot)
       .replace('<!--__SM8_SDK__-->', embedded ? '<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>' : '');
     res.set('Cache-Control', 'no-store').type('html').send(html);
@@ -258,6 +258,84 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return found;
   };
 
+  /** Read the statement (once), find each invoice and its jobs, then have Claude review it all. */
+  async function runCheck(accountUUID, id) {
+    try {
+      let c = repo.getCheck(accountUUID, id);
+      let statement = c.statement;
+      if (!statement) {
+        repo.updateCheck(id, { status: 'reading' });
+        statement = await checker.readStatement({ filePath: path.join(repo.filesDir, c.file_path), fileName: c.file_name, mimeType: c.mime_type });
+        repo.updateCheck(id, { statement, supplier: statement.supplier_name || null, statement_date: statement.statement_date || null });
+      }
+      repo.updateCheck(id, { status: 'checking' });
+      c = repo.getCheck(accountUUID, id);
+      const inRange = (d) => (!c.date_from || (d && d >= c.date_from)) && (!c.date_to || (d && d <= c.date_to));
+      const seen = new Set();
+      const lines = (statement.lines || []).filter((l) => ['invoice', 'credit'].includes(l.type) && inRange(l.date))
+        .filter((l) => !seen.has(l.reference) && seen.add(l.reference));
+      const token = await accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
+      const jobInfo = new Map();
+      const matched = [];
+      const forClaude = [];
+      const invoiceFiles = [];
+      for (const l of lines) {
+        const inv = repo.findInvoiceByNumber(accountUUID, l.reference, statement.supplier_name);
+        const jobs = [];
+        if (inv) {
+          for (const j of repo.jobsOnInvoice(inv.id)) {
+            if (!jobInfo.has(j.job_uuid)) {
+              const info = token ? await fetchJobImpl(j.job_uuid, token).catch(() => null) : null;
+              const local = repo.getJob(j.job_uuid) || {};
+              jobInfo.set(j.job_uuid, {
+                job_number: local.job_number || j.job_number, client: (info && info.clientName) || local.client_name || null,
+                address: (info && (info.address || info.jobTitle)) || local.job_title || null, status: (info && info.status) || local.sm8_status || null,
+                quoted_price_ex_gst: local.quote_amount ?? null, notes: (info && info.description) || null,
+              });
+            }
+            jobs.push({ job_uuid: j.job_uuid, job_number: jobInfo.get(j.job_uuid).job_number });
+          }
+          if (inv.file_path && invoiceFiles.length < 40 && isSupported(inv.file_name, inv.mime_type)) {
+            invoiceFiles.push({ reference: l.reference, file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type });
+          }
+        }
+        matched.push({ reference: l.reference, date: l.date, amount: l.amount, type: l.type,
+          invoice: inv ? { id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, total: inv.total, paid: repo.itemsOf(inv.id).every((x) => x.paid) } : null, jobs });
+        forClaude.push({
+          reference: l.reference, date: l.date, amount_inc_gst: l.amount, type: l.type,
+          invoice: inv ? { found_in_job_costs: true, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total_inc_gst: inv.total, gst: inv.tax,
+            references_on_invoice: (() => { try { return JSON.parse(inv.refs || '[]'); } catch { return []; } })(), lines: repo.itemsOf(inv.id).map(({ paid, ...x }) => x),
+            in_stock: !!inv.kept_as_stock } : { found_in_job_costs: false },
+          jobs: jobs.map((j) => jobInfo.get(j.job_uuid)),
+        });
+      }
+      const sup = String(statement.supplier_name || '').toLowerCase();
+      const allLists = repo.listPriceLists(accountUUID);
+      const word = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+      const fits = allLists.filter((p) => word(p.supplier).some((w) => sup.includes(w)));
+      const priceLists = (fits.length ? fits : allLists).slice(0, 4);
+      const result = await checker.review({
+        statement: { supplier: statement.supplier_name, account_number: statement.account_number, statement_date: statement.statement_date, total_due: statement.total_due,
+          checking_only: c.date_from || c.date_to ? `invoices dated ${c.date_from || 'any'} to ${c.date_to || 'any'}` : 'all invoices on the statement' },
+        rules: repo.listRules(accountUUID).filter((r) => r.active).map((r) => r.text),
+        notes_for_this_check: c.instructions || null,
+        price_lists: priceLists.map((p) => `${p.supplier}: ${p.name || 'price list'} (uploaded ${String(p.created_at).slice(0, 10)})`),
+        lines: forClaude,
+      }, { priceLists, invoiceFiles });
+      repo.updateCheck(id, { status: 'done', matched, result, error: null, finished_at: new Date().toISOString() });
+    } catch (e) {
+      console.error(`Statement check ${id}: ${e.message}`);
+      const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
+        : e.status === 429 || e.status >= 500 ? 'Claude is busy right now. Click Run again in a minute.' : e.message || 'The check failed.';
+      repo.updateCheck(id, { status: 'error', error: msg, finished_at: new Date().toISOString() });
+    }
+  }
+  app.locals.runCheck = runCheck;
+  // Checks interrupted by a restart: run them again.
+  if (checker) setTimeout(() => {
+    for (const c of repo.db.prepare("SELECT id, account_key FROM statement_checks WHERE status IN ('reading', 'checking')").all()) runCheck(c.account_key || null, c.id).catch(() => {});
+  }, 3000).unref?.();
+
   const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
   const sm8Notes = new Map(); // job -> why ServiceM8 info is missing (shown on the card)
   const htmlPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
@@ -425,11 +503,13 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   app.get('/card', (req, res) => {
     const job = jobFromToken(req.query.t);
     if (!job) return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Close this window and click Job Costs again.</p>');
-    renderCard(res, job, { embedded: false });
+    // ?inv=12 opens with that invoice selected; ?back=check:5 shows a link back to that statement check
+    const back = /^check:\d+$/.test(String(req.query.back || '')) ? String(req.query.back) : null;
+    renderCard(res, job, { embedded: false, select: Number(req.query.inv) || null, back });
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks']) {
     app.get(`/${name}`, (req, res) => {
       if (!jobFromToken(req.query.t)) {
         return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');
@@ -896,6 +976,95 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const inv = repo.getInvoice(id);
       if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
       repo.setInvoicePaid(id, req.body.paid);
+      n++;
+    }
+    res.json({ ok: true, updated: n });
+  });
+
+  // ---------- Statement check: price lists, rules, checks ----------
+  const pdfOrPhoto = (f) => isSupported(f.originalname, guessMime(f.originalname, f.mimetype));
+  api.get('/checks', (req, res) => res.json({
+    checks: repo.listChecks(req.account), rules: repo.listRules(req.account),
+    priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name, created_at: p.created_at, mime_type: p.mime_type })),
+    available: !!checker,
+  }));
+  api.post('/rules', (req, res) => {
+    const text = String(req.body?.text || '').trim().slice(0, 2000);
+    if (!text) return res.status(400).json({ error: 'Write the rule first' });
+    res.status(201).json(repo.addRule(req.account, text));
+  });
+  api.patch('/rules/:id', (req, res) => {
+    const b = req.body || {};
+    const text = b.text === undefined ? undefined : String(b.text).trim().slice(0, 2000);
+    if (text === '') return res.status(400).json({ error: 'A rule can\u2019t be empty' });
+    const r = repo.updateRule(req.account, req.params.id, { text, active: typeof b.active === 'boolean' ? b.active : undefined });
+    return r ? res.json(r) : res.status(404).json({ error: 'Not found' });
+  });
+  api.delete('/rules/:id', (req, res) => (repo.deleteRule(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
+
+  api.post('/price-lists', upload.single('file'), (req, res) => {
+    const supplier = String(req.body?.supplier || '').trim().slice(0, 120);
+    if (!supplier) return res.status(400).json({ error: 'Which supplier is this price list for?' });
+    if (!req.file || !pdfOrPhoto(req.file)) return res.status(400).json({ error: 'Choose the price list (PDF or photo)' });
+    const p = repo.addPriceList(req.account, { supplier, name: req.file.originalname, mimeType: guessMime(req.file.originalname, req.file.mimetype),
+      filePath: saveFile(path.join(folderFor(req.account), 'price-lists'), req.file.originalname, req.file.buffer) });
+    res.status(201).json({ id: p.id });
+  });
+  api.get('/price-lists/:id/file', (req, res) => {
+    const p = repo.getPriceList(req.account, req.params.id);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    res.type(p.mime_type || 'application/pdf').set('Content-Disposition', `inline; filename="${safeName(p.name)}"`).sendFile(path.join(repo.filesDir, p.file_path));
+  });
+  api.delete('/price-lists/:id', (req, res) => (repo.deletePriceList(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
+
+  // Start a check: upload the statement (optionally only invoices dated from / to, and notes for this check).
+  api.post('/checks', upload.single('statement'), (req, res) => {
+    if (!checker) return res.status(500).json({ error: 'Statement checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
+    if (!req.file || !pdfOrPhoto(req.file)) return res.status(400).json({ error: 'Choose the statement (PDF or photo)' });
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const c = repo.createCheck(req.account, {
+      fileName: req.file.originalname, mimeType: guessMime(req.file.originalname, req.file.mimetype),
+      filePath: saveFile(path.join(folderFor(req.account), 'statements'), req.file.originalname, req.file.buffer),
+      dateFrom: day(req.body?.date_from), dateTo: day(req.body?.date_to), instructions: String(req.body?.instructions || '').trim().slice(0, 4000) || null,
+    });
+    runCheck(req.account, c.id).catch(() => {});
+    res.status(201).json({ id: c.id });
+  });
+  api.get('/checks/:id', (req, res) => {
+    const c = repo.getCheck(req.account, req.params.id);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+    // Job numbers known to Job Costs, so any job mentioned in the report can be a link.
+    const jobs = Object.fromEntries(repo.listJobs(req.account).map((j) => [String(j.job_number), j.job_uuid]));
+    // Paid can change after the check ran: show it as it is now.
+    for (const m of c.matched || []) if (m.invoice) m.invoice.paid = repo.itemsOf(m.invoice.id).every((x) => x.paid) && repo.itemsOf(m.invoice.id).length > 0;
+    res.json({ ...c, file_path: undefined, jobs });
+  });
+  api.get('/checks/:id/file', (req, res) => {
+    const c = repo.getCheck(req.account, req.params.id);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+    res.type(c.mime_type || 'application/pdf').sendFile(path.join(repo.filesDir, c.file_path));
+  });
+  // Run again (e.g. after adding a rule or a newer price list). The statement isn't read again.
+  api.post('/checks/:id/rerun', (req, res) => {
+    const c = repo.getCheck(req.account, req.params.id);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+    if (['reading', 'checking'].includes(c.status)) return res.status(409).json({ error: 'This check is still running' });
+    repo.updateCheck(c.id, { status: c.statement ? 'checking' : 'reading', error: null });
+    runCheck(req.account, c.id).catch(() => {});
+    res.json({ ok: true });
+  });
+  api.delete('/checks/:id', (req, res) => (repo.deleteCheck(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
+  // Mark the invoices of a check paid: { references: [...] } (or all the ones found in Job Costs).
+  api.post('/checks/:id/mark-paid', (req, res) => {
+    const c = repo.getCheck(req.account, req.params.id);
+    if (!c || !c.matched) return res.status(404).json({ error: 'Not found' });
+    const want = Array.isArray(req.body?.references) ? new Set(req.body.references.map(String)) : null;
+    let n = 0;
+    for (const m of c.matched) {
+      if (!m.invoice || (want && !want.has(String(m.reference)))) continue;
+      const inv = repo.getInvoice(m.invoice.id);
+      if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
+      repo.setInvoicePaid(inv.id, true);
       n++;
     }
     res.json({ ok: true, updated: n });

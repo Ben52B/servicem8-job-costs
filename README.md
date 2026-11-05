@@ -38,6 +38,16 @@ One place for every supplier invoice, matched to your ServiceM8 jobs. For a gara
 - **Removing:** taking an invoice off a job in Job Costs offers *Also remove it from the ServiceM8 job diary*. If a file is deleted in the diary, the next time the card opens it asks whether to remove it from Job Costs too.
 - Needs the attachment and note permissions in `SERVICEM8_SCOPES` (`read_attachments manage_attachments read_job_notes publish_job_notes`; if ServiceM8 rejects one, smaller sets are tried automatically). After upgrading, open the add-on's install link once and approve again.
 
+## Statement check
+
+**🔎 Statement check** (top of the job card) checks a supplier's monthly statement before you pay it:
+
+1. Upload the statement (optionally only invoices dated from / to, e.g. one month) and run the check.
+2. Job Costs reads every line, finds the invoice in Job Costs and the ServiceM8 job(s) it's on (client, address, status and the job notes with H / W / door price), then Claude (`claude-opus-5-5`, effort high) compares each invoice with the supplier's price list, the job and your **rules**.
+3. The report gives the bottom line, what to do before paying, notes about the price list, and a verdict per invoice (OK / Check / Problem / Not in Job Costs). Every job and invoice number in it opens that job's card (on that invoice), with a link back to the report. Mark the OK ones (or all) as paid from the report.
+
+**Rules** are your agreements with suppliers (e.g. "Job 207932: Gliderol bills 1 door only", "Job 207659: 20% off the price list"); they're applied first on every check. **Price lists** are uploaded per supplier. Both are stored only in your business's data, never in the code.
+
 ## How it fits together
 
 ```

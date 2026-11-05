@@ -172,6 +172,8 @@ async function readJob(jobUUID, accessToken) {
       ...(await jobNames(job, accessToken)),
       jobNumber: job.generated_job_id ? String(job.generated_job_id) : null,
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
+      description: String(job.job_description || '').slice(0, 6000),
+      address: job.job_address || null,
       // Full job price ex GST from its lines (not counting "Partial invoice" lines).
       ...(await (async () => {
         const lines = await fetchJobLines(jobUUID, accessToken);
