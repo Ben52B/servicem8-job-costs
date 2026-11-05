@@ -173,6 +173,13 @@ async function readJob(jobUUID, accessToken) {
       jobNumber: job.generated_job_id ? String(job.generated_job_id) : null,
       jobTitle: (job.job_address || job.job_description || '').split('\n')[0].slice(0, 200) || null,
       description: String(job.job_description || '').slice(0, 6000),
+      // Badges ("stickers") on the job, by name, e.g. "Paid Supplier"
+      badges: await (async () => {
+        let ids = job.badges;
+        if (typeof ids === 'string') { try { ids = JSON.parse(ids || '[]'); } catch { ids = ids.split(',').map((x) => x.trim()).filter(Boolean); } }
+        if (!Array.isArray(ids) || !ids.length) return [];
+        return Promise.all(ids.slice(0, 20).map(async (id) => (await lookupName('badge', String(id), accessToken)) || 'a badge (name not readable)'));
+      })(),
       address: job.job_address || null,
       // Full job price ex GST from its lines (not counting "Partial invoice" lines).
       ...(await (async () => {

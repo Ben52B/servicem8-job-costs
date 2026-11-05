@@ -53,6 +53,9 @@ How to check:
 - Job: check the invoice's order/reference number is the job, and that size, colour and type match the job notes and the
   quoted door price. Flag jobs that are Unsuccessful or point elsewhere (e.g. "invoiced through job 206594"),
   missing measurements, a different size, or costs not in the quote.
+- ServiceM8 badges on the job: a "Paid Supplier" (or "partly paid") badge means the office already marked the supplier as
+  paid for that job. If the invoice is on the statement as still owing, flag it (verdict at least "check"): possible double
+  payment, or the badge is wrong. Say so in the job check and add it to the actions.
 - Invoices marked as not found in Job Costs: verdict "missing".
 - Be specific and short. Always write job numbers as "job 207651" and use invoice numbers exactly as printed (e.g. S667642),
   so they can be turned into links. Amounts in AUD; say ex or inc GST.`;

@@ -291,9 +291,10 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
                 job_number: local.job_number || j.job_number, client: (info && info.clientName) || local.client_name || null,
                 address: (info && (info.address || info.jobTitle)) || local.job_title || null, status: (info && info.status) || local.sm8_status || null,
                 quoted_price_ex_gst: local.quote_amount ?? null, notes: (info && info.description) || null,
+                servicem8_badges: (info && info.badges) || [],
               });
             }
-            jobs.push({ job_uuid: j.job_uuid, job_number: jobInfo.get(j.job_uuid).job_number });
+            jobs.push({ job_uuid: j.job_uuid, job_number: jobInfo.get(j.job_uuid).job_number, badges: jobInfo.get(j.job_uuid).servicem8_badges });
           }
           if (inv.file_path && invoiceFiles.length < 40 && isSupported(inv.file_name, inv.mime_type)) {
             invoiceFiles.push({ reference: l.reference, file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type });

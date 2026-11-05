@@ -988,7 +988,7 @@ test('statement check: price lists and rules are kept per business; each stateme
     },
   };
   JOBS['chk-job'] = { jobNumber: '209500', jobTitle: '1 Check St', clientName: 'Jo Client' };
-  const app5 = createApp({ config, repo, processor, fetchJobImpl: async (u) => ({ ...JOBS[u], description: 'H 2100 W 4840 Door - $1226', status: 'Work Order' }),
+  const app5 = createApp({ config, repo, processor, fetchJobImpl: async (u) => ({ ...JOBS[u], description: 'H 2100 W 4840 Door - $1226', status: 'Work Order', badges: ['Paid Supplier'] }),
     fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, checker: fakeChecker });
   const srv = await new Promise((r) => { const x = app5.listen(0, () => r(x)); });
   const b5 = `http://127.0.0.1:${srv.address().port}`;
@@ -1020,6 +1020,7 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(c.matched[1].invoice, null);
     assert.deepEqual(seen.data.rules, ['Job 209500: Gliderol bills 1 door only'], 'only rules that are on');
     assert.equal(seen.data.lines[0].jobs[0].notes, 'H 2100 W 4840 Door - $1226');
+    assert.deepEqual(seen.data.lines[0].jobs[0].servicem8_badges, ['Paid Supplier'], 'badges go into the check');
     assert.equal(seen.files.priceLists.length, 1);
     assert.equal(seen.files.invoiceFiles[0].reference, 'S700001');
     assert.equal(c.jobs['209500'], 'chk-job', 'job numbers in the report can be links');

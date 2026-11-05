@@ -194,7 +194,7 @@ function renderCheck() {
     const isOpen = open.has(m.reference);
     return `<tr class="main" data-toggle="${esc(m.reference)}"><td><button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button>${m.invoice && m.invoice.paid ? ' <span class="chip v-ok">Paid</span>' : ''}</td>
       <td>${esc(fmtDate(m.date))}</td><td class="num">${money(m.amount)}</td>
-      <td>${m.jobs.length ? m.jobs.map((j) => `<button class="lnk" data-job="${esc(j.job_number)}" data-inv="${m.invoice ? m.invoice.id : ''}">#${esc(j.job_number)}</button>`).join(' ') : `<span class="muted">${m.invoice ? 'not on a job' : '–'}</span>`}</td>
+      <td>${m.jobs.length ? m.jobs.map((j) => `<button class="lnk" data-job="${esc(j.job_number)}" data-inv="${m.invoice ? m.invoice.id : ''}">#${esc(j.job_number)}</button>${(j.badges || []).filter((b) => /paid/i.test(b)).map((b) => ` <span class="chip v-problem" title="Badge on the job in ServiceM8">🏷 ${esc(b)}</span>`).join('')}`).join(' ') : `<span class="muted">${m.invoice ? 'not on a job' : '–'}</span>`}</td>
       <td><span class="chip v-${v.verdict}">${VERDICT[v.verdict] || v.verdict}</span></td>
       <td>${linkify(v.headline || '')}${v.difference_ex_gst ? ` <span class="muted">(${v.difference_ex_gst > 0 ? '+' : ''}${money(v.difference_ex_gst)} ex GST)</span>` : ''} <span class="muted">${isOpen ? '▴' : '▾'}</span></td></tr>
       ${isOpen ? `<tr class="detail"><td colspan="6"><div class="lbl">Price</div><div>${linkify(v.price || '–')}</div>
