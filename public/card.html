@@ -310,13 +310,14 @@ function renderSuggestions() {
   const s = state.data.suggestions || [];
   const jobs = state.data.jobs || [];
   const confirm = state.data.stock ? '✓ Add to stock' : '✓ Add to this job';
-  $('#suggest').innerHTML = !s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this ${state.data.stock ? 'stock order' : 'job'} <span class="badge">${s.length}</span></div>
+  $('#suggest').innerHTML = (s.length ? `<datalist id="moveJobs">${jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>` : '') + (!s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this ${state.data.stock ? 'stock order' : 'job'} <span class="badge">${s.length}</span></div>
     ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total_ex ?? x.total)} ex GST</span>
       <div class="why">${esc(x.reason || '')}</div></div>
       <div class="acts"><button class="primary small" data-accept="${x.id}">${confirm}</button>
-        <select data-move="${x.id}" title="Wrong job? Pick the right one"><option value="">Change job…</option>${jobs.map((j) => `<option value="${esc(j.job_uuid)}">${jobOpt(j)}</option>`).join('')}</select>
+        <span style="display:inline-flex;gap:4px"><input id="mv-${x.id}" list="moveJobs" data-move-input="${x.id}" placeholder="Other job #" autocomplete="off" title="Wrong job? Type the right job number"
+          style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px"><button class="small" data-move-btn="${x.id}">Move</button></span>
         <button class="small" data-to-stock="${x.id}" title="Not for one job – keep it as stock">📦 Send to stock</button>
-        <button class="mk-link" data-dismiss="${x.id}" title="Leave it in the Inbox for now">Leave in Inbox</button></div></div>`).join('')}</div>`;
+        <button class="mk-link" data-dismiss="${x.id}" title="Leave it in the Inbox for now">Leave in Inbox</button></div></div>`).join('')}</div>`);
 }
 
 // ---------- Totals ----------
@@ -777,6 +778,12 @@ document.addEventListener('click', async (e) => {
       } finally { await loadOutlook(); setTimeout(checkInbox, 8000); }
       return checkInbox();
     }
+    if (ds.moveBtn) {
+      const n = $('#mv-' + ds.moveBtn).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
+      if (!n) { $('#mv-' + ds.moveBtn).focus(); return toast('Type the job number'); }
+      const r = await post(`/inbox/${ds.moveBtn}/assign`, { job_number: n });
+      toast('Moved to #' + (r.job_number || n)); return load();
+    }
     if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
     if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }
     if (ds.diaryAdd) {
@@ -847,14 +854,11 @@ $('#list').addEventListener('change', async (e) => {
 });
 
 // Suggestion went to the wrong job: send it to the right one.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.moveInput) { e.preventDefault(); $(`[data-move-btn="${e.target.dataset.moveInput}"]`).click(); }
+});
 document.addEventListener('change', async (e) => {
   const t = e.target;
-  if (t.dataset.move !== undefined) {
-    if (!t.value) return;
-    const label = t.options[t.selectedIndex].textContent;
-    try { await post(`/inbox/${t.dataset.move}/assign`, { job_uuid: t.value }); toast('Moved to ' + label); } catch (x) { toast(x.message); }
-    return load();
-  }
   if (t.id === 'stockToggle') {
     try { await patch('/job', { is_stock: t.checked }); toast(t.checked ? 'Marked as a stock order job' : 'Marked as a normal job'); } catch (x) { toast(x.message); }
     state.selected = null; state.previewKey = null;

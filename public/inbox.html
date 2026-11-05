@@ -48,7 +48,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><label class="btn" style="margin-left:auto;background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span><label class="btn" style="margin-left:auto;background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label></header>
   <div class="address" id="address"></div>
   <div class="muted" id="outlookBar" style="margin:-8px 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
@@ -105,7 +105,9 @@ function render() {
   $('#address').style.display = $('#address').innerHTML ? '' : 'none';
   const fresh = data.invoices.filter((i) => i.untouched && !i.kept_as_stock);
   const stock = data.invoices.filter((i) => !(i.untouched && !i.kept_as_stock) && !i.duplicate_of);
-  const jobOptions = (sel) => `<option value="">Choose job…</option><option value="__type">✎ Type a job number…</option>` + data.jobs.map((j) => `<option value="${esc(j.job_uuid)}" ${j.job_uuid === sel ? 'selected' : ''}>${esc(jobLabel(j))}</option>`).join('');
+  // Type a job number; the browser suggests matching jobs as you type.
+  const jobBox = (id, other) => `<span style="display:inline-flex;gap:4px"><input id="j-${id}" list="jobList" data-job-input="${id}" placeholder="${other ? 'Other job #' : 'Job #'}" autocomplete="off"
+    style="width:120px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button data-assign-pick="${id}">Add</button></span>`;
   let h = `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
   if (!fresh.length && !data.pending.length) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {
@@ -122,7 +124,7 @@ function render() {
       ${dupNote(i.possible_duplicate, s && s.job_uuid)}</div>
       <div class="acts">${fileLink(i)}
         ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>` : ''}
-        <select id="j-${i.id}" data-assign-select="${i.id}">${jobOptions('').replace('Choose job…', s ? 'Change job…' : 'Choose job…')}</select>
+        ${jobBox(i.id, !!s)}
         <button class="${i.looks_like_stock ? 'primary' : ''}" data-stock="${i.id}" title="Not for one job – keep it to take items from later">${i.looks_like_stock ? '✓ ' : ''}📦 Send to stock</button>
         ${s && !s.is_stock ? openJob(s.job_uuid, s.job_number) : ''}
         <button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
@@ -146,24 +148,16 @@ function render() {
       ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
       <div class="acts">${fileLink(i)}<span class="muted" style="font-size:12px">Take items from a job's<br>＋ Add costs window</span></div></div>`;
   }
+  h += `<datalist id="jobList">${data.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : '', j.sm8_status && j.sm8_status !== 'Work Order' ? j.sm8_status : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>`;
   $('#content').innerHTML = h;
 }
+// Enter in a job number box = Add
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.jobInput) { e.preventDefault(); document.querySelector(`[data-assign-pick="${e.target.dataset.jobInput}"]`).click(); }
+});
 
 document.addEventListener('change', async (e) => {
   if (e.target.id === 'inboxUpload') return uploadToInbox(e.target.files);
-  const sel = e.target.closest('select[data-assign-select]'); if (!sel || !sel.value) return;
-  try {
-    if (sel.value === '__type') {
-      const n = (prompt('Job number (e.g. 206594)') || '').trim();
-      if (!n) { sel.value = ''; return; }
-      const r = await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n }) });
-      toast('Added to #' + (r.job_number || n));
-    } else {
-      await api(`/inbox/${sel.dataset.assignSelect}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: sel.value }) });
-      toast('Added to ' + sel.options[sel.selectedIndex].textContent);
-    }
-  } catch (x) { toast(x.message); }
-  load();
 });
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
@@ -172,9 +166,11 @@ document.addEventListener('click', async (e) => {
     if (d.copy !== undefined) { await navigator.clipboard.writeText($('#addr').textContent).catch(() => {}); return toast('Email address copied'); }
     if (d.assign) { await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job }) }); toast('Added to the job'); return load(); }
     if (d.assignPick) {
-      const job = $('#j-' + d.assignPick).value;
-      if (!job) return toast('Choose a job first');
-      await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: job }) }); toast('Added to the job'); return load();
+      const n = $('#j-' + d.assignPick).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
+      if (!n) { $('#j-' + d.assignPick).focus(); return toast('Type a job number'); }
+      b.disabled = true;
+      const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n }) });
+      toast('Added to #' + (r.job_number || n)); return load();
     }
     if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Sent to stock – take items from it on any job'); return load(); }
     if (d.del) {
