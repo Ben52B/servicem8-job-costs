@@ -150,7 +150,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const eventTokens = new Map(); // account -> access token from the last click (used if there's no saved approval)
   const diaryErrors = new Map(); // account -> why copying to the diary failed (shown on the card)
   const diaryToken = (accountUUID) => accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
-  const diaryProblem = (e) => (/\b(401|403)\b/.test(e.message)
+  const diaryProblem = (e) => (/\b429\b/.test(e.message) ? 'ServiceM8 is busy right now (too many requests). Job Costs will try again in a minute.'
+    : /\b(401|403)\b/.test(e.message)
     ? `ServiceM8 didn\u2019t allow Job Costs to use the job diary. Open the add-on\u2019s install link again and approve it. (${e.message})`
     : `Couldn\u2019t reach the ServiceM8 job diary (${e.message}).`);
   const fmt = (n) => (Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -217,7 +218,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       } catch (e) {
         console.error(`Copy to ServiceM8 diary failed for invoice ${inv.id}: ${e.message}`);
         diaryErrors.set(inv.account_uuid ?? null, diaryProblem(e));
-        diaryRetryAt.set(inv.id, Date.now() + 5 * 60000);
+        diaryRetryAt.set(inv.id, Date.now() + (/\b429\b/.test(e.message) ? 60000 : 5 * 60000));
       }
     }
   }

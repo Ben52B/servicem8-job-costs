@@ -42,13 +42,33 @@ function verifyEvent(body, appSecret) {
 /** Look up the job number / address so the card can show which job it is. Best effort. */
 // Names of clients (companies) and job categories, cached for a while.
 const nameCache = new Map();
+/**
+ * ServiceM8 only allows so many requests a minute. All calls go through here: they're spaced
+ * out a little, and if ServiceM8 says "too many" (429) we wait and try again.
+ */
+const MIN_GAP_MS = 400;
+let nextSlot = 0;
+async function apiFetch(url, opts = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const wait = Math.max(0, nextSlot - Date.now());
+    nextSlot = Math.max(Date.now(), nextSlot) + MIN_GAP_MS;
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    // The time limit starts when the request is actually sent, not while it waits its turn.
+    const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(opts.timeoutMs || 20000) });
+    if (res.status !== 429 || attempt >= 4) return res;
+    const after = Number(res.headers.get('retry-after')) || 5 * attempt;
+    nextSlot = Date.now() + after * 1000; // everyone waits
+    await new Promise((r) => setTimeout(r, after * 1000));
+  }
+}
+
 async function lookupName(kind, uuid, accessToken) {
   if (!uuid || !accessToken) return null;
   const key = `${kind}:${uuid}`;
   const hit = nameCache.get(key);
   if (hit && Date.now() - hit.at < 3600000) return hit.name;
   try {
-    const res = await fetch(`${API_BASE}/${kind}/${encodeURIComponent(uuid)}.json`, {
+    const res = await apiFetch(`${API_BASE}/${kind}/${encodeURIComponent(uuid)}.json`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(8000),
     });
@@ -92,7 +112,7 @@ function fullPriceFromLines(lines) {
 async function fetchJobLines(jobUUID, accessToken) {
   try {
     const filter = encodeURIComponent(`job_uuid eq '${jobUUID}'`);
-    const res = await fetch(`${API_BASE}/jobmaterial.json?%24filter=${filter}`, {
+    const res = await apiFetch(`${API_BASE}/jobmaterial.json?%24filter=${filter}`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
@@ -113,7 +133,7 @@ async function findJobByNumber(jobNumber, accessToken) {
   if (!accessToken || !jobNumber) return null;
   try {
     const filter = encodeURIComponent(`generated_job_id eq '${String(jobNumber).replace(/'/g, '')}'`);
-    const res = await fetch(`${API_BASE}/job.json?%24filter=${filter}`, {
+    const res = await apiFetch(`${API_BASE}/job.json?%24filter=${filter}`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
@@ -142,7 +162,7 @@ async function fetchJob(jobUUID, accessToken) {
 
 async function readJob(jobUUID, accessToken) {
   {
-    const res = await fetch(`${API_BASE}/job/${encodeURIComponent(jobUUID)}.json`, {
+    const res = await apiFetch(`${API_BASE}/job/${encodeURIComponent(jobUUID)}.json`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     });
@@ -173,7 +193,7 @@ async function fetchActiveJobs(accessToken) {
   for (const status of ['Work Order', 'Quote']) {
     try {
       const filter = encodeURIComponent(`status eq '${status}'`);
-      const res = await fetch(`${API_BASE}/job.json?%24filter=${filter}`, {
+      const res = await apiFetch(`${API_BASE}/job.json?%24filter=${filter}`, {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(15000),
       });
@@ -233,7 +253,7 @@ const refreshAccessToken = ({ appId, appSecret, refreshToken }) =>
 // approval is linked to the account the first time someone clicks Job Costs instead.
 async function fetchAccount(accessToken) {
   try {
-    const res = await fetch(`${API_BASE}/vendor.json`, {
+    const res = await apiFetch(`${API_BASE}/vendor.json`, {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(10000),
     });
@@ -252,7 +272,7 @@ async function fetchAccount(accessToken) {
 // ---------- Job diary: attachments and notes ----------
 
 async function sm8(method, path, accessToken, { json, body, headers = {}, raw = false } = {}) {
-  const res = await fetch(`${API_BASE}/${path}`, {
+  const res = await apiFetch(`${API_BASE}/${path}`, {
     method,
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', ...(json ? { 'Content-Type': 'application/json' } : {}), ...headers },
     body: json ? JSON.stringify(json) : body,
