@@ -67,7 +67,7 @@
   <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>🧾 Bills</h1><span class="muted">Every supplier invoice – find them and mark them paid</span></header>
   <div class="bar">
     <input type="search" id="q" placeholder="Search supplier, invoice number (e.g. S667) or job number…" autocomplete="off">
-    <span class="seg" id="seg"><button data-show="unpaid" class="on">Unpaid</button> <button data-show="paid">Paid</button> <button data-show="all">All</button></span>
+    <span class="seg" id="seg"><button data-show="all" class="on">All</button> <button data-show="unpaid">Unpaid</button> <button data-show="paid">Paid</button></span>
   </div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
   <div class="foot" id="foot"></div>
@@ -87,7 +87,7 @@ async function api(path, opts = {}) {
   return body;
 }
 let bills = [];
-let show = 'unpaid';
+let show = 'all';
 const selected = new Set();
 const fileUrl = (b) => (b.mime_type === 'application/pdf'
   ? `/viewer.html?id=${b.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(b.supplier || 'Invoice')}`

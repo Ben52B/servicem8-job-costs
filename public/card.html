@@ -284,7 +284,7 @@ const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.se
 function render() {
   const j = state.data.job || {};
   const parts = state.data.splitParts || [];
-  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number + (parts.length ? ` (+ ${parts.map((p) => '#' + p).join(', ')})` : '') : '', j.job_title].filter(Boolean).join(' · ');
+  $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number + (parts.length ? ` (+ ${parts.map((p) => '#' + p).join(', ')})` : '') : '', j.client_name, j.job_title].filter(Boolean).join(' · ');
   showInboxCount(state.data.inboxCount);
   const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
   const isStock = !!state.data.stock;
