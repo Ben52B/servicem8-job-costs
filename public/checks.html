@@ -147,7 +147,7 @@ function renderHome() {
       <td><button class="danger" data-pl-del="${p.id}">Delete</button></td></tr>`).join('');
   const checks = h.checks.map((c) => `<tr class="main" data-open-check="${c.id}"><td>${esc(fmtWhen(c.created_at))}</td><td><b>${esc(c.supplier || c.file_name || 'Statement')}</b></td>
       <td>${esc(fmtDate(c.statement_date))}${c.date_from || c.date_to ? `<div class="muted" style="font-size:11.5px">only ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</div>` : ''}</td>
-      <td class="num">${money(c.total_due)}</td><td><span class="chip v-${c.status}">${STATUS[c.status] || c.status}</span></td><td><button class="lnk">Open</button></td></tr>`).join('');
+      <td class="num">${money(c.total_due)}</td><td><span class="chip v-${c.status}">${STATUS[c.status] || c.status}</span></td><td><button class="lnk" data-open-check="${c.id}">Open</button></td></tr>`).join('');
   $('#content').innerHTML = `${h.available ? '' : '<div class="note bad">Statement checks need ANTHROPIC_API_KEY on the server.</div>'}
   <div class="grid2"><div>
     <div class="panel"><h2>New check</h2><div class="hint">Upload the supplier's statement. Job Costs finds each invoice on it, the job it's on in ServiceM8, checks the prices against the price list and your rules, and writes a report. Takes 1–3 minutes.</div>
@@ -218,7 +218,7 @@ function renderCheck() {
   }).join('');
   // Worked out in code (plain arithmetic), shown before anything the AI wrote.
   const rc = c.reconcile;
-  let money = '';
+  let moneyBar = '';
   if (rc) {
     const issues = [];
     if (rc.statement_adds_up === false) issues.push(`The statement's lines add up to <b>${money(rc.statement_lines_total)}</b>, but its total says <b>${money(rc.statement_total)}</b>. Part of the statement may not have been read – check it.`);
@@ -226,11 +226,11 @@ function renderCheck() {
     for (const m of rc.invoice_math || []) issues.push(`<button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button> doesn't add up: ${money(m.subtotal)} + GST ${money(m.gst)} ≠ total ${money(m.total)}.`);
     const head = `<b>${rc.checked_count} invoice${rc.checked_count === 1 ? '' : 's'} checked, ${money(rc.checked_total_inc_gst)} inc GST</b>`
       + (rc.statement_total != null ? ` · statement total ${money(rc.statement_total)}${rc.statement_adds_up ? ' ✓ its lines add up' : ''}` : '');
-    money = issues.length
+    moneyBar = issues.length
       ? `<div class="money bad">⚠ Money check: ${head}<ul>${issues.map((x) => `<li>${x}</li>`).join('')}</ul></div>`
       : `<div class="money ok">✓ Money check: ${head}. Every amount matches its invoice in Job Costs${(rc.not_in_job_costs || []).length ? ` (${rc.not_in_job_costs.length} not in Job Costs yet)` : ''}.</div>`;
   }
-  $('#content').innerHTML = back + title + money + `
+  $('#content').innerHTML = back + title + moneyBar + `
     <div class="bottom">${linkify(r.summary || '')}</div>
     <div class="kpis"><div class="kpi"><span class="muted">Invoices</span><b>${rows.length}</b></div><div class="kpi"><span class="muted">Total inc GST</span><b>${money(total)}</b></div>
       <div class="kpi"><span class="muted">✓ OK</span><b>${count('ok')}</b></div><div class="kpi"><span class="muted">Check</span><b>${count('check')}</b></div>
