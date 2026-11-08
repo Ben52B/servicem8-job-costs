@@ -790,10 +790,17 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     refreshTokens: async () => ({ accessToken: 'ms-at2', refreshToken: 'ms-rt2', expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
     fetchMe: async () => ({ email: 'accounts@doorimage.com.au', name: 'Accounts' }),
     listMessages: async (token) => { assert.ok(token.startsWith('ms-at')); calls.list++; return inbox; },
-    listAttachments: async (token, id) => [...inbox, ...folderMail].find((m) => m.id === id).files,
+    listAttachments: async (token, id) => [...inbox, ...folderMail, ...taMail].find((m) => m.id === id).files,
     listFolders: async () => [{ id: 'f-inbox', path: 'Inbox' }, { id: 'f-gl', path: 'Inbox / Need to pay / Gliderol', count: 2 }],
-    listFolderMessages: async (token, folderId, from, to) => { calls.folder = { folderId, from, to }; return folderId === 'f-gl' ? folderMail : []; },
+    listFolderMessages: async (token, folderId, from, to) => { calls.folder = { folderId, from, to }; return folderId === 'f-gl' ? folderMail : folderId === 'f-ta' ? taMail : []; },
+    childFolders: async (token, parent) => (parent === 'f-pay' ? [{ id: 'f-gl', name: 'Gliderol', childCount: 0, count: 2 }, { id: 'f-ta', name: 'Taurean', childCount: 0, count: 1 }]
+      : parent ? [] : [{ id: 'f-inbox', name: 'Inbox', childCount: 0, count: 5 }, { id: 'f-pay', name: 'Need to pay', childCount: 2, count: 0 }]),
+    folderPage: async (token, folderId) => ({ messages: (folderId === 'f-gl' ? folderMail : folderId === 'f-ta' ? taMail : []).map((m) => ({ id: m.id, internetMessageId: m.internetMessageId, subject: m.subject, from: '', received: m.receivedDateTime, hasAttachments: m.hasAttachments })), next: null }),
+    getMessage: async (token, id) => [...folderMail, ...taMail].find((m) => m.id === id),
   };
+  const taMail = [
+    { id: 't1', internetMessageId: '<t1@x>', subject: 'Invoice 115003777', from: { emailAddress: { address: 'ar@taurean.com.au' } }, receivedDateTime: '2026-10-08T01:00:00Z', hasAttachments: true, body: { content: '' }, files: [pdf('Tax_Invoice_S690001_ref208777.pdf')] },
+  ];
   const folderMail = [
     { id: 'g1', internetMessageId: '<g1@x>', subject: 'Tax Invoice S680001', from: { emailAddress: { address: 'ar@gliderol.com.au' } }, receivedDateTime: '2026-10-03T01:00:00Z', hasAttachments: true, body: { content: '' }, files: [pdf('Tax_Invoice_S680001_ref208777.pdf')] },
     { id: 'g2', internetMessageId: '<g2@x>', subject: 'Thanks for your order', from: { emailAddress: { address: 'ar@gliderol.com.au' } }, receivedDateTime: '2026-10-05T01:00:00Z', hasAttachments: false, body: { content: 'See you soon' }, files: [] },
@@ -880,11 +887,25 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     const r2 = await imp();
     assert.equal(r2.skipped, 2, 'importing again brings nothing in twice');
     assert.equal(r2.imported, 0);
+    // Browse like Outlook: top level, then into "Need to pay", then a folder's emails (already imported ones marked)
+    const get = (q) => fetch(`${b3}/api/outlook/browse${q}`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.deepEqual((await get('')).folders.map((f) => f.name), ['Inbox', 'Need to pay']);
+    assert.deepEqual((await get('?folder=f-pay')).folders.map((f) => f.name), ['Gliderol', 'Taurean']);
+    const glList = await get('?folder=f-gl');
+    assert.deepEqual(glList.messages.map((m) => m.imported), [true, true]);
+    const taList = await get('?folder=f-ta');
+    assert.equal(taList.messages[0].imported, false);
+    // Tick one email + a whole folder: the already-imported folder brings nothing new
+    const ch = await fetch(`${b3}/api/outlook/import-chosen`, { method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message_ids: ['t1'], folder_ids: ['f-gl'] }) }).then((r) => r.json());
+    assert.deepEqual([ch.emails, ch.imported, ch.skipped], [3, 1, 2]);
+    await processor.idle();
+    assert.equal((await get('?folder=f-ta')).messages[0].imported, true);
 
     // Checking again doesn't add the same emails twice
     await app3.locals.checkOutlook();
     await processor.idle();
-    assert.equal(mine().length, 4);
+    assert.equal(mine().length, 5);
     st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(st.connected, true);
     assert.equal(st.email, 'accounts@doorimage.com.au');

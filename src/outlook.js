@@ -104,7 +104,7 @@ async function listFolders(accessToken) {
 /** Emails in a folder received between two dates (oldest first). */
 async function listFolderMessages(accessToken, folderId, from, to) {
   const q = new URLSearchParams({
-    $filter: `receivedDateTime ge ${from.toISOString()} and receivedDateTime lt ${to.toISOString()}`,
+    ...(from && to ? { $filter: `receivedDateTime ge ${from.toISOString()} and receivedDateTime lt ${to.toISOString()}` } : {}),
     $orderby: 'receivedDateTime desc',
     $top: '50',
     $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body',
@@ -119,7 +119,38 @@ async function listFolderMessages(accessToken, folderId, from, to) {
   return out.reverse();
 }
 
-const graphApi = { authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages };
+/** The folders directly inside one folder (or the top level), for browsing. */
+async function childFolders(accessToken, parentId) {
+  const sel = '$top=100&$select=id,displayName,childFolderCount,totalItemCount';
+  let url = parentId ? `/me/mailFolders/${encodeURIComponent(parentId)}/childFolders?${sel}` : `/me/mailFolders?${sel}`;
+  const out = [];
+  for (let page = 0; url && page < 5; page++) {
+    const data = await graph(url, accessToken);
+    for (const f of data.value || []) out.push({ id: f.id, name: f.displayName, childCount: f.childFolderCount || 0, count: f.totalItemCount ?? null });
+    url = data['@odata.nextLink'] || null;
+  }
+  return out;
+}
+
+/** One page of a folder's emails, newest first. `pageUrl` continues from the previous page. */
+async function folderPage(accessToken, folderId, pageUrl) {
+  // Only follow "next page" links that point back at Microsoft Graph.
+  const url = pageUrl && String(pageUrl).startsWith(`${GRAPH}/`) ? pageUrl
+    : `/me/mailFolders/${encodeURIComponent(folderId)}/messages?${new URLSearchParams({ $orderby: 'receivedDateTime desc', $top: '40',
+      $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments' })}`;
+  const data = await graph(url, accessToken);
+  return {
+    messages: (data.value || []).map((m) => ({ id: m.id, internetMessageId: m.internetMessageId || null, subject: m.subject || '(no subject)',
+      from: m.from?.emailAddress?.name || m.from?.emailAddress?.address || '', received: m.receivedDateTime, hasAttachments: !!m.hasAttachments })),
+    next: data['@odata.nextLink'] || null,
+  };
+}
+
+async function getMessage(accessToken, id) {
+  return graph(`/me/messages/${encodeURIComponent(id)}?$select=id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body`, accessToken);
+}
+
+const graphApi = { authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages, childFolders, folderPage, getMessage };
 
 /** Is this email worth reading? Attachments (PDF / real photos), or a body that talks about an invoice. */
 const INVOICE_WORDS = /\b(tax\s*invoice|invoice|inv\s*#?\d|receipt|bill|statement of account|remittance|payment due|amount due)\b/i;
@@ -160,10 +191,28 @@ async function importFolder({ repo, config, api = graphApi, accountKey, folderId
   const conn = repo.getOutlook(accountKey);
   if (!conn || !conn.refresh_token) throw new Error('Outlook isn\u2019t connected');
   const token = await tokenFor(conn, { repo, config, api });
-  const messages = await api.listFolderMessages(token, folderId, from, to);
+  return importList({ repo, api, token, accountKey, onMail, messages: await api.listFolderMessages(token, folderId, from, to) });
+}
+
+/** Import chosen emails (by id) and whole folders (every email in them). */
+async function importChosen({ repo, config, api = graphApi, accountKey, messageIds = [], folderIds = [], onMail }) {
+  const conn = repo.getOutlook(accountKey);
+  if (!conn || !conn.refresh_token) throw new Error('Outlook isn\u2019t connected');
+  const token = await tokenFor(conn, { repo, config, api });
+  const messages = [];
+  for (const f of folderIds) messages.push(...await api.listFolderMessages(token, f, null, null));
+  const have = new Set(messages.map((m) => m.id));
+  for (const id of messageIds) if (!have.has(id)) { messages.push(await api.getMessage(token, id)); have.add(id); }
+  return importList({ repo, api, token, accountKey, onMail, messages });
+}
+
+/** Has this email been imported already? (by its id) */
+const importKey = (m) => `import:${m.internetMessageId || m.id}`;
+
+async function importList({ repo, api, token, accountKey, onMail, messages }) {
   const result = { emails: messages.length, imported: 0, files: 0, skipped: 0, notInvoices: 0 };
   for (const m of messages) {
-    const key = `import:${m.internetMessageId || m.id}`;
+    const key = importKey(m);
     if (repo.isMailProcessed(key)) { result.skipped++; continue; }
     const { mail, worthReading } = await toMail(api, token, m);
     if (worthReading) {
@@ -257,4 +306,4 @@ function scheduleText(config) {
   return `every ${Math.round(Math.max(60, config.outlookPollSeconds || 120) / 60)} min, ${d} ${h(config.outlookFromHour ?? 6)}–${h(config.outlookToHour ?? 18)}`;
 }
 
-module.exports = { graphApi, checkOutlook, importFolder, tokenFor, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };
+module.exports = { graphApi, checkOutlook, importFolder, importChosen, importKey, tokenFor, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };

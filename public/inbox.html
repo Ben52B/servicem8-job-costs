@@ -36,6 +36,10 @@
   .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
   .trace span.left { background: var(--warn-soft); color: #92400e; }
   .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .ilist { border: 1px solid var(--line); border-radius: 12px; max-height: 340px; overflow: auto; }
+  .irow { display: flex; gap: 8px; align-items: center; padding: 7px 10px; border-top: 1px solid var(--line2); font-size: 13px; cursor: pointer; }
+  .irow:first-child { border-top: 0; } .irow.head { background: #fbfdfc; position: sticky; top: 0; }
+  .irow.done { opacity: .6; } .irow .folder { font-weight: 700; text-decoration: none; color: var(--ink); }
   .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
   .recent .item { background: #fbfdfc; }
   .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
@@ -97,31 +101,50 @@ function renderOutlook() {
   const o = outlookStatus;
   $('#outlookBar').innerHTML = !o || !o.connected ? ''
     : `📥 Reading Outlook <b>${esc(o.email || '')}</b> (${esc(o.hours || '')})${o.lastCheck ? ' · checked ' + agoText(o.lastCheck) : ''} <button data-check-now>↻ Check now</button>
-      <button data-import-open>📂 Import a folder…</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
+      <button data-import-open>📂 Import from Outlook…</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
 }
 
-// ---------- Import a whole Outlook folder (e.g. "Need to pay / Gliderol", one month) ----------
-let folders = null;
-function lastMonth() {
-  const d = new Date(); const first = new Date(d.getFullYear(), d.getMonth() - 1, 1); const last = new Date(d.getFullYear(), d.getMonth(), 0);
-  const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
-  return [iso(first), iso(last)];
+// ---------- Import from Outlook: browse folders, tick folders or emails ----------
+const imp = { path: [{ id: null, name: 'Mailbox' }], folders: [], messages: [], next: null, loading: false, emails: new Map(), whole: new Map() };
+async function openImport() { $('#importBox').hidden = false; imp.path = imp.path.slice(0, imp.path.length); return browse(); }
+async function browse(more = false) {
+  const here = imp.path[imp.path.length - 1];
+  imp.loading = true; renderImport();
+  try {
+    const q = new URLSearchParams();
+    if (here.id) q.set('folder', here.id);
+    if (more && imp.next) q.set('page', imp.next);
+    const r = await api('/outlook/browse?' + q);
+    if (!more) { imp.folders = r.folders || []; imp.messages = []; }
+    imp.messages.push(...r.messages);
+    imp.next = r.next;
+  } catch (x) { toast(x.message); }
+  imp.loading = false; renderImport();
 }
-async function openImport() {
-  const box = $('#importBox');
-  box.hidden = false;
-  box.innerHTML = '<span class="spin"></span> Getting your Outlook folders…';
-  try { folders = folders || (await api('/outlook/folders')).folders; } catch (x) { box.innerHTML = `<span style="color:var(--bad)">${esc(x.message)}</span>`; return; }
-  let saved = ''; try { saved = localStorage.getItem('jc-import-folder') || ''; } catch {}
-  const guess = saved || (folders.find((f) => /gliderol/i.test(f.path)) || {}).id || '';
-  const [from, to] = lastMonth();
-  box.innerHTML = `<b>Import invoices from an Outlook folder</b>
-    <div class="muted" style="font-size:12.5px;margin:2px 0 8px">Every PDF / photo in the emails is read and lands here with its job suggested. Quotes, statements and other emails are skipped, and emails already imported aren't brought in twice.</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="impFolder" style="max-width:420px">${folders.map((f) => `<option value="${esc(f.id)}" ${f.id === guess ? 'selected' : ''}>${esc(f.path)}${f.count != null ? ` (${f.count})` : ''}</option>`).join('')}</select>
-      <span class="muted">from</span><input type="date" id="impFrom" value="${from}" style="font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px">
-      <span class="muted">to</span><input type="date" id="impTo" value="${to}" style="font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px">
-      <button class="primary" data-import-go>📂 Import</button><button data-import-close>Cancel</button></div>`;
+const fmtWhen = (t) => t ? new Date(t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' }) : '';
+function renderImport() {
+  const here = imp.path[imp.path.length - 1];
+  const crumbs = imp.path.map((p, i) => i === imp.path.length - 1 ? `<b>${esc(p.name)}</b>` : `<button class="lnk" data-crumb="${i}">${esc(p.name)}</button>`).join(' › ');
+  const folderRows = imp.folders.map((f) => `<div class="irow"><input type="checkbox" data-pick-folder="${esc(f.id)}" data-name="${esc(f.name)}" ${imp.whole.has(f.id) ? 'checked' : ''} title="Import every email in this folder">
+      <button class="lnk folder" data-open-folder="${esc(f.id)}" data-name="${esc(f.name)}">📁 ${esc(f.name)}</button>
+      <span class="muted">${f.count != null ? f.count + ' email' + (f.count === 1 ? '' : 's') : ''}${f.childCount ? ` · ${f.childCount} folder${f.childCount === 1 ? '' : 's'}` : ''}</span><span style="flex:1"></span>
+      <button class="small" data-open-folder="${esc(f.id)}" data-name="${esc(f.name)}">Open ›</button></div>`).join('');
+  const pickable = imp.messages.filter((m) => !m.imported);
+  const allOn = pickable.length && pickable.every((m) => imp.emails.has(m.id));
+  const mailRows = imp.messages.map((m) => `<label class="irow ${m.imported ? 'done' : ''}"><input type="checkbox" data-pick-mail="${esc(m.id)}" ${imp.emails.has(m.id) ? 'checked' : ''} ${m.imported ? 'disabled' : ''}>
+      <span class="muted" style="width:72px">${esc(fmtWhen(m.received))}</span><span style="width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.from)}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.hasAttachments ? '📎 ' : ''}${esc(m.subject)}</span>
+      ${m.imported ? '<span class="chip c-proc">✓ imported</span>' : ''}</label>`).join('');
+  const n = imp.emails.size, f = imp.whole.size;
+  $('#importBox').innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>Import invoices from Outlook</b><span class="muted">·</span><span>${crumbs}</span><span style="flex:1"></span><button data-import-close>✕ Close</button></div>
+    <div class="muted" style="font-size:12.5px;margin:4px 0 8px">Open folders like in Outlook. Tick single emails, or tick a folder to bring in every email in it. Only invoices are kept (quotes, statements and other emails are skipped), and nothing comes in twice.</div>
+    ${imp.loading && !imp.messages.length && !imp.folders.length ? '<div class="muted"><span class="spin"></span> Loading…</div>' : ''}
+    ${folderRows ? `<div class="ilist">${folderRows}</div>` : ''}
+    ${here.id ? (imp.messages.length ? `<div class="ilist" style="margin-top:8px"><label class="irow head"><input type="checkbox" data-pick-all ${allOn ? 'checked' : ''} ${pickable.length ? '' : 'disabled'}> <b>Emails in ${esc(here.name)}</b> <span class="muted">(tick to select all shown)</span></label>${mailRows}</div>
+      ${imp.next ? `<div style="margin-top:6px"><button data-more ${imp.loading ? 'disabled' : ''}>${imp.loading ? 'Loading…' : 'Show older emails'}</button></div>` : ''}` : (imp.loading ? '' : '<div class="muted" style="margin-top:6px">No emails in this folder.</div>')) : ''}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)">
+      <span>${n || f ? `<b>${[n ? `${n} email${n === 1 ? '' : 's'}` : '', f ? `${f} whole folder${f === 1 ? '' : 's'} (${[...imp.whole.values()].map(esc).join(', ')})` : ''].filter(Boolean).join(' + ')}</b> ticked` : '<span class="muted">Nothing ticked yet</span>'}</span>
+      <span style="flex:1"></span>${n || f ? '<button data-import-clear>Untick all</button>' : ''}<button class="primary" data-import-go ${n || f ? '' : 'disabled'}>📂 Import ticked</button></div>`;
 }
 
 function render() {
@@ -185,6 +208,10 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('change', async (e) => {
   if (e.target.id === 'inboxUpload') return uploadToInbox(e.target.files);
+  const t = e.target;
+  if (t.dataset.pickMail) { t.checked ? imp.emails.set(t.dataset.pickMail, true) : imp.emails.delete(t.dataset.pickMail); return renderImport(); }
+  if (t.dataset.pickFolder) { t.checked ? imp.whole.set(t.dataset.pickFolder, t.dataset.name) : imp.whole.delete(t.dataset.pickFolder); return renderImport(); }
+  if (t.dataset.pickAll !== undefined) { for (const m of imp.messages) if (!m.imported) t.checked ? imp.emails.set(m.id, true) : imp.emails.delete(m.id); return renderImport(); }
 });
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
@@ -208,15 +235,20 @@ document.addEventListener('click', async (e) => {
     }
     if (d.importOpen !== undefined) return openImport();
     if (d.importClose !== undefined) { $('#importBox').hidden = true; return; }
+    if (d.openFolder) { imp.path.push({ id: d.openFolder, name: d.name }); return browse(); }
+    if (d.crumb !== undefined) { imp.path = imp.path.slice(0, Number(d.crumb) + 1); return browse(); }
+    if (d.more !== undefined) return browse(true);
+    if (d.importClear !== undefined) { imp.emails.clear(); imp.whole.clear(); return renderImport(); }
     if (d.importGo !== undefined) {
-      const folder = $('#impFolder').value, from = $('#impFrom').value, to = $('#impTo').value;
-      try { localStorage.setItem('jc-import-folder', folder); } catch {}
+      const wholeNames = [...imp.whole.values()];
+      if (wholeNames.length && !confirm(`Import every email in: ${wholeNames.join(', ')}?`)) return;
       b.disabled = true; b.textContent = 'Importing… (this can take a minute)';
       try {
-        const r = await api('/outlook/import', { method: 'POST', body: JSON.stringify({ folder_id: folder, from, to }) });
+        const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()] }) });
+        imp.emails.clear(); imp.whole.clear();
         $('#importBox').hidden = true;
         toast(`${r.emails} email${r.emails === 1 ? '' : 's'} found: ${r.files} file${r.files === 1 ? '' : 's'} being read${r.skipped ? ` · ${r.skipped} already imported` : ''}${r.notInvoices ? ` · ${r.notInvoices} without an invoice` : ''}`);
-      } finally { b.disabled = false; b.textContent = '📂 Import'; }
+      } finally { b.disabled = false; b.textContent = '📂 Import ticked'; }
       return load();
     }
     if (d.undo) { const r = await api(`/inbox/${d.undo}/undo`, { method: 'POST' }); toast(r.diaryWarning || 'Back in the Inbox'); return load(); }

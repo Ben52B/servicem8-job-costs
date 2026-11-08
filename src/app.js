@@ -1035,6 +1035,30 @@ window.addEventListener('message', function (e) {
       res.json({ folders: await outlookApi.listFolders(token) });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
+  // Browse Outlook: the folders inside a folder, and a page of its emails (marked if already imported).
+  api.get('/outlook/browse', async (req, res) => {
+    const conn = repo.getOutlook(req.account);
+    if (!conn) return res.status(400).json({ error: 'Outlook isn\u2019t connected yet' });
+    try {
+      const token = await outlook.tokenFor(conn, { repo, config, api: outlookApi });
+      const folder = req.query.folder ? String(req.query.folder) : null;
+      const [folders, page] = await Promise.all([
+        req.query.page ? Promise.resolve(null) : outlookApi.childFolders(token, folder),
+        folder ? outlookApi.folderPage(token, folder, req.query.page ? String(req.query.page) : null) : Promise.resolve({ messages: [], next: null }),
+      ]);
+      res.json({ folders, messages: page.messages.map((m) => ({ ...m, imported: repo.isMailProcessed(outlook.importKey(m)) })), next: page.next });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  // Import what was ticked: { message_ids: [...], folder_ids: [...] }
+  api.post('/outlook/import-chosen', async (req, res) => {
+    const ids = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean).slice(0, 300) : []);
+    const messageIds = ids(req.body?.message_ids), folderIds = ids(req.body?.folder_ids).slice(0, 20);
+    if (!messageIds.length && !folderIds.length) return res.status(400).json({ error: 'Tick the emails or folders to import' });
+    try {
+      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds,
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }) }));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
   api.post('/outlook/import', async (req, res) => {
     const b = req.body || {};
     const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
