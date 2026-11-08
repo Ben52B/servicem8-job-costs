@@ -65,6 +65,10 @@
   .v-ok { background: var(--brand-soft); color: var(--brand-dark); } .v-check { background: var(--warn-soft); color: #92400e; }
   .v-problem { background: var(--bad-soft); color: var(--bad); } .v-missing { background: #f1f5f9; color: #475569; }
   .v-done { background: var(--brand-soft); color: var(--brand-dark); } .v-error { background: var(--bad-soft); color: var(--bad); } .v-reading, .v-checking { background: var(--warn-soft); color: #92400e; }
+  .money { border-radius: 14px; padding: 10px 14px; margin-bottom: 10px; font-size: 13.5px; }
+  .money.ok { background: var(--brand-soft); color: var(--brand-dark); border: 1px solid #b7ebd6; }
+  .money.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid #fecdd3; }
+  .money ul { margin: 6px 0 0; padding-left: 18px; }
   .bottom { font-size: 15px; line-height: 1.5; background: #f0fdf7; border: 1px solid #c8eedd; border-radius: 14px; padding: 12px 14px; }
   .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
   .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 8px 14px; min-width: 110px; }
@@ -201,7 +205,21 @@ function renderCheck() {
         <div class="lbl" style="margin-top:6px">Job</div><div>${linkify(v.job || '–')}</div>
         ${v.rules_applied && v.rules_applied.length ? `<div class="lbl" style="margin-top:6px">Rules used</div><div>${v.rules_applied.map((x) => '• ' + linkify(x)).join('<br>')}</div>` : ''}</td></tr>` : ''}`;
   }).join('');
-  $('#content').innerHTML = back + title + `
+  // Worked out in code (plain arithmetic), shown before anything the AI wrote.
+  const rc = c.reconcile;
+  let money = '';
+  if (rc) {
+    const issues = [];
+    if (rc.statement_adds_up === false) issues.push(`The statement's lines add up to <b>${money(rc.statement_lines_total)}</b>, but its total says <b>${money(rc.statement_total)}</b>. Part of the statement may not have been read – check it.`);
+    for (const m of rc.amount_mismatches || []) issues.push(`<button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button>: statement says <b>${money(m.on_statement)}</b>, the invoice in Job Costs says <b>${money(m.in_job_costs)}</b> (difference ${money(m.difference)}).`);
+    for (const m of rc.invoice_math || []) issues.push(`<button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button> doesn't add up: ${money(m.subtotal)} + GST ${money(m.gst)} ≠ total ${money(m.total)}.`);
+    const head = `<b>${rc.checked_count} invoice${rc.checked_count === 1 ? '' : 's'} checked, ${money(rc.checked_total_inc_gst)} inc GST</b>`
+      + (rc.statement_total != null ? ` · statement total ${money(rc.statement_total)}${rc.statement_adds_up ? ' ✓ its lines add up' : ''}` : '');
+    money = issues.length
+      ? `<div class="money bad">⚠ Money check: ${head}<ul>${issues.map((x) => `<li>${x}</li>`).join('')}</ul></div>`
+      : `<div class="money ok">✓ Money check: ${head}. Every amount matches its invoice in Job Costs${(rc.not_in_job_costs || []).length ? ` (${rc.not_in_job_costs.length} not in Job Costs yet)` : ''}.</div>`;
+  }
+  $('#content').innerHTML = back + title + money + `
     <div class="bottom">${linkify(r.summary || '')}</div>
     <div class="kpis"><div class="kpi"><span class="muted">Invoices</span><b>${rows.length}</b></div><div class="kpi"><span class="muted">Total inc GST</span><b>${money(total)}</b></div>
       <div class="kpi"><span class="muted">✓ OK</span><b>${count('ok')}</b></div><div class="kpi"><span class="muted">Check</span><b>${count('check')}</b></div>

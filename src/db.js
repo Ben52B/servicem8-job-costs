@@ -317,6 +317,7 @@ function migrateColumns(db) {
   // Approved from the Inbox (so it can be undone): when, and onto which job (null = stock).
   add('approved_at', 'TEXT');
   add('approved_job_uuid', 'TEXT');
+  if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
   for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
@@ -558,7 +559,7 @@ function createRepo(db, dataDir) {
     getCheck(accountUUID, id) {
       const c = db.prepare('SELECT * FROM statement_checks WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '');
       if (!c) return null;
-      return { ...c, statement: parseJson(c.statement, null), matched: parseJson(c.matched, null), result: parseJson(c.result, null) };
+      return { ...c, statement: parseJson(c.statement, null), matched: parseJson(c.matched, null), result: parseJson(c.result, null), reconcile: parseJson(c.reconcile, null) };
     },
     listChecks(accountUUID) {
       return db.prepare(`SELECT id, status, file_name, supplier, statement_date, date_from, date_to, error, created_at, finished_at,
@@ -566,7 +567,7 @@ function createRepo(db, dataDir) {
     },
     updateCheck(id, fields) {
       const cols = { ...fields };
-      for (const k of ['statement', 'matched', 'result']) if (cols[k] !== undefined && cols[k] !== null && typeof cols[k] !== 'string') cols[k] = JSON.stringify(cols[k]);
+      for (const k of ['statement', 'matched', 'result', 'reconcile']) if (cols[k] !== undefined && cols[k] !== null && typeof cols[k] !== 'string') cols[k] = JSON.stringify(cols[k]);
       const keys = Object.keys(cols);
       if (keys.length) db.prepare(`UPDATE statement_checks SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
     },

@@ -273,7 +273,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const inRange = (d) => (!c.date_from || (d && d >= c.date_from)) && (!c.date_to || (d && d <= c.date_to));
       const seen = new Set();
       const lines = (statement.lines || []).filter((l) => ['invoice', 'credit'].includes(l.type) && inRange(l.date))
-        .filter((l) => !seen.has(l.reference) && seen.add(l.reference));
+        .filter((l) => { const k = `${l.reference}|${l.type}|${Number(l.amount).toFixed(2)}`; return !seen.has(k) && seen.add(k); });
       const token = await accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
       const jobInfo = new Map();
       const matched = [];
@@ -310,6 +310,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
           jobs: jobs.map((j) => jobInfo.get(j.job_uuid)),
         });
       }
+      const reconcile = reconcileMoney(statement, matched, lines);
       const sup = String(statement.supplier_name || '').toLowerCase();
       const allLists = repo.listPriceLists(accountUUID);
       const word = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
@@ -322,8 +323,10 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         notes_for_this_check: c.instructions || null,
         price_lists: priceLists.map((p) => `${p.supplier}: ${p.name || 'price list'} (uploaded ${String(p.created_at).slice(0, 10)})`),
         lines: forClaude,
+        // Worked out in code: use these totals as they are (don't add them up again).
+        money_checks: reconcile,
       }, { priceLists, invoiceFiles });
-      repo.updateCheck(id, { status: 'done', matched, result, error: null, finished_at: new Date().toISOString() });
+      repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, finished_at: new Date().toISOString() });
     } catch (e) {
       console.error(`Statement check ${id}: ${e.message}`);
       const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
@@ -332,6 +335,49 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     }
   }
   app.locals.runCheck = runCheck;
+
+  /**
+   * Plain arithmetic, no AI: do the statement's lines add up to its printed total, does each
+   * statement amount match the invoice in Job Costs, and does each invoice add up to its own total.
+   * All in cents, so there's no rounding drift.
+   */
+  function reconcileMoney(statement, matched, checkedLines) {
+    const c = (n) => Math.round((Number(n) || 0) * 100);
+    const $ = (cents) => cents / 100;
+    const all = (statement.lines || []);
+    const seenAll = new Set();
+    const unique = all.filter((l) => { const k = `${l.reference}|${l.type}|${c(l.amount)}`; return !seenAll.has(k) && seenAll.add(k); });
+    const owing = unique.filter((l) => l.type !== 'payment').reduce((s, l) => s + c(l.amount), 0);
+    const withPayments = unique.reduce((s, l) => s + c(l.amount), 0);
+    const total = statement.total_due == null ? null : c(statement.total_due);
+    const statementAddsUp = total == null ? null : Math.abs(owing - total) <= 1 || Math.abs(withPayments - total) <= 1;
+    const amountMismatches = [];
+    const invoiceMath = [];
+    for (const m of matched) {
+      if (!m.invoice) continue;
+      const inv = repo.getInvoice(m.invoice.id);
+      if (!inv) continue;
+      // a credit with the invoice's number isn't the invoice: only invoice lines are compared
+      if (m.type !== 'credit' && inv.total != null && Math.abs(c(inv.total) - c(m.amount)) > 1) {
+        amountMismatches.push({ reference: m.reference, on_statement: $(c(m.amount)), in_job_costs: $(c(inv.total)), difference: $(c(m.amount) - c(inv.total)) });
+      }
+      if (m.type !== 'credit' && inv.subtotal != null && inv.tax != null && inv.total != null && Math.abs(c(inv.subtotal) + c(inv.tax) - c(inv.total)) > 2) {
+        invoiceMath.push({ reference: m.reference, subtotal: $(c(inv.subtotal)), gst: $(c(inv.tax)), total: $(c(inv.total)), difference: $(c(inv.total) - c(inv.subtotal) - c(inv.tax)) });
+      }
+    }
+    const checked = checkedLines.reduce((s, l) => s + c(l.amount), 0);
+    return {
+      statement_total: total == null ? null : $(total),
+      statement_lines_total: $(owing),
+      statement_adds_up: statementAddsUp,
+      checked_count: checkedLines.length,
+      checked_total_inc_gst: $(checked),
+      not_in_job_costs: matched.filter((m) => !m.invoice).map((m) => m.reference),
+      amount_mismatches: amountMismatches,
+      invoice_math: invoiceMath,
+      ok: statementAddsUp !== false && !amountMismatches.length && !invoiceMath.length,
+    };
+  }
   // Checks interrupted by a restart: run them again.
   if (checker) setTimeout(() => {
     for (const c of repo.db.prepare("SELECT id, account_key FROM statement_checks WHERE status IN ('reading', 'checking')").all()) runCheck(c.account_key || null, c.id).catch(() => {});
@@ -1074,8 +1120,10 @@ window.addEventListener('message', function (e) {
     if (!c || !c.matched) return res.status(404).json({ error: 'Not found' });
     const want = Array.isArray(req.body?.references) ? new Set(req.body.references.map(String)) : null;
     let n = 0;
+    const done = new Set();
     for (const m of c.matched) {
-      if (!m.invoice || (want && !want.has(String(m.reference)))) continue;
+      if (!m.invoice || m.type === 'credit' || done.has(m.invoice.id) || (want && !want.has(String(m.reference)))) continue;
+      done.add(m.invoice.id);
       const inv = repo.getInvoice(m.invoice.id);
       if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
       repo.setInvoicePaid(inv.id, true);

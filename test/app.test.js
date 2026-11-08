@@ -35,7 +35,7 @@ const fakeAnalyzer = {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
     if (/Tax_Invoice_S/.test(fileName)) {
       const ref = fileName.match(/ref(\d+(?:-\d)?)/)[1];
-      return { ...DOOR, supplier_name: 'Gliderol International Pty Ltd', invoice_number: fileName.match(/S\d+/)[0], references: [ref], total: 1348.6, tax: 122.6,
+      return { ...DOOR, supplier_name: 'Gliderol International Pty Ltd', invoice_number: fileName.match(/S\d+/)[0], references: [ref], subtotal: 1226, total: 1348.6, tax: 122.6,
         items: [{ description: 'AA roller door 2100x4840', category: 'materials', line_total: 1226 }] };
     }
     if (/quote/.test(fileName)) return { ...DOOR, document_type: 'quote', invoice_number: 'Q-1' };
@@ -974,12 +974,14 @@ test('statement check: price lists and rules are kept per business; each stateme
   const seen = {};
   const fakeChecker = {
     async readStatement() {
-      return { supplier_name: 'Gliderol International Pty Ltd', statement_date: '2026-09-30', total_due: 3000, account_number: '122640',
+      return { supplier_name: 'Gliderol International Pty Ltd', statement_date: '2026-09-30', total_due: 1911.16, account_number: '122640',
         lines: [
           { date: '2026-08-20', reference: 'S600000', type: 'invoice', amount: 21.56 },
           { date: '2026-09-01', reference: 'S700001', type: 'invoice', amount: 1348.6 },
           { date: '2026-09-22', reference: 'S799999', type: 'invoice', amount: 589.6 },
           { date: '2026-09-01', reference: 'S700001', type: 'invoice', amount: 1348.6 }, // remittance slip repeat
+          { date: '2026-09-05', reference: 'S700001', type: 'credit', amount: -48.6 }, // credit with the same document number
+          { date: '2026-09-09', reference: 'EFT', type: 'payment', amount: -500 },
         ] };
     },
     async review(data, files) {
@@ -1019,7 +1021,16 @@ test('statement check: price lists and rules are kept per business; each stateme
     let c;
     for (let i = 0; i < 50; i++) { c = await call(t, `/checks/${id}`).then((x) => x.json()); if (c.status === 'done' || c.status === 'error') break; await new Promise((r) => setTimeout(r, 20)); }
     assert.equal(c.status, 'done', c.error);
-    assert.deepEqual(c.matched.map((m) => m.reference), ['S700001', 'S799999'], 'August left out, repeat counted once');
+    assert.deepEqual(c.matched.map((m) => m.reference), ['S700001', 'S799999', 'S700001'], 'August left out, repeat counted once, the credit kept');
+    // money checks, in code: 21.56 + 1348.60 + 589.60 - 48.60 = 1911.16 (payments aren't owing)
+    assert.equal(c.reconcile.statement_lines_total, 1911.16);
+    assert.equal(c.reconcile.statement_adds_up, true);
+    assert.equal(c.reconcile.checked_count, 3);
+    assert.equal(c.reconcile.checked_total_inc_gst, 1889.6, '1348.60 + 589.60 - 48.60');
+    assert.deepEqual(c.reconcile.not_in_job_costs, ['S799999']);
+    assert.equal(seen.data.money_checks.checked_total_inc_gst, 1889.6, 'the review gets the totals worked out in code');
+    assert.deepEqual(c.reconcile.amount_mismatches, [], 'the credit is not compared with the invoice');
+    assert.equal(c.reconcile.ok, true);
     assert.equal(c.matched[0].jobs[0].job_number, '209500');
     assert.equal(c.matched[1].invoice, null);
     assert.deepEqual(seen.data.rules, ['Job 209500: Gliderol bills 1 door only'], 'only rules that are on');

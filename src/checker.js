@@ -56,6 +56,8 @@ How to check:
 - ServiceM8 badges on the job: a "Paid Supplier" (or "partly paid") badge means the office already marked the supplier as
   paid for that job. If the invoice is on the statement as still owing, flag it (verdict at least "check"): possible double
   payment, or the badge is wrong. Say so in the job check and add it to the actions.
+- MONEY: "money_checks" was worked out in code. Use its totals exactly as given; never add amounts up yourself.
+  Any amount mismatch or invoice that doesn't add up is at least "check", and goes in the actions.
 - Invoices marked as not found in Job Costs: verdict "missing".
 - Be specific and short. Always write job numbers as "job 207651" and use invoice numbers exactly as printed (e.g. S667642),
   so they can be turned into links. Amounts in AUD; say ex or inc GST.`;
