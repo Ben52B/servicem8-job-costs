@@ -913,6 +913,15 @@ wireDrop($('#aside'), uploadFiles);
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
 $('#checkLink').href = '/checks?t=' + encodeURIComponent(BOOT.token);
+// The full view needs the big ServiceM8 window; "Compact view" goes back to the summary.
+try { window.parent.postMessage({ jobcosts: 'size', size: 'full' }, '*'); } catch (e) {}
+{
+  const a = document.createElement('a');
+  a.className = 'btn'; a.textContent = '▭ Compact view'; a.title = 'Back to the summary';
+  a.href = '/summary?t=' + encodeURIComponent(BOOT.token);
+  $('#inboxLink').before(a);
+}
+if (new URLSearchParams(location.search).get('add')) setTimeout(() => openAdd('pick'), 300);
 // Opened from a statement check: a way back to it
 if (BOOT.back && /^check:\d+$/.test(BOOT.back)) {
   const a = document.createElement('a');

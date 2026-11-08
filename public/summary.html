@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+</style>
+<style>
+  body { background: var(--bg); }
+  .sum { padding: 14px 14px 18px; max-width: 520px; margin: 0 auto; }
+  .top { display: flex; align-items: flex-start; gap: 8px; }
+  .top h1 { font-size: 17px; margin: 0; }
+  .top .who { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .top .sp { flex: 1; }
+  .hero { margin-top: 12px; border-radius: 16px; padding: 14px 16px; color: #fff; background: linear-gradient(135deg, #10b981, #059669); }
+  .hero.over { background: linear-gradient(135deg, #f43f5e, #be123c); }
+  .hero.none { background: #fff; color: var(--ink); border: 1px dashed #c9d8d3; }
+  .hero .l { font-size: 12px; font-weight: 700; opacity: .9; }
+  .hero .v { font-size: 30px; font-weight: 800; letter-spacing: -.5px; line-height: 1.15; }
+  .hero .s { font-size: 12.5px; opacity: .92; }
+  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 9px 11px; }
+  .tile .l { font-size: 11.5px; color: var(--muted); font-weight: 700; }
+  .tile .v { font-size: 18px; font-weight: 800; margin-top: 1px; white-space: nowrap; }
+  .tile .s { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--line2); margin-top: 6px; }
+  .good { color: var(--brand-dark); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin-top: 10px; }
+  .box h3 { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); }
+  .line { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line2); font-size: 13px; }
+  .line:first-of-type { border-top: 0; }
+  .line .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip.p { background: var(--brand-soft); color: var(--brand-dark); } .chip.u { background: var(--bad-soft); color: var(--bad); } .chip.pt { background: var(--warn-soft); color: #92400e; }
+  .sugg { background: #fff8ee; border-color: #fde4c8; }
+  .acts { display: flex; gap: 8px; margin-top: 12px; }
+  .acts .btn, .acts button { flex: 1; justify-content: center; }
+  .note { font-size: 12px; color: var(--warn); margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="sum" id="sum"><div class="empty"><span class="spin"></span></div></div>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money0 = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14b8a6', equipment_hire: '#f97316', freight: '#06b6d4', fees: '#94a3b8', other: '#64748b' };
+const T = encodeURIComponent(BOOT.token);
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+// Ask the ServiceM8 window to be small (this summary) or big (the full view).
+const size = (s) => { try { window.parent.postMessage({ jobcosts: 'size', size: s }, '*'); } catch (e) {} };
+let data = null;
+let timer = null;
+
+function render() {
+  const d = data, t = d.totals, j = d.job || {};
+  const label = [j.job_number ? 'Job #' + j.job_number : '', j.client_name].filter(Boolean).join(' · ');
+  const hasQuote = t.quote != null;
+  let hero;
+  if (d.stock) {
+    hero = `<div class="hero none"><div class="l">📦 Stock order job</div><div class="s" style="opacity:1;margin-top:4px">Its invoices go into stock. Other jobs take items from them.</div></div>`;
+  } else if (!hasQuote) {
+    hero = `<div class="hero none"><div class="l">Profit so far</div><div class="s" style="opacity:1;margin-top:4px">No quoted price yet – add it in the full view to see profit.</div></div>`;
+  } else {
+    const over = t.margin < 0;
+    hero = `<div class="hero ${over ? 'over' : ''}"><div class="l">${over ? 'Over the quote by' : 'Profit so far'}</div>
+      <div class="v">${money0(Math.abs(t.margin))}</div><div class="s">${t.marginPct}% margin · quoted ${money0(t.quote)} ex GST</div></div>`;
+  }
+  const clean = {};
+  for (const inv of d.invoices) if (inv.status === 'ready' && !inv.duplicate_of) for (const it of inv.items) clean[it.category] = (clean[it.category] || 0) + it.cost;
+  const scale = t.total || 1;
+  const bar = Object.entries(clean).filter(([, v]) => v > 0.004).map(([c, v]) => `<span style="width:${v / scale * 100}%;background:${CAT_COLOR[c] || '#64748b'}"></span>`).join('');
+  const unpaid = d.invoices.filter((i) => i.status === 'ready' && !i.duplicate_of && i.payment_state !== 'paid');
+  const tiles = d.stock ? '' : `<div class="tiles">
+    <div class="tile"><div class="l">Costs ex GST</div><div class="v">${money0(t.total)}</div><div class="bar">${bar}</div></div>
+    <div class="tile"><div class="l">To pay</div><div class="v ${t.outstanding > 0.004 ? 'warn' : 'good'}">${t.outstanding > 0.004 ? money0(t.outstanding) : '✓ $0'}</div><div class="s">${unpaid.length ? `${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}` : 'all paid'}</div></div>
+    <div class="tile"><div class="l">⚠ Screw-ups</div><div class="v ${t.mistakes > 0 ? 'bad' : ''}">${money0(t.mistakes)}</div><div class="s">${t.mistakes > 0 ? t.mistakePct + '% of costs' : 'none 🎉'}</div></div></div>`;
+  const ready = d.invoices.filter((i) => i.status === 'ready' && !i.duplicate_of);
+  const lines = ready.slice(0, 5).map((i) => `<div class="line"><span class="nm"><b>${esc(i.supplier || 'Unknown supplier')}</b>${i.invoice_number ? ' <span class="muted">#' + esc(i.invoice_number) + '</span>' : ''}${i.mistake_state && i.mistake_state !== 'none' ? ' <span class="bad" title="Screw-up">⚠</span>' : ''}</span>
+      <span>${money0(i.job_total)}</span><span class="chip ${i.payment_state === 'paid' ? 'p' : i.payment_state === 'part' ? 'pt' : 'u'}">${i.payment_state === 'paid' ? 'Paid' : i.payment_state === 'part' ? 'Part' : 'Unpaid'}</span></div>`).join('');
+  const reading = d.invoices.filter((i) => i.status === 'processing').length;
+  const costs = `<div class="box"><h3>Costs on this job${ready.length > 5 ? ` · showing 5 of ${ready.length}` : ''}</h3>${lines || '<div class="muted" style="font-size:13px">No costs yet.</div>'}
+    ${reading ? `<div class="muted" style="font-size:12px;margin-top:4px"><span class="spin"></span> ${reading} invoice${reading === 1 ? '' : 's'} being read…</div>` : ''}</div>`;
+  const s = d.suggestions || [];
+  const sugg = s.length ? `<div class="box sugg"><h3>📨 Looks like ${s.length === 1 ? 'it’s' : 'they’re'} for this job</h3>${s.map((x) => `<div class="line"><span class="nm"><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${money0(x.total_ex ?? x.total)} ex GST</span></span>
+      <label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;font-weight:600"><input type="checkbox" id="pd-${x.id}"> Paid</label>
+      <button class="primary small" data-accept="${x.id}">✓ Add</button></div>`).join('')}</div>` : '';
+  const inbox = d.inboxCount ? `<div class="muted" style="font-size:12px;margin-top:8px">📥 ${d.inboxCount} invoice${d.inboxCount === 1 ? '' : 's'} waiting in the Inbox</div>` : '';
+  $('#sum').innerHTML = `<div class="top"><div><h1>Job Costs</h1><div class="who">${esc(label)}${j.job_title ? ' · ' + esc(String(j.job_title).split(',')[0]) : ''}</div></div><span class="sp"></span></div>
+    ${hero}${d.sm8Note ? `<div class="note">⚠ ${esc(d.sm8Note)}</div>` : ''}${tiles}${sugg}${costs}${inbox}
+    <div class="acts"><button data-full="add">＋ Add costs</button><button class="primary" data-full>Open full Job Costs ↗</button></div>`;
+}
+
+async function load() {
+  try { data = await api('/job'); render(); } catch (e) { $('#sum').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  clearTimeout(timer);
+  if (data && (data.totals.processing > 0 || data.sm8Loading)) timer = setTimeout(load, 3000);
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    if (b.dataset.accept) {
+      const id = b.dataset.accept; const paid = !!($('#pd-' + id) && $('#pd-' + id).checked);
+      b.disabled = true;
+      await api(`/suggestions/${id}/accept`, { method: 'POST', body: JSON.stringify({ paid }) });
+      toast('Added to this job' + (paid ? ' and marked paid' : '')); return load();
+    }
+    if (b.dataset.full !== undefined) { size('full'); location.href = `/card?t=${T}${b.dataset.full === 'add' ? '&add=1' : ''}`; }
+  } catch (x) { toast(x.message); }
+});
+size('compact');
+load();
+</script>
+</body>
+</html>

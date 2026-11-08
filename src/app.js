@@ -15,7 +15,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -443,15 +443,25 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     }
     // The window shows our page (from our own address, so everything on it works),
     // and asks ServiceM8 to make the window big enough.
-    const url = `${config.publicUrl}/card?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
+    // Opens on the compact summary; "Open full Job Costs" inside it asks for the big window.
+    const url = `${config.publicUrl}/summary?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
     reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
-<script>try {
-  // As big as fits on this screen (laptops with display scaling are smaller than 1320 x 860).
-  // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
-  var w = Math.max(700, Math.min(1320, (screen.availWidth || 1320) - 100));
-  var h = Math.max(480, Math.min(820, (screen.availHeight || 860) - 260));
-  SMClient.init().resizeWindow(w, h);
-} catch (e) {}</script>
+<script>
+var sm8 = null;
+try { sm8 = SMClient.init(); } catch (e) {}
+function fit(size) {
+  try {
+    // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
+    var aw = (screen.availWidth || 1320), ah = (screen.availHeight || 860);
+    if (size === 'full') sm8.resizeWindow(Math.max(700, Math.min(1320, aw - 100)), Math.max(480, Math.min(820, ah - 260)));
+    else sm8.resizeWindow(Math.min(500, aw - 40), Math.max(420, Math.min(680, ah - 260)));
+  } catch (e) {}
+}
+fit('compact');
+window.addEventListener('message', function (e) {
+  if (e.origin === ${JSON.stringify(new URL(config.publicUrl).origin)} && e.data && e.data.jobcosts === 'size') fit(e.data.size);
+});
+</script>
 <iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
   });
 
@@ -510,7 +520,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary']) {
     app.get(`/${name}`, (req, res) => {
       if (!jobFromToken(req.query.t)) {
         return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');

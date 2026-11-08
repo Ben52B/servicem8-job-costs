@@ -113,8 +113,9 @@ async function openCard(jobUUID, accountUUID = 'acc-1') {
   const { eventResponse } = await res.json();
   assert.ok(eventResponse.includes('platform.servicem8.com/sdk'));
   const src = eventResponse.match(/<iframe src="([^"]+)"/)[1];
-  assert.ok(src.startsWith('http://test/card?t='));
+  assert.ok(src.startsWith('http://test/summary?t='), 'opens on the compact summary');
   const t = decodeURIComponent(src.split('t=')[1]);
+  assert.equal((await fetch(`${base}/summary?t=${encodeURIComponent(t)}`)).status, 200);
   const page = await fetch(`${base}/card?t=${encodeURIComponent(t)}`);
   assert.equal(page.status, 200);
   const boot = JSON.parse((await page.text()).match(/const BOOT = (\{.*?\});\n/)[1]);
@@ -1045,7 +1046,7 @@ test('statement check: price lists and rules are kept per business; each stateme
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);
