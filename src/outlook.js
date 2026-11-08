@@ -83,7 +83,43 @@ async function listAttachments(accessToken, messageId) {
   return out;
 }
 
-const graphApi = { authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments };
+/** Every mail folder, with its full path ("Inbox / Need to pay / Gliderol"), a few levels deep. */
+async function listFolders(accessToken) {
+  const out = [];
+  async function walk(url, prefix, depth) {
+    for (let page = 0; url && page < 5; page++) {
+      const data = await graph(url, accessToken);
+      for (const f of data.value || []) {
+        const p = prefix ? `${prefix} / ${f.displayName}` : f.displayName;
+        out.push({ id: f.id, path: p, count: f.totalItemCount ?? null });
+        if (f.childFolderCount && depth < 4) await walk(`/me/mailFolders/${encodeURIComponent(f.id)}/childFolders?$top=100&$select=id,displayName,childFolderCount,totalItemCount`, p, depth + 1);
+      }
+      url = data['@odata.nextLink'] || null;
+    }
+  }
+  await walk('/me/mailFolders?$top=100&$select=id,displayName,childFolderCount,totalItemCount', '', 0);
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** Emails in a folder received between two dates (oldest first). */
+async function listFolderMessages(accessToken, folderId, from, to) {
+  const q = new URLSearchParams({
+    $filter: `receivedDateTime ge ${from.toISOString()} and receivedDateTime lt ${to.toISOString()}`,
+    $orderby: 'receivedDateTime desc',
+    $top: '50',
+    $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body',
+  });
+  let url = `/me/mailFolders/${encodeURIComponent(folderId)}/messages?${q}`;
+  const out = [];
+  for (let page = 0; url && page < 20; page++) {
+    const data = await graph(url, accessToken);
+    out.push(...(data.value || []));
+    url = data['@odata.nextLink'] || null;
+  }
+  return out.reverse();
+}
+
+const graphApi = { authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages };
 
 /** Is this email worth reading? Attachments (PDF / real photos), or a body that talks about an invoice. */
 const INVOICE_WORDS = /\b(tax\s*invoice|invoice|inv\s*#?\d|receipt|bill|statement of account|remittance|payment due|amount due)\b/i;
@@ -97,6 +133,51 @@ function pickFiles(mail) {
  * One pass over every connected Outlook: new emails go to onMail(mail, accountUUID).
  * Emails without a PDF/photo are only passed on if the subject or text mentions an invoice.
  */
+/** A working access token for this Outlook connection (refreshed when due). */
+async function tokenFor(conn, { repo, config, api = graphApi }) {
+  if (conn.access_token && Date.parse(conn.expires_at) - Date.now() > 120000) return conn.access_token;
+  const fresh = await api.refreshTokens({ clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId }, conn.refresh_token);
+  repo.saveOutlook(conn.account_key, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt });
+  return fresh.accessToken;
+}
+
+/** Turn a Graph message into the email Job Costs reads: its PDFs / photos, or its text if it talks about an invoice. */
+async function toMail(api, token, m) {
+  const text = m.body?.content || '';
+  const attachments = m.hasAttachments ? await api.listAttachments(token, m.id) : [];
+  const from = m.from?.emailAddress ? `${m.from.emailAddress.name || ''} <${m.from.emailAddress.address || ''}>`.trim() : '';
+  const mail = { messageId: m.internetMessageId || null, from, subject: m.subject || '', text, html: '', recipients: [], attachments };
+  const files = pickFiles(mail);
+  const worthReading = files.length > 0 || (INVOICE_WORDS.test(`${mail.subject}\n${text.slice(0, 3000)}`) && text.trim().length > 80);
+  return { mail: { ...mail, attachments: files }, worthReading };
+}
+
+/**
+ * Import every invoice email in one folder between two dates (e.g. "Need to pay / Gliderol", October).
+ * Emails already brought in by this import are skipped; everything goes to the Job Costs Inbox.
+ */
+async function importFolder({ repo, config, api = graphApi, accountKey, folderId, from, to, onMail }) {
+  const conn = repo.getOutlook(accountKey);
+  if (!conn || !conn.refresh_token) throw new Error('Outlook isn\u2019t connected');
+  const token = await tokenFor(conn, { repo, config, api });
+  const messages = await api.listFolderMessages(token, folderId, from, to);
+  const result = { emails: messages.length, imported: 0, files: 0, skipped: 0, notInvoices: 0 };
+  for (const m of messages) {
+    const key = `import:${m.internetMessageId || m.id}`;
+    if (repo.isMailProcessed(key)) { result.skipped++; continue; }
+    const { mail, worthReading } = await toMail(api, token, m);
+    if (worthReading) {
+      const r = await onMail(mail, accountKey || null);
+      result.imported++;
+      result.files += (r && r.created) || 0;
+    } else {
+      result.notInvoices++;
+    }
+    repo.markMailProcessed(key);
+  }
+  return result;
+}
+
 async function checkOutlook({ repo, config, api = graphApi, onMail, log = console }) {
   const app = { clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId };
   let handled = 0;
@@ -176,4 +257,4 @@ function scheduleText(config) {
   return `every ${Math.round(Math.max(60, config.outlookPollSeconds || 120) / 60)} min, ${d} ${h(config.outlookFromHour ?? 6)}–${h(config.outlookToHour ?? 18)}`;
 }
 
-module.exports = { graphApi, checkOutlook, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };
+module.exports = { graphApi, checkOutlook, importFolder, tokenFor, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };

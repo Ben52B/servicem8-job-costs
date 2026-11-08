@@ -1013,6 +1013,44 @@ window.addEventListener('message', function (e) {
       email: o?.email || null, lastCheck: o?.last_check || null, error: o?.error || null });
   });
   api.delete('/outlook', (req, res) => { repo.removeOutlook(req.account); res.json({ ok: true }); });
+  /** Midnight at the start of a day (YYYY-MM-DD) in the business's time zone (daylight saving included). */
+  function zonedMidnight(day, tz = config.outlookTimezone || 'Australia/Melbourne') {
+    for (const off of [10, 11, 9, 9.5, 10.5, 8, 0]) {
+      const sign = off >= 0 ? '+' : '-';
+      const hh = String(Math.floor(Math.abs(off))).padStart(2, '0'), mm = Math.abs(off) % 1 ? '30' : '00';
+      const t = new Date(`${day}T00:00:00${sign}${hh}:${mm}`);
+      const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+        .formatToParts(t).map((x) => [x.type, x.value]));
+      if (`${p.year}-${p.month}-${p.day}` === day && Number(p.hour) === 0) return t;
+    }
+    return new Date(`${day}T00:00:00Z`);
+  }
+  const nextDay = (day) => new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  // Import a whole Outlook folder for a date range (e.g. "Need to pay / Gliderol", October).
+  api.get('/outlook/folders', async (req, res) => {
+    const conn = repo.getOutlook(req.account);
+    if (!conn) return res.status(400).json({ error: 'Outlook isn\u2019t connected yet' });
+    try {
+      const token = await outlook.tokenFor(conn, { repo, config, api: outlookApi });
+      res.json({ folders: await outlookApi.listFolders(token) });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  api.post('/outlook/import', async (req, res) => {
+    const b = req.body || {};
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const from = day(b.from), to = day(b.to);
+    if (!b.folder_id || !from || !to) return res.status(400).json({ error: 'Choose a folder and the dates' });
+    if (to < from) return res.status(400).json({ error: 'The end date is before the start date' });
+    try {
+      const r = await outlook.importFolder({
+        repo, config, api: outlookApi, accountKey: req.account, folderId: String(b.folder_id),
+        // whole days in the business's time zone: from midnight on the first day to midnight after the last
+        from: zonedMidnight(from), to: zonedMidnight(nextDay(to)),
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }),
+      });
+      res.json(r);
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
   // "Check now": look in Outlook straight away (any day, any time).
   api.post('/outlook/check', async (req, res) => {
     if (!repo.getOutlook(req.account)) return res.status(400).json({ error: 'Outlook isn\u2019t connected yet' });

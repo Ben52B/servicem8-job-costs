@@ -790,8 +790,14 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     refreshTokens: async () => ({ accessToken: 'ms-at2', refreshToken: 'ms-rt2', expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
     fetchMe: async () => ({ email: 'accounts@doorimage.com.au', name: 'Accounts' }),
     listMessages: async (token) => { assert.ok(token.startsWith('ms-at')); calls.list++; return inbox; },
-    listAttachments: async (token, id) => inbox.find((m) => m.id === id).files,
+    listAttachments: async (token, id) => [...inbox, ...folderMail].find((m) => m.id === id).files,
+    listFolders: async () => [{ id: 'f-inbox', path: 'Inbox' }, { id: 'f-gl', path: 'Inbox / Need to pay / Gliderol', count: 2 }],
+    listFolderMessages: async (token, folderId, from, to) => { calls.folder = { folderId, from, to }; return folderId === 'f-gl' ? folderMail : []; },
   };
+  const folderMail = [
+    { id: 'g1', internetMessageId: '<g1@x>', subject: 'Tax Invoice S680001', from: { emailAddress: { address: 'ar@gliderol.com.au' } }, receivedDateTime: '2026-10-03T01:00:00Z', hasAttachments: true, body: { content: '' }, files: [pdf('Tax_Invoice_S680001_ref208777.pdf')] },
+    { id: 'g2', internetMessageId: '<g2@x>', subject: 'Thanks for your order', from: { emailAddress: { address: 'ar@gliderol.com.au' } }, receivedDateTime: '2026-10-05T01:00:00Z', hasAttachments: false, body: { content: 'See you soon' }, files: [] },
+  ];
   const cfg = { ...config, msClientId: 'ms-client', msClientSecret: 'ms-secret', msTenantId: 'tenant-1' };
   const app3 = createApp({ config: cfg, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, outlookApi: fakeGraph });
   const srv = await new Promise((r) => { const x = app3.listen(0, () => r(x)); });
@@ -858,10 +864,27 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     await processor.idle();
     assert.ok(!mine().some((i) => i.file_name === 'remittance.pdf'));
 
+    // Import a whole folder for October
+    const fl = await fetch(`${b3}/api/outlook/folders`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.ok(fl.folders.some((f) => f.path === 'Inbox / Need to pay / Gliderol'));
+    const imp = () => fetch(`${b3}/api/outlook/import`, { method: 'POST', headers: { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: 'f-gl', from: '2026-10-01', to: '2026-10-31' }) }).then((r) => r.json());
+    const r1 = await imp();
+    assert.deepEqual([r1.emails, r1.imported, r1.files, r1.notInvoices], [2, 1, 1, 1]);
+    assert.equal(calls.folder.from.toISOString(), '2026-09-30T14:00:00.000Z', 'from midnight 1 Oct, Melbourne (before daylight saving)');
+    assert.equal(calls.folder.to.toISOString(), '2026-10-31T13:00:00.000Z', 'to midnight after 31 Oct, Melbourne (daylight saving)');
+    await processor.idle();
+    ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    const gl = ib.invoices.find((i) => i.invoice_number === 'S680001');
+    assert.equal(gl.suggestion.job_number, '208777', 'job number on the invoice');
+    const r2 = await imp();
+    assert.equal(r2.skipped, 2, 'importing again brings nothing in twice');
+    assert.equal(r2.imported, 0);
+
     // Checking again doesn't add the same emails twice
     await app3.locals.checkOutlook();
     await processor.idle();
-    assert.equal(mine().length, 3);
+    assert.equal(mine().length, 4);
     st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(st.connected, true);
     assert.equal(st.email, 'accounts@doorimage.com.au');

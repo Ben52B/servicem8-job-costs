@@ -51,6 +51,7 @@
   <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span><label class="btn" style="margin-left:auto;background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label></header>
   <div class="address" id="address"></div>
   <div class="muted" id="outlookBar" style="margin:-8px 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
+  <div id="importBox" hidden style="background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 14px;margin:-4px 0 14px"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -95,7 +96,32 @@ const agoText = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 600
 function renderOutlook() {
   const o = outlookStatus;
   $('#outlookBar').innerHTML = !o || !o.connected ? ''
-    : `📥 Reading Outlook <b>${esc(o.email || '')}</b> (${esc(o.hours || '')})${o.lastCheck ? ' · checked ' + agoText(o.lastCheck) : ''} <button data-check-now>↻ Check now</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
+    : `📥 Reading Outlook <b>${esc(o.email || '')}</b> (${esc(o.hours || '')})${o.lastCheck ? ' · checked ' + agoText(o.lastCheck) : ''} <button data-check-now>↻ Check now</button>
+      <button data-import-open>📂 Import a folder…</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
+}
+
+// ---------- Import a whole Outlook folder (e.g. "Need to pay / Gliderol", one month) ----------
+let folders = null;
+function lastMonth() {
+  const d = new Date(); const first = new Date(d.getFullYear(), d.getMonth() - 1, 1); const last = new Date(d.getFullYear(), d.getMonth(), 0);
+  const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  return [iso(first), iso(last)];
+}
+async function openImport() {
+  const box = $('#importBox');
+  box.hidden = false;
+  box.innerHTML = '<span class="spin"></span> Getting your Outlook folders…';
+  try { folders = folders || (await api('/outlook/folders')).folders; } catch (x) { box.innerHTML = `<span style="color:var(--bad)">${esc(x.message)}</span>`; return; }
+  let saved = ''; try { saved = localStorage.getItem('jc-import-folder') || ''; } catch {}
+  const guess = saved || (folders.find((f) => /gliderol/i.test(f.path)) || {}).id || '';
+  const [from, to] = lastMonth();
+  box.innerHTML = `<b>Import invoices from an Outlook folder</b>
+    <div class="muted" style="font-size:12.5px;margin:2px 0 8px">Every PDF / photo in the emails is read and lands here with its job suggested. Quotes, statements and other emails are skipped, and emails already imported aren't brought in twice.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="impFolder" style="max-width:420px">${folders.map((f) => `<option value="${esc(f.id)}" ${f.id === guess ? 'selected' : ''}>${esc(f.path)}${f.count != null ? ` (${f.count})` : ''}</option>`).join('')}</select>
+      <span class="muted">from</span><input type="date" id="impFrom" value="${from}" style="font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px">
+      <span class="muted">to</span><input type="date" id="impTo" value="${to}" style="font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px">
+      <button class="primary" data-import-go>📂 Import</button><button data-import-close>Cancel</button></div>`;
 }
 
 function render() {
@@ -179,6 +205,19 @@ document.addEventListener('click', async (e) => {
     if (d.del) {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
       await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load();
+    }
+    if (d.importOpen !== undefined) return openImport();
+    if (d.importClose !== undefined) { $('#importBox').hidden = true; return; }
+    if (d.importGo !== undefined) {
+      const folder = $('#impFolder').value, from = $('#impFrom').value, to = $('#impTo').value;
+      try { localStorage.setItem('jc-import-folder', folder); } catch {}
+      b.disabled = true; b.textContent = 'Importing… (this can take a minute)';
+      try {
+        const r = await api('/outlook/import', { method: 'POST', body: JSON.stringify({ folder_id: folder, from, to }) });
+        $('#importBox').hidden = true;
+        toast(`${r.emails} email${r.emails === 1 ? '' : 's'} found: ${r.files} file${r.files === 1 ? '' : 's'} being read${r.skipped ? ` · ${r.skipped} already imported` : ''}${r.notInvoices ? ` · ${r.notInvoices} without an invoice` : ''}`);
+      } finally { b.disabled = false; b.textContent = '📂 Import'; }
+      return load();
     }
     if (d.undo) { const r = await api(`/inbox/${d.undo}/undo`, { method: 'POST' }); toast(r.diaryWarning || 'Back in the Inbox'); return load(); }
     if (d.openJob) { const r = await api(`/jobs/${encodeURIComponent(d.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); return; }
