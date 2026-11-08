@@ -332,6 +332,7 @@ function migrateColumns(db) {
     if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
   }
   // what a running check is doing right now, and when it last moved on
+  if (!cols(db, 'statement_checks').includes('attempts')) db.exec('ALTER TABLE statement_checks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0'); // runs cut short by a restart
   for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
   if (!cols(db, 'mail_imports').includes('check_id')) db.exec('ALTER TABLE mail_imports ADD COLUMN check_id INTEGER'); // a statement: which check it went to
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks

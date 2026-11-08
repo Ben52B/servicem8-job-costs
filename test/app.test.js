@@ -1182,6 +1182,10 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal((await call(t, `/checks/${w.id}/stop`, { method: 'POST' })).status, 200);
     const stopped = await call(t, `/checks/${w.id}`).then((x) => x.json());
     assert.equal(stopped.status, 'waiting', 'stopped: back to not run yet');
+    // a stop is saved straight away: work still in progress gives up at its next step
+    repo.updateCheck(w.id, { status: 'checking', progress_at: new Date().toISOString() });
+    await call(t, `/checks/${w.id}/stop`, { method: 'POST' });
+    assert.equal((await call(t, `/checks/${w.id}`).then((x) => x.json())).status, 'waiting', 'even while it was running a moment ago');
     assert.ok(stopped.file_name, 'the statement is still there');
     repo.recordImport('import:<stmt@x>', [987654]);
     repo.setImportOutcome(987654, 'statement', w.id);
@@ -1243,6 +1247,24 @@ test('statement check: an invoice that isn\u2019t in Job Costs yet is found in O
     repo.removeOutlook('acc-chk');
     srv.close();
   }
+});
+
+test('a statement check cut short by restarts carries on, but stops after the third time instead of looping', async () => {
+  await new Promise((r) => setTimeout(r, 3300)); // let the other test apps' own restart timers fire first
+  const c1 = repo.createCheck('acc-loop', { fileName: 's.pdf', filePath: 'none.pdf' });
+  const c2 = repo.createCheck('acc-loop', { fileName: 's2.pdf', filePath: 'none.pdf' });
+  repo.updateCheck(c1.id, { status: 'checking', attempts: 2 });
+  repo.updateCheck(c2.id, { status: 'checking', attempts: 0 });
+  let ran = 0;
+  createApp({ config, repo, processor, checker: { readStatement: async () => { ran++; throw new Error('boom'); }, review: async () => ({}) } }); // starting the app = a restart
+  await new Promise((r) => setTimeout(r, 3300));
+  const a1 = repo.getCheck('acc-loop', c1.id);
+  assert.equal(a1.status, 'error');
+  assert.match(a1.error, /restarted 3 times/);
+  const a2 = repo.getCheck('acc-loop', c2.id);
+  assert.equal(a2.attempts, 1, 'the other one carries on, counted');
+  assert.equal(a2.status, 'error', 'it ran again (and here failed reading)');
+  assert.match(a2.error, /boom/);
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

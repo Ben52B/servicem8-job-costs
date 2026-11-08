@@ -318,10 +318,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   async function runCheck(accountUUID, id) {
     const now = () => new Date().toISOString();
     stopRequested.delete(id);
-    const progress = (text) => {
-      if (stopRequested.has(id)) { const e = new Error('stopped'); e.stopped = true; throw e; }
-      repo.updateCheck(id, { progress: text, progress_at: now() });
+    const stillWanted = () => {
+      const cur = repo.db.prepare('SELECT status FROM statement_checks WHERE id = ?').get(id);
+      if (stopRequested.has(id) || !cur || !['reading', 'checking'].includes(cur.status)) { const e = new Error('stopped'); e.stopped = true; throw e; }
     };
+    const progress = (text) => { stillWanted(); repo.updateCheck(id, { progress: text, progress_at: now() }); };
     try {
       let c = repo.getCheck(accountUUID, id);
       repo.updateCheck(id, { started_at: now() });
@@ -414,15 +415,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         // Worked out in code: use these totals as they are (don't add them up again).
         money_checks: reconcile,
       }, { priceLists, invoiceFiles });
-      if (stopRequested.has(id)) { const e = new Error('stopped'); e.stopped = true; throw e; }
-      repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, finished_at: new Date().toISOString() });
+      stillWanted();
+      repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, attempts: 0, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
     } catch (e) {
-      if (e.stopped) { stopRequested.delete(id); repo.updateCheck(id, { status: 'waiting', progress: null, error: null }); return; }
+      if (e.stopped) { stopRequested.delete(id); const cur = repo.db.prepare('SELECT status FROM statement_checks WHERE id = ?').get(id); if (cur && cur.status !== 'error') repo.updateCheck(id, { status: 'waiting', progress: null, error: null }); return; }
       console.error(`Statement check ${id}: ${e.message}`);
       const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
         : e.status === 429 || e.status >= 500 ? 'Claude is busy right now. Click Run again in a minute.' : e.message || 'The check failed.';
-      repo.updateCheck(id, { status: 'error', error: msg, finished_at: new Date().toISOString() });
+      repo.updateCheck(id, { status: 'error', error: msg, progress: null, finished_at: new Date().toISOString() });
     }
   }
   app.locals.runCheck = runCheck;
@@ -469,9 +470,19 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       ok: statementAddsUp !== false && !amountMismatches.length && !invoiceMath.length,
     };
   }
-  // Checks interrupted by a restart: run them again.
+  // Checks interrupted by a restart: run them again, but not forever (a check that keeps getting cut short stops).
   if (checker) setTimeout(() => {
-    for (const c of repo.db.prepare("SELECT id, account_key FROM statement_checks WHERE status IN ('reading', 'checking')").all()) runCheck(c.account_key || null, c.id).catch(() => {});
+    for (const c of repo.db.prepare("SELECT id, account_key, attempts FROM statement_checks WHERE status IN ('reading', 'checking')").all()) {
+      if ((c.attempts || 0) >= 2) {
+        repo.updateCheck(c.id, { status: 'error', progress: null, attempts: 0, finished_at: new Date().toISOString(),
+          error: 'The app restarted 3 times while this check was running, so it was stopped. Try a shorter date range, or send the Render logs from that time.' });
+        console.error(`Statement check ${c.id}: stopped after 3 restarts`);
+        continue;
+      }
+      repo.updateCheck(c.id, { attempts: (c.attempts || 0) + 1 });
+      console.log(`Statement check ${c.id}: carrying on after a restart (attempt ${(c.attempts || 0) + 2})`);
+      runCheck(c.account_key || null, c.id).catch(() => {});
+    }
   }, 3000).unref?.();
 
   const redirectUri = () => `${config.publicUrl}/servicem8/oauth/callback`;
@@ -1298,7 +1309,7 @@ window.addEventListener('message', function (e) {
     if (b.date_to !== undefined) set.date_to = day(b.date_to);
     if (b.instructions !== undefined) set.instructions = String(b.instructions || '').trim().slice(0, 4000) || null;
     if (!checker) return res.status(500).json({ error: 'Statement checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
-    repo.updateCheck(c.id, { ...set, status: c.statement ? 'checking' : 'reading', error: null });
+    repo.updateCheck(c.id, { ...set, status: c.statement ? 'checking' : 'reading', error: null, attempts: 0 });
     runCheck(req.account, c.id).catch(() => {});
     res.json({ ok: true });
   });
@@ -1308,9 +1319,8 @@ window.addEventListener('message', function (e) {
     if (!c) return res.status(404).json({ error: 'Not found' });
     if (!['reading', 'checking'].includes(c.status)) return res.json({ ok: true });
     stopRequested.add(c.id);
-    // if nothing is running it (e.g. the app restarted), stop it straight away
-    if (Date.now() - (Date.parse(c.progress_at || c.started_at || c.created_at) || 0) > 60000) repo.updateCheck(c.id, { status: 'waiting', progress: null });
-    else repo.updateCheck(c.id, { progress: 'Stopping…' });
+    // saved straight away, so it holds even if the app restarts; the running work notices at its next step
+    repo.updateCheck(c.id, { status: 'waiting', progress: null, attempts: 0 });
     res.json({ ok: true });
   });
   api.delete('/checks/:id', (req, res) => (repo.deleteCheck(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));

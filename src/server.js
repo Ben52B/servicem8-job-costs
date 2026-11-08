@@ -5,6 +5,10 @@ const { createProcessor } = require('./processor');
 const { createApp } = require('./app');
 const { startMailboxPoller } = require('./mailbox');
 
+// An unexpected error somewhere must not take the whole app down (and restart running checks): log it and carry on.
+process.on('unhandledRejection', (e) => console.error('Unhandled error (app kept running):', e && e.stack ? e.stack : e));
+process.on('uncaughtException', (e) => console.error('Uncaught error (app kept running):', e && e.stack ? e.stack : e));
+
 if (!config.sessionSecret) {
   console.error('SESSION_SECRET must be set (see .env.example).');
   process.exit(1);
