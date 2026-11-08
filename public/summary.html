@@ -133,9 +133,8 @@ function render() {
   const sugg = s.length ? `<div class="box sugg"><h3>📨 Looks like ${s.length === 1 ? 'it’s' : 'they’re'} for this job</h3>${s.map((x) => `<div class="line"><span class="nm"><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${money0(x.total_ex ?? x.total)} ex GST</span></span>
       <label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;font-weight:600"><input type="checkbox" id="pd-${x.id}"> Paid</label>
       <button class="primary small" data-accept="${x.id}">✓ Add</button></div>`).join('')}</div>` : '';
-  const inbox = d.inboxCount ? `<div class="muted" style="font-size:12px;margin-top:8px">📥 ${d.inboxCount} invoice${d.inboxCount === 1 ? '' : 's'} waiting in the Inbox</div>` : '';
   $('#sum').innerHTML = `<div class="top"><div><h1>Job Costs</h1><div class="who">${esc(label)}${j.job_title ? ' · ' + esc(String(j.job_title).split(',')[0]) : ''}</div></div><span class="sp"></span></div>
-    ${hero}${d.sm8Note ? `<div class="note">⚠ ${esc(d.sm8Note)}</div>` : ''}${tiles}${sugg}${costs}${inbox}
+    ${hero}${d.sm8Note ? `<div class="note">⚠ ${esc(d.sm8Note)}</div>` : ''}${tiles}${sugg}${costs}
     <div class="acts"><button data-full="add">＋ Add costs</button><button class="primary" data-full>Open full Job Costs ↗</button></div>`;
 }
 
