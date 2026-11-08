@@ -163,7 +163,15 @@ async function skippedFolderIds(accessToken) {
   return ids;
 }
 
-const graphApi = { skippedFolderIds, authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages, childFolders, folderPage, getMessage };
+/** Emails anywhere in the mailbox that mention this text (e.g. an invoice number). */
+async function searchMessages(accessToken, text) {
+  const q = new URLSearchParams({ $search: `"${String(text).replace(/"/g, '')}"`, $top: '10',
+    $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body,parentFolderId,bodyPreview' });
+  const data = await graph(`/me/messages?${q}`, accessToken);
+  return data.value || [];
+}
+
+const graphApi = { searchMessages, skippedFolderIds, authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages, childFolders, folderPage, getMessage };
 
 /** Is this email worth reading? Attachments (PDF / real photos), or a body that talks about an invoice. */
 const INVOICE_WORDS = /\b(tax\s*invoice|invoice|inv\s*#?\d|receipt|bill|statement of account|remittance|payment due|amount due)\b/i;
@@ -226,6 +234,31 @@ async function importChosen({ repo, config, api = graphApi, accountKey, messageI
 
 /** Has this email been imported already? (by its id) */
 const importKey = (m) => `import:${m.internetMessageId || m.id}`;
+
+/**
+ * For invoice numbers that aren't in Job Costs: find the email with that number in Outlook and import it.
+ * Returns the numbers it found an email for.
+ */
+async function findAndImport({ repo, config, api = graphApi, accountKey, references, onMail, onProgress = () => {} }) {
+  const conn = repo.getOutlook(accountKey);
+  if (!conn || !conn.refresh_token || !api.searchMessages) return { searched: 0, found: [] };
+  const token = await tokenFor(conn, { repo, config, api });
+  const skip = api.skippedFolderIds ? await api.skippedFolderIds(token).catch(() => []) : [];
+  const found = [];
+  let n = 0;
+  for (const ref of references.slice(0, 60)) {
+    onProgress(++n, references.length);
+    const want = String(ref).toLowerCase();
+    let hits = [];
+    try { hits = await api.searchMessages(token, ref); } catch { continue; }
+    const m = hits.find((x) => !skip.includes(x.parentFolderId) && (x.hasAttachments || /invoice/i.test(x.subject || ''))
+      && `${x.subject || ''} ${x.bodyPreview || ''}`.toLowerCase().includes(want));
+    if (!m) continue;
+    const r = await importList({ repo, api, token, accountKey, onMail, messages: [m] });
+    if (r.imported) found.push(ref);
+  }
+  return { searched: n, found };
+}
 
 async function importList({ repo, api, token, accountKey, onMail, messages, force = null }) {
   const result = { emails: messages.length, imported: 0, files: 0, skipped: 0, notInvoices: 0 };
@@ -339,4 +372,4 @@ function scheduleText(config) {
   return `every ${Math.round(Math.max(60, config.outlookPollSeconds || 120) / 60)} min, ${d} ${h(config.outlookFromHour ?? 6)}–${h(config.outlookToHour ?? 18)}`;
 }
 
-module.exports = { graphApi, checkOutlook, importFolder, importChosen, importKey, tokenFor, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };
+module.exports = { graphApi, checkOutlook, importFolder, importChosen, findAndImport, importKey, tokenFor, startOutlookPoller, pickFiles, inCheckingHours, scheduleText, SCOPES };

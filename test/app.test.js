@@ -1181,6 +1181,58 @@ test('statement check: price lists and rules are kept per business; each stateme
   }
 });
 
+test('statement check: an invoice that isn\u2019t in Job Costs yet is found in Outlook, imported and checked; progress is shown', async () => {
+  const pdfFile = (name) => ({ name, contentType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 ' + name), inline: false });
+  const mail = { id: 'sx', internetMessageId: '<sx@x>', subject: 'Tax Invoice S799999', bodyPreview: 'Invoice S799999 attached', from: { emailAddress: { address: 'ar@gliderol.com.au' } },
+    receivedDateTime: '2026-09-22T01:00:00Z', hasAttachments: true, body: { content: '' }, parentFolderId: 'f-gl', files: [pdfFile('Tax_Invoice_S799999_ref209500.pdf')] };
+  const searched = [];
+  const fakeGraph = {
+    refreshTokens: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
+    searchMessages: async (tok, text) => { searched.push(text); return text === 'S799999' ? [mail] : []; },
+    skippedFolderIds: async () => ['f-sent'],
+    listAttachments: async () => mail.files,
+  };
+  const progressSeen = [];
+  let review = null;
+  const fakeChecker = {
+    async readStatement() { return { supplier_name: 'Gliderol International Pty Ltd', statement_date: '2026-09-30', total_due: 589.6, lines: [{ date: '2026-09-22', reference: 'S799999', type: 'invoice', amount: 589.6 }] }; },
+    async review(data) {
+      review = data;
+      return { summary: 'ok', price_list_notes: null, actions: [], invoices: [{ reference: 'S799999', verdict: 'ok', headline: '', price: '', job: '', rules_applied: [], difference_ex_gst: 0 }] };
+    },
+  };
+  const app6 = createApp({ config, repo, processor, fetchJobImpl: async (u) => ({ ...JOBS[u], description: 'notes' }), fetchActiveJobsImpl, findJobByNumberImpl,
+    diaryApi: fakeDiary, outlookApi: fakeGraph, checker: fakeChecker });
+  processor.lookupJobs = app6.locals.lookupJobs; processor.onStatement = app6.locals.onStatement; processor.afterRead = null;
+  const srv = await new Promise((r) => { const x = app6.listen(0, () => r(x)); });
+  const b6 = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const t = await openCard('chk-job', 'acc-chk');
+    repo.saveOutlook('acc-chk', { email: 'accounts@x', accessToken: 'a', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), connectedAt: new Date().toISOString() });
+    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st'], { type: 'application/pdf' }), 'Statement.pdf');
+    const { id } = await fetch(`${b6}/api/checks`, { method: 'POST', headers: { Authorization: `Bearer ${t}` }, body: sf }).then((x) => x.json());
+    let c;
+    for (let i = 0; i < 200; i++) {
+      c = await fetch(`${b6}/api/checks/${id}`, { headers: { Authorization: `Bearer ${t}` } }).then((x) => x.json());
+      if (c.progress) progressSeen.push(c.progress);
+      if (c.status === 'done' || c.status === 'error') break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(c.status, 'done', c.error);
+    assert.deepEqual(searched, ['S799999']);
+    assert.ok(c.matched[0].invoice, 'found in Outlook and imported');
+    assert.equal(c.matched[0].from_outlook, true);
+    assert.equal(c.matched[0].jobs[0].job_number, '209500');
+    assert.equal(c.matched[0].jobs[0].suggested, true, 'checked against the job printed on it, still to be approved');
+    assert.equal(review.lines[0].invoice.found_in_job_costs, true);
+    assert.ok(c.started_at);
+    assert.equal(c.progress, null, 'progress cleared when done');
+  } finally {
+    repo.removeOutlook('acc-chk');
+    srv.close();
+  }
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

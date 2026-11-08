@@ -175,7 +175,12 @@ function renderCheck() {
   const title = `<h2 style="margin:0 0 6px">${esc(c.supplier || c.file_name || 'Statement')}${c.statement_date ? ' · statement ' + esc(fmtDate(c.statement_date)) : ''}
     ${c.date_from || c.date_to ? `<span class="muted" style="font-weight:600;font-size:13px"> · only invoices ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</span>` : ''}</h2>`;
   if (c.status === 'reading' || c.status === 'checking') {
-    $('#content').innerHTML = back + title + `<div class="panel"><span class="spin"></span> <b>${STATUS[c.status]}</b> <span class="muted">${c.status === 'checking' ? 'Comparing every invoice with its job, the price list and your rules. This takes 1–3 minutes.' : ''}</span></div>`;
+    const mins = (t) => Math.max(0, Math.round((Date.now() - Date.parse(t)) / 60000));
+    const started = c.started_at || c.created_at;
+    const stale = Date.now() - Date.parse(c.progress_at || started) > 12 * 60000;
+    $('#content').innerHTML = back + title + `<div class="panel">${stale ? '⚠' : '<span class="spin"></span>'} <b>${esc(c.progress || STATUS[c.status])}</b>
+      <div class="muted" style="margin-top:6px">Running for ${mins(started)} min${c.progress_at ? ` · last step ${mins(c.progress_at) === 0 ? 'just now' : mins(c.progress_at) + ' min ago'}` : ''}. You can close this window – it carries on, and the result is saved under Past checks.</div>
+      ${stale ? `<div class="row"><span style="color:var(--bad)">This check hasn't moved on for over 12 minutes (the app may have restarted).</span><button class="primary" data-rerun>↻ Run again</button></div>` : ''}</div>`;
     return;
   }
   if (c.status === 'waiting') {
@@ -201,7 +206,7 @@ function renderCheck() {
     const isOpen = open.has(m.reference);
     return `<tr class="main" data-toggle="${esc(m.reference)}"><td><button class="lnk" data-ref="${esc(m.reference)}">${esc(m.reference)}</button>${m.invoice && m.invoice.paid ? ' <span class="chip v-ok">Paid</span>' : ''}</td>
       <td>${esc(fmtDate(m.date))}</td><td class="num">${money(m.amount)}</td>
-      <td>${m.jobs.length ? m.jobs.map((j) => `<button class="lnk" data-job="${esc(j.job_number)}" data-inv="${m.invoice ? m.invoice.id : ''}">#${esc(j.job_number)}</button>${(j.badges || []).filter((b) => /paid/i.test(b)).map((b) => ` <span class="chip v-problem" title="Badge on the job in ServiceM8">🏷 ${esc(b)}</span>`).join('')}`).join(' ') : `<span class="muted">${m.invoice ? 'not on a job' : '–'}</span>`}</td>
+      <td>${m.from_outlook ? '<span class="chip v-waiting" title="Not in Job Costs before this check: found in Outlook and imported">📥 from Outlook</span> ' : ''}${m.jobs.length ? m.jobs.map((j) => `<button class="lnk" data-job="${esc(j.job_number)}" data-inv="${m.invoice ? m.invoice.id : ''}">#${esc(j.job_number)}</button>${j.suggested ? ' <span class="muted" style="font-size:11px" title="The job number on the invoice – approve it in the Inbox">(suggested)</span>' : ''}${(j.badges || []).filter((b) => /paid/i.test(b)).map((b) => ` <span class="chip v-problem" title="Badge on the job in ServiceM8">🏷 ${esc(b)}</span>`).join('')}`).join(' ') : `<span class="muted">${m.invoice ? 'not on a job' : '–'}</span>`}</td>
       <td><span class="chip v-${v.verdict}">${VERDICT[v.verdict] || v.verdict}</span></td>
       <td>${linkify(v.headline || '')}${v.difference_ex_gst ? ` <span class="muted">(${v.difference_ex_gst > 0 ? '+' : ''}${money(v.difference_ex_gst)} ex GST)</span>` : ''} <span class="muted">${isOpen ? '▴' : '▾'}</span></td></tr>
       ${isOpen ? `<tr class="detail"><td colspan="6"><div class="lbl">Price</div><div>${linkify(v.price || '–')}</div>

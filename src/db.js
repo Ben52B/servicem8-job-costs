@@ -331,6 +331,8 @@ function migrateColumns(db) {
   for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT']]) {
     if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
   }
+  // what a running check is doing right now, and when it last moved on
+  for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');

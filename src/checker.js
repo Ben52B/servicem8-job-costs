@@ -53,6 +53,8 @@ How to check:
 - Job: check the invoice's order/reference number is the job, and that size, colour and type match the job notes and the
   quoted door price. Flag jobs that are Unsuccessful or point elsewhere (e.g. "invoiced through job 206594"),
   missing measurements, a different size, or costs not in the quote.
+- A job with "suggested": true is the job number printed on the invoice; the invoice is still waiting in the Inbox to be
+  approved onto it. Check against that job, and add "approve it onto job N in the Inbox" to the actions.
 - ServiceM8 badges on the job: a "Paid Supplier" (or "partly paid") badge means the office already marked the supplier as
   paid for that job. If the invoice is on the statement as still owing, flag it (verdict at least "check"): possible double
   payment, or the badge is wrong. Say so in the job check and add it to the actions.
@@ -122,7 +124,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
       system: REVIEW_PROMPT,
       output_config: { effort, format: betaZodOutputFormat(ReviewSchema) },
       messages: [{ role: 'user', content }],
-    });
+    }, { timeout: 9 * 60 * 1000, maxRetries: 1 }); // never hangs: at most ~18 minutes, then it says so
     const message = await stream.finalMessage();
     if (message.stop_reason === 'refusal') throw new Error('The check could not be done (declined by the model).');
     if (message.stop_reason === 'max_tokens') throw new Error('The statement is too long to check in one go. Narrow the dates and try again.');

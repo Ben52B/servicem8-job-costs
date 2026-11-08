@@ -315,11 +315,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
 
   /** Read the statement (once), find each invoice and its jobs, then have Claude review it all. */
   async function runCheck(accountUUID, id) {
+    const now = () => new Date().toISOString();
+    const progress = (text) => repo.updateCheck(id, { progress: text, progress_at: now() });
     try {
       let c = repo.getCheck(accountUUID, id);
+      repo.updateCheck(id, { started_at: now() });
       let statement = c.statement;
       if (!statement) {
         repo.updateCheck(id, { status: 'reading' });
+        progress('Reading the statement…');
         statement = await checker.readStatement({ filePath: path.join(repo.filesDir, c.file_path), fileName: c.file_name, mimeType: c.mime_type });
         repo.updateCheck(id, { statement, supplier: statement.supplier_name || null, statement_date: statement.statement_date || null });
       }
@@ -329,8 +333,26 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const seen = new Set();
       const lines = (statement.lines || []).filter((l) => ['invoice', 'credit'].includes(l.type) && inRange(l.date))
         .filter((l) => { const k = `${l.reference}|${l.type}|${Number(l.amount).toFixed(2)}`; return !seen.has(k) && seen.add(k); });
+      // Invoices on the statement that aren't in Job Costs yet: look for their emails in Outlook and import them.
+      const missing = lines.filter((l) => l.type === 'invoice' && !repo.findInvoiceByNumber(accountUUID, l.reference, statement.supplier_name)).map((l) => l.reference);
+      if (missing.length && repo.getOutlook(accountUUID)) {
+        progress(`Looking for ${missing.length} invoice${missing.length === 1 ? '' : 's'} in Outlook…`);
+        try {
+          const r = await outlook.findAndImport({ repo, config, api: outlookApi, accountKey: accountUUID, references: missing,
+            onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }),
+            onProgress: (k, n) => progress(`Looking for invoices in Outlook (${k}/${n})…`) });
+          if (r.found.length) {
+            progress(`Reading ${r.found.length} invoice${r.found.length === 1 ? '' : 's'} found in Outlook…`);
+            let timer;
+            await Promise.race([processor.idle(), new Promise((res) => { timer = setTimeout(res, 4 * 60 * 1000); })]);
+            clearTimeout(timer);
+          }
+          c.found_in_outlook = r.found;
+        } catch (e) { console.error(`Statement check ${id}: Outlook search failed: ${e.message}`); }
+      }
       const token = await accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
       const jobInfo = new Map();
+      const jobsTotal = new Set(lines.flatMap((l) => { const i = repo.findInvoiceByNumber(accountUUID, l.reference, statement.supplier_name); return i ? repo.jobsOnInvoice(i.id).map((j) => j.job_uuid) : []; })).size;
       const matched = [];
       const forClaude = [];
       const invoiceFiles = [];
@@ -338,8 +360,12 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         const inv = repo.findInvoiceByNumber(accountUUID, l.reference, statement.supplier_name);
         const jobs = [];
         if (inv) {
-          for (const j of repo.jobsOnInvoice(inv.id)) {
+          // the jobs it's on; one that's still waiting in the Inbox: the job suggested for it
+          let onJobs = repo.jobsOnInvoice(inv.id).map((j) => ({ ...j, suggested: false }));
+          if (!onJobs.length && inv.suggested_job_uuid) onJobs = [{ job_uuid: inv.suggested_job_uuid, job_number: (repo.getJob(inv.suggested_job_uuid) || {}).job_number, suggested: true }];
+          for (const j of onJobs) {
             if (!jobInfo.has(j.job_uuid)) {
+              progress(`Getting job ${jobInfo.size + 1}${jobsTotal ? ' of ' + jobsTotal : ''} from ServiceM8…`);
               const info = token ? await fetchJobImpl(j.job_uuid, token).catch(() => null) : null;
               const local = repo.getJob(j.job_uuid) || {};
               jobInfo.set(j.job_uuid, {
@@ -349,13 +375,13 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
                 servicem8_badges: (info && info.badges) || [],
               });
             }
-            jobs.push({ job_uuid: j.job_uuid, job_number: jobInfo.get(j.job_uuid).job_number, badges: jobInfo.get(j.job_uuid).servicem8_badges });
+            jobs.push({ job_uuid: j.job_uuid, job_number: jobInfo.get(j.job_uuid).job_number, badges: jobInfo.get(j.job_uuid).servicem8_badges, suggested: j.suggested });
           }
           if (inv.file_path && invoiceFiles.length < 40 && isSupported(inv.file_name, inv.mime_type)) {
             invoiceFiles.push({ reference: l.reference, file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type });
           }
         }
-        matched.push({ reference: l.reference, date: l.date, amount: l.amount, type: l.type,
+        matched.push({ reference: l.reference, date: l.date, amount: l.amount, type: l.type, from_outlook: (c.found_in_outlook || []).includes(l.reference),
           invoice: inv ? { id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, total: inv.total, paid: repo.itemsOf(inv.id).every((x) => x.paid) } : null, jobs });
         forClaude.push({
           reference: l.reference, date: l.date, amount_inc_gst: l.amount, type: l.type,
@@ -372,6 +398,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const fits = allLists.filter((p) => word(p.supplier).some((w) => sup.includes(w)));
       const priceLists = (fits.length ? fits : allLists).slice(0, 4);
       const rulesUsed = repo.rulesFor(accountUUID, lines.map((l) => l.reference));
+      progress(`Claude is checking ${lines.length} line${lines.length === 1 ? '' : 's'} against the price list, your rules and the jobs… (usually 1–4 minutes)`);
       const result = await checker.review({
         statement: { supplier: statement.supplier_name, account_number: statement.account_number, statement_date: statement.statement_date, total_due: statement.total_due,
           checking_only: c.date_from || c.date_to ? `invoices dated ${c.date_from || 'any'} to ${c.date_to || 'any'}` : 'all invoices on the statement' },
@@ -382,7 +409,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         // Worked out in code: use these totals as they are (don't add them up again).
         money_checks: reconcile,
       }, { priceLists, invoiceFiles });
-      repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, finished_at: new Date().toISOString() });
+      repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
     } catch (e) {
       console.error(`Statement check ${id}: ${e.message}`);
@@ -1255,7 +1282,8 @@ window.addEventListener('message', function (e) {
   api.post('/checks/:id/rerun', (req, res) => {
     const c = repo.getCheck(req.account, req.params.id);
     if (!c) return res.status(404).json({ error: 'Not found' });
-    if (['reading', 'checking'].includes(c.status)) return res.status(409).json({ error: 'This check is still running' });
+    const lastMove = Date.parse(c.progress_at || c.started_at || c.created_at) || 0;
+    if (['reading', 'checking'].includes(c.status) && Date.now() - lastMove < 12 * 60 * 1000) return res.status(409).json({ error: 'This check is still running' });
     const b = req.body || {};
     const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
     const set = {};
