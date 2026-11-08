@@ -79,9 +79,11 @@
   ol.actions { margin: 6px 0 0; padding-left: 20px; } ol.actions li { margin: 4px 0; }
 </style>
 <style>
-  /* Prices page: the price-list table needs room, so the two panels stack below 1250px */
-  @media (max-width: 1250px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
-  table.t td { overflow-wrap: anywhere; }
+  /* Prices page: price lists full width, rules underneath (the table needs the room) */
+  .grid2 { grid-template-columns: minmax(0, 1fr) !important; max-width: 1100px; }
+  table.t td { white-space: nowrap; vertical-align: middle; }
+  table.t td.file { white-space: normal; max-width: 0; width: 45%; }
+  table.t td.file span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -108,7 +110,7 @@ let data = null;
 let editingRule = null;
 
 function render() {
-  const lists = data.priceLists.map((p) => `<tr><td><b>${esc(p.supplier)}</b></td><td>${esc(p.name || '')}</td><td>${esc(fmtDate(p.created_at))}</td>
+  const lists = data.priceLists.map((p) => `<tr><td><b>${esc(p.supplier)}</b></td><td class="file"><span title="${esc(p.name || '')}">${esc(p.name || '')}</span></td><td>${esc(fmtDate(p.created_at))}</td>
       <td class="num">${p.checked ? `${p.checked}${p.flagged ? ` <span class="chip v-check" title="Flagged for a look">${p.flagged} flagged</span>` : ''}` : '<span class="muted">–</span>'}</td>
       <td><a class="lnk" href="${p.mime_type === 'application/pdf' ? `/viewer.html?pl=${p.id}&t=${T}&name=${encodeURIComponent(p.name || 'Price list')}` : `/api/price-lists/${p.id}/file?t=${T}`}" target="_blank" rel="noopener">View</a></td>
       <td><button class="danger" data-pl-del="${p.id}">Delete</button></td></tr>`).join('');
