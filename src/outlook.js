@@ -231,14 +231,18 @@ async function importList({ repo, api, token, accountKey, onMail, messages, forc
   const result = { emails: messages.length, imported: 0, files: 0, skipped: 0, notInvoices: 0 };
   for (const m of messages) {
     const key = importKey(m);
-    if (repo.isMailProcessed(key) && !(force && force.has(m.id))) { result.skipped++; continue; }
+    // looked at before: skip, unless this email was ticked on purpose (then it's read again)
+    const st = repo.importStatus ? repo.importStatus(accountKey, key, m.subject).state : (repo.isMailProcessed(key) ? 'imported' : 'new');
+    if (st !== 'new' && !(force && force.has(m.id))) { result.skipped++; continue; }
     const { mail, worthReading } = await toMail(api, token, m);
     if (worthReading) {
       const r = await onMail(mail, accountKey || null);
       result.imported++;
       result.files += (r && r.created) || 0;
+      if (repo.recordImport) repo.recordImport(key, (r && r.ids) || []);
     } else {
       result.notInvoices++;
+      if (repo.recordImport) repo.recordImport(key, []);
     }
     repo.markMailProcessed(key);
   }
@@ -271,7 +275,7 @@ async function checkOutlook({ repo, config, api = graphApi, onMail, log = consol
         const key = `ms:${m.id}`;
         const idKey = m.internetMessageId ? `id:${m.internetMessageId}` : null;
         // seen before (here, or brought in with "Import from Outlook"), or in a folder that's skipped
-        if (repo.isMailProcessed(key) || (idKey && repo.isMailProcessed(idKey)) || repo.isMailProcessed(importKey(m))) continue;
+        if (repo.isMailProcessed(key) || (idKey && repo.isMailProcessed(idKey)) || repo.isMailProcessed(importKey(m))) continue; // seen before
         if (m.parentFolderId && skip.includes(m.parentFolderId)) { repo.markMailProcessed(key); continue; }
         try {
           const text = m.body?.content || '';
@@ -281,8 +285,9 @@ async function checkOutlook({ repo, config, api = graphApi, onMail, log = consol
           const files = pickFiles(mail);
           const mentionsInvoice = INVOICE_WORDS.test(`${mail.subject}\n${text.slice(0, 3000)}`);
           if (files.length || (mentionsInvoice && text.trim().length > 80)) {
-            await onMail({ ...mail, attachments: files }, conn.account_key || null);
-            repo.markMailProcessed(importKey(m)); // shows as "✓ imported" in Import from Outlook
+            const r = await onMail({ ...mail, attachments: files }, conn.account_key || null);
+            repo.markMailProcessed(importKey(m));
+            if (repo.recordImport) repo.recordImport(importKey(m), (r && r.ids) || []); // so Import from Outlook shows what became of it
             handled++;
           }
         } catch (e) {

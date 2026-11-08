@@ -34,11 +34,13 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
       if (result.document_type === 'statement' && api.onStatement) {
         try { api.onStatement(inv, result); } catch (e) { log.error(`Statement ${id}: ${e.message}`); return repo.setInvoiceError(id, 'This is a statement. Upload it in 🔎 Statement check.'); }
+        repo.setImportOutcome?.(id, 'statement');
         return repo.deleteInvoice(id);
       }
       // From the Outlook inbox: keep only real bills (quotes and other PDFs are dropped quietly).
       if (inv.source === 'outlook' && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
         log.log?.(`Outlook: "${inv.file_name}" is a ${result.document_type}, not kept`);
+        repo.setImportOutcome?.(id, result.document_type);
         return repo.deleteInvoice(id);
       }
       // A remittance (payment advice) is not a cost, wherever it came from.
@@ -57,6 +59,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
     } catch (e) {
       if (inv.source === 'outlook' && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
+        repo.setImportOutcome?.(id, 'not_invoice');
         return repo.deleteInvoice(id);
       }
       log.error(`Invoice ${id}: ${e.message}`);

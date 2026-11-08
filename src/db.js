@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS meta (
   value  TEXT
 );
 
+-- What became of each email brought in from Outlook: the invoices made from it, and what happened to each.
+CREATE TABLE IF NOT EXISTS mail_imports (
+  mail_key    TEXT NOT NULL,
+  invoice_id  INTEGER NOT NULL,          -- 0 = the email had nothing to read
+  outcome     TEXT,                      -- null = kept as an invoice; statement | quote | remittance | not_invoice | nothing
+  PRIMARY KEY (mail_key, invoice_id)
+);
 CREATE TABLE IF NOT EXISTS processed_mail (
   mail_key    TEXT PRIMARY KEY,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -528,6 +535,35 @@ function createRepo(db, dataDir) {
       if (!sup) return null;
       const words = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !['pty', 'ltd', 'the', 'and', 'group'].includes(w));
       return repo.listPriceLists(accountUUID).find((p) => words(p.supplier).some((w) => sup.includes(w))) || null;
+    },
+
+    // ----- what became of imported emails -----
+    recordImport(mailKey, invoiceIds) {
+      const ins = db.prepare('INSERT OR REPLACE INTO mail_imports (mail_key, invoice_id, outcome) VALUES (?, ?, ?)');
+      if (!invoiceIds.length) ins.run(mailKey, 0, 'nothing');
+      for (const id of invoiceIds) ins.run(mailKey, id, null);
+    },
+    setImportOutcome(invoiceId, outcome) {
+      db.prepare('UPDATE mail_imports SET outcome = ? WHERE invoice_id = ?').run(outcome, invoiceId);
+    },
+    /**
+     * Where an email stands: "imported" (an invoice from it is in Job Costs), "statement" (went to Statement check),
+     * "skipped" (read, not an invoice: quote / remittance / not an invoice / nothing to read), or "new".
+     */
+    importStatus(accountUUID, mailKey, subject) {
+      const rows = db.prepare('SELECT * FROM mail_imports WHERE mail_key = ?').all(mailKey);
+      if (rows.length) {
+        const kept = rows.filter((r) => r.invoice_id && !r.outcome && repo.getInvoice(r.invoice_id));
+        if (kept.length) return { state: 'imported' };
+        if (rows.some((r) => r.outcome === 'statement')) return { state: 'statement' };
+        if (rows.some((r) => r.invoice_id && !r.outcome)) return { state: 'deleted' }; // imported, then deleted in Job Costs
+        const why = rows.map((r) => r.outcome).find(Boolean);
+        return { state: 'skipped', why };
+      }
+      if (!repo.isMailProcessed(mailKey)) return { state: 'new' };
+      // brought in before this was recorded: imported only if an invoice from that email is still here
+      const found = subject && db.prepare("SELECT 1 FROM invoices WHERE account_uuid IS ? AND email_subject = ? LIMIT 1").get(accountUUID, subject);
+      return found ? { state: 'imported' } : { state: 'skipped', why: 'not_kept' };
     },
 
     // ----- statement checks -----

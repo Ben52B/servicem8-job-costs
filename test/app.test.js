@@ -207,7 +207,7 @@ test('one email address: invoices land in the inbox with a suggested job; one cl
 
   // Job number in the subject
   const r = await email(a, { subject: 'RE: New door order Alpha GD 208101', file: 'door-email.pdf' });
-  assert.deepEqual(r, { ok: true, matched: 1, created: 1 });
+  assert.deepEqual([r.ok, r.matched, r.created], [true, 1, 1]);
   const inv = latestInvoice();
   assert.equal(inv.origin_job_uuid, null);
   let s = await summary(a);
@@ -894,7 +894,11 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     assert.deepEqual((await get('')).folders.map((f) => f.name), ['Inbox', 'Need to pay']);
     assert.deepEqual((await get('?folder=f-pay')).folders.map((f) => f.name), ['Gliderol', 'Taurean']);
     const glList = await get('?folder=f-gl');
-    assert.deepEqual(glList.messages.map((m) => m.imported), [true, true]);
+    assert.deepEqual(glList.messages.map((m) => [m.status, m.why]), [['imported', null], ['skipped', 'nothing']], 'only an email with an invoice in Job Costs counts as imported');
+    // an email whose invoice was deleted in Job Costs isn't "imported" any more
+    const glInv = repo.db.prepare("SELECT id FROM invoices WHERE invoice_number = 'S680001'").get();
+    repo.deleteInvoice(glInv.id);
+    assert.equal((await get('?folder=f-gl')).messages[0].status, 'deleted');
     const taList = await get('?folder=f-ta');
     assert.equal(taList.messages[0].imported, false);
     // Tick one email + a whole folder: the already-imported folder brings nothing new
@@ -919,7 +923,7 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     // Checking again doesn't add the same emails twice
     await app3.locals.checkOutlook();
     await processor.idle();
-    assert.equal(mine().length, 6);
+    assert.equal(mine().length, 5); // one was deleted above
     st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(st.connected, true);
     assert.equal(st.email, 'accounts@doorimage.com.au');

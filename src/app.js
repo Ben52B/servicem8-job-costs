@@ -1111,7 +1111,10 @@ window.addEventListener('message', function (e) {
         req.query.page ? Promise.resolve(null) : outlookApi.childFolders(token, folder),
         folder ? outlookApi.folderPage(token, folder, req.query.page ? String(req.query.page) : null) : Promise.resolve({ messages: [], next: null }),
       ]);
-      res.json({ folders, messages: page.messages.map((m) => ({ ...m, imported: repo.isMailProcessed(outlook.importKey(m)) })), next: page.next });
+      res.json({ folders, next: page.next, messages: page.messages.map((m) => {
+        const st = repo.importStatus(req.account, outlook.importKey(m), m.subject);
+        return { ...m, status: st.state, why: st.why || null, imported: st.state === 'imported' };
+      }) });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
   // Import what was ticked: { message_ids: [...], folder_ids: [...] }
@@ -1323,16 +1326,18 @@ window.addEventListener('message', function (e) {
     }
 
     let created = 0;
+    const ids = [];
     for (const acc of accounts) {
       for (const f of files) {
-        addInvoiceFile({
+        const inv = addInvoiceFile({
           accountUUID: acc.accountUUID, source, name: f.name, contentType: f.contentType, buffer: f.buffer,
           emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
         });
+        ids.push(inv.id);
         created++;
       }
     }
-    return { matched: accounts.length, created };
+    return { matched: accounts.length, created, ids };
   }
   app.locals.processMail = processMail;
 
