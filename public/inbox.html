@@ -135,7 +135,7 @@ function renderImport() {
       <button class="small" data-open-folder="${esc(f.id)}" data-name="${esc(f.name)}">Open ›</button></div>`).join('');
   const pickable = imp.messages.filter((m) => !m.imported);
   const allOn = pickable.length && pickable.every((m) => imp.emails.has(m.id));
-  const mailRows = imp.messages.map((m) => `<label class="irow ${m.imported ? 'done' : ''}"><input type="checkbox" data-pick-mail="${esc(m.id)}" ${imp.emails.has(m.id) ? 'checked' : ''} ${m.imported ? 'disabled' : ''}>
+  const mailRows = imp.messages.map((m) => `<label class="irow ${m.imported ? 'done' : ''}"><input type="checkbox" data-pick-mail="${esc(m.id)}" ${imp.emails.has(m.id) ? 'checked' : ''} ${m.imported ? 'title="Already imported – tick to bring it in again"' : ''}>
       <span class="muted" style="width:72px">${esc(fmtWhen(m.received))}</span><span style="width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.from)}</span>
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.hasAttachments ? '📎 ' : ''}${esc(m.subject)}</span>
       ${m.imported ? '<span class="chip c-proc">✓ imported</span>' : ''}</label>`).join('');
@@ -161,7 +161,9 @@ function render() {
   // Type a job number; the browser suggests matching jobs as you type.
   const jobBox = (id, other) => `<span style="display:inline-flex;gap:4px"><input id="j-${id}" list="jobList" data-job-input="${id}" placeholder="${other ? 'Other job #' : 'Job #'}" autocomplete="off"
     style="width:120px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button data-assign-pick="${id}">Add</button></span>`;
-  let h = `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
+  let h = data.statementsWaiting ? `<div class="item" style="background:#eef2ff;border-color:#c7d2fe"><div>📄 <b>${data.statementsWaiting} supplier statement${data.statementsWaiting === 1 ? '' : 's'}</b> came in and ${data.statementsWaiting === 1 ? 'was' : 'were'} moved to Statement check, ready to run.</div>
+    <div class="acts"><a class="btn" href="/checks?t=${encodeURIComponent(BOOT.token)}">🔎 Open Statement check</a></div></div>` : '';
+  h += `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
   if (!fresh.length && !data.pending.length) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {
     h += `<div class="item"><div><div class="t">${esc(p.file_name || 'Invoice')} ${p.status === 'processing' ? '<span class="chip c-proc"><span class="spin"></span> Reading</span>' : '<span class="chip c-err">Couldn’t read</span>'}</div>
@@ -246,9 +248,11 @@ document.addEventListener('click', async (e) => {
     if (d.importGo !== undefined) {
       const wholeNames = [...imp.whole.values()];
       if (wholeNames.length && !confirm(`Import every email in: ${wholeNames.join(', ')}?`)) return;
+      const repeats = imp.messages.filter((m) => m.imported && imp.emails.has(m.id)).length;
+      if (repeats && !confirm(`${repeats} of the ticked emails ${repeats === 1 ? 'was' : 'were'} imported before. Bring ${repeats === 1 ? 'it' : 'them'} in again?`)) return;
       b.disabled = true; b.textContent = 'Importing… (this can take a minute)';
       try {
-        const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()] }) });
+        const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()], again: true }) });
         imp.emails.clear(); imp.whole.clear();
         $('#importBox').hidden = true;
         toast(`${r.emails} email${r.emails === 1 ? '' : 's'} found: ${r.files} file${r.files === 1 ? '' : 's'} being read${r.skipped ? ` · ${r.skipped} already imported` : ''}${r.notInvoices ? ` · ${r.notInvoices} without an invoice` : ''}`);

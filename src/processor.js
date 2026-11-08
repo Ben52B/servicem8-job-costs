@@ -31,7 +31,12 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         mimeType: inv.mime_type,
         context: { emailFrom: inv.email_from, emailSubject: inv.email_subject },
       });
-      // From the Outlook inbox: keep only real bills (quotes, statements and other PDFs are dropped quietly).
+      // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
+      if (result.document_type === 'statement' && api.onStatement) {
+        try { api.onStatement(inv, result); } catch (e) { log.error(`Statement ${id}: ${e.message}`); return repo.setInvoiceError(id, 'This is a statement. Upload it in 🔎 Statement check.'); }
+        return repo.deleteInvoice(id);
+      }
+      // From the Outlook inbox: keep only real bills (quotes and other PDFs are dropped quietly).
       if (inv.source === 'outlook' && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
         log.log?.(`Outlook: "${inv.file_name}" is a ${result.document_type}, not kept`);
         return repo.deleteInvoice(id);
@@ -59,6 +64,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
 
   const api = {
     lookupJobs: null, // set by the app: (invoiceId) => found a job?
+    onStatement: null, // set by the app: (invoice, what was read) => file it under Statement check
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);

@@ -208,25 +208,30 @@ async function importFolder({ repo, config, api = graphApi, accountKey, folderId
 }
 
 /** Import chosen emails (by id) and whole folders (every email in them). */
-async function importChosen({ repo, config, api = graphApi, accountKey, messageIds = [], folderIds = [], onMail }) {
+async function importChosen({ repo, config, api = graphApi, accountKey, messageIds = [], folderIds = [], onMail, again = false }) {
   const conn = repo.getOutlook(accountKey);
   if (!conn || !conn.refresh_token) throw new Error('Outlook isn\u2019t connected');
   const token = await tokenFor(conn, { repo, config, api });
   const messages = [];
   for (const f of folderIds) messages.push(...await api.listFolderMessages(token, f, null, null));
   const have = new Set(messages.map((m) => m.id));
-  for (const id of messageIds) if (!have.has(id)) { messages.push(await api.getMessage(token, id)); have.add(id); }
-  return importList({ repo, api, token, accountKey, onMail, messages });
+  const picked = new Set();
+  for (const id of messageIds) {
+    if (!have.has(id)) { const m = await api.getMessage(token, id); messages.push(m); have.add(id); }
+    picked.add(id);
+  }
+  // emails ticked one by one can be brought in again on purpose ("again"); whole folders never repeat
+  return importList({ repo, api, token, accountKey, onMail, messages, force: again ? picked : null });
 }
 
 /** Has this email been imported already? (by its id) */
 const importKey = (m) => `import:${m.internetMessageId || m.id}`;
 
-async function importList({ repo, api, token, accountKey, onMail, messages }) {
+async function importList({ repo, api, token, accountKey, onMail, messages, force = null }) {
   const result = { emails: messages.length, imported: 0, files: 0, skipped: 0, notInvoices: 0 };
   for (const m of messages) {
     const key = importKey(m);
-    if (repo.isMailProcessed(key)) { result.skipped++; continue; }
+    if (repo.isMailProcessed(key) && !(force && force.has(m.id))) { result.skipped++; continue; }
     const { mail, worthReading } = await toMail(api, token, m);
     if (worthReading) {
       const r = await onMail(mail, accountKey || null);

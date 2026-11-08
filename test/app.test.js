@@ -39,6 +39,7 @@ const fakeAnalyzer = {
         items: [{ description: 'AA roller door 2100x4840', category: 'materials', line_total: 1226 }] };
     }
     if (/quote/.test(fileName)) return { ...DOOR, document_type: 'quote', invoice_number: 'Q-1' };
+    if (/statement/i.test(fileName)) return { ...DOOR, document_type: 'statement', supplier_name: 'Gliderol International Pty Ltd', invoice_number: null };
     if (/remittance/.test(fileName)) return { ...DOOR, document_type: 'remittance', invoice_number: 'R-9' };
     if (/receipt/.test(fileName)) {
       return { is_financial_document: true, document_type: 'receipt', supplier_name: 'Bunnings', invoice_number: 'R-1', total: 55, tax: 5, payment_status: 'paid',
@@ -1108,6 +1109,25 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(boot.select, c.matched[0].invoice.id);
     assert.equal(boot.back, `check:${id}`);
     assert.equal((await fetch(`${b5}/checks?t=${encodeURIComponent(t)}`)).status, 200);
+
+    // A statement dropped into the Inbox goes to Statement check, "not run yet", instead of disappearing
+    processor.onStatement = app5.locals.onStatement; // other test apps share this processor
+    const sfd = new FormData(); sfd.append('files', new Blob(['%PDF-1.4 statement'], { type: 'application/pdf' }), 'Gliderol Statement October.pdf');
+    assert.equal((await call(t, '/inbox/upload', { method: 'POST', body: sfd })).status, 201);
+    await processor.idle();
+    const home = await call(t, '/checks').then((x) => x.json());
+    const waiting = home.checks.find((x) => x.status === 'waiting');
+    assert.ok(waiting, 'filed under Statement check');
+    assert.equal(waiting.supplier, 'Gliderol International Pty Ltd');
+    assert.ok(!repo.db.prepare("SELECT 1 FROM invoices WHERE file_name = 'Gliderol Statement October.pdf'").get(), 'not left as an invoice');
+    const inboxData = await call(t, '/inbox').then((x) => x.json());
+    assert.equal(inboxData.statementsWaiting, 1, 'the Inbox says where it went');
+    // run it, for October only
+    assert.equal((await call(t, `/checks/${waiting.id}/rerun`, { method: 'POST', json: { date_from: '2026-09-01', date_to: '2026-09-30' } })).status, 200);
+    let w;
+    for (let i = 0; i < 50; i++) { w = await call(t, `/checks/${waiting.id}`).then((x) => x.json()); if (w.status === 'done' || w.status === 'error') break; await new Promise((r) => setTimeout(r, 20)); }
+    assert.equal(w.status, 'done', w.error);
+    assert.equal(w.date_from, '2026-09-01');
   } finally {
     srv.close();
   }

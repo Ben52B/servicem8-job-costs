@@ -248,6 +248,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return repo.ensureJob({ jobUUID: uuid, accountUUID, ...(withStockFlag(info) || {}), jobNumber: (info && info.jobNumber) || String(number) });
   }
   // Invoices with a job number Job Costs hasn't seen (e.g. completed jobs): look them up.
+  // A statement read in the Inbox (uploaded or from Outlook) is filed under Statement check, ready to run.
+  processor.onStatement = app.locals.onStatement = (inv, read) => {
+    const name = inv.file_name || 'Statement.pdf';
+    const rel = saveFile(path.join(folderFor(inv.account_uuid), 'statements'), name, fs.readFileSync(path.join(repo.filesDir, inv.file_path)));
+    const c = repo.createCheck(inv.account_uuid ?? null, { fileName: name, filePath: rel, mimeType: inv.mime_type });
+    repo.updateCheck(c.id, { status: 'waiting', supplier: read.supplier_name || null, statement_date: read.invoice_date || null });
+    return c;
+  };
   processor.lookupJobs = app.locals.lookupJobs = async (invoiceId) => {
     const inv = repo.getInvoice(invoiceId);
     let found = false;
@@ -943,7 +951,8 @@ window.addEventListener('message', function (e) {
   api.get('/inbox', (req, res) => {
     const acc = repo.ensureAccount(req.account);
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
-      recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config) });
+      recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config),
+      statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length });
   });
   api.post('/inbox/:id/assign', async (req, res) => {
     const inv = accountInvoice(req, res);
@@ -1055,7 +1064,7 @@ window.addEventListener('message', function (e) {
     const messageIds = ids(req.body?.message_ids), folderIds = ids(req.body?.folder_ids).slice(0, 20);
     if (!messageIds.length && !folderIds.length) return res.status(400).json({ error: 'Tick the emails or folders to import' });
     try {
-      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds,
+      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds, again: req.body?.again === true,
         onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }) }));
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
@@ -1171,7 +1180,14 @@ window.addEventListener('message', function (e) {
     const c = repo.getCheck(req.account, req.params.id);
     if (!c) return res.status(404).json({ error: 'Not found' });
     if (['reading', 'checking'].includes(c.status)) return res.status(409).json({ error: 'This check is still running' });
-    repo.updateCheck(c.id, { status: c.statement ? 'checking' : 'reading', error: null });
+    const b = req.body || {};
+    const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+    const set = {};
+    if (b.date_from !== undefined) set.date_from = day(b.date_from);
+    if (b.date_to !== undefined) set.date_to = day(b.date_to);
+    if (b.instructions !== undefined) set.instructions = String(b.instructions || '').trim().slice(0, 4000) || null;
+    if (!checker) return res.status(500).json({ error: 'Statement checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
+    repo.updateCheck(c.id, { ...set, status: c.statement ? 'checking' : 'reading', error: null });
     runCheck(req.account, c.id).catch(() => {});
     res.json({ ok: true });
   });
