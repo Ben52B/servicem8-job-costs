@@ -48,14 +48,18 @@ async function fetchMe(accessToken) {
 }
 
 /** New inbox emails received since `since` (oldest first). */
+/**
+ * New emails received since `since`, in EVERY folder (the Inbox, its subfolders and any other folder),
+ * so an email filed away before the next check is still found. One query, only the new emails.
+ */
 async function listMessages(accessToken, since) {
   const q = new URLSearchParams({
     $filter: `receivedDateTime ge ${since.toISOString()}`,
     $orderby: 'receivedDateTime desc',
     $top: '50',
-    $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body,toRecipients',
+    $select: 'id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body,toRecipients,parentFolderId',
   });
-  let url = `/me/mailFolders/inbox/messages?${q}`;
+  let url = `/me/messages?${q}`;
   const out = [];
   for (let page = 0; url && page < 10; page++) {
     const data = await graph(url, accessToken);
@@ -150,7 +154,16 @@ async function getMessage(accessToken, id) {
   return graph(`/me/messages/${encodeURIComponent(id)}?$select=id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body`, accessToken);
 }
 
-const graphApi = { authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages, childFolders, folderPage, getMessage };
+/** Folders the automatic check leaves alone: Sent, Deleted, Drafts, Junk, Outbox. */
+async function skippedFolderIds(accessToken) {
+  const ids = [];
+  for (const name of ['sentitems', 'deleteditems', 'drafts', 'junkemail', 'outbox']) {
+    try { ids.push((await graph(`/me/mailFolders/${name}?$select=id`, accessToken)).id); } catch { /* not every mailbox has every folder */ }
+  }
+  return ids;
+}
+
+const graphApi = { skippedFolderIds, authorizeUrl, exchangeCode, refreshTokens, fetchMe, listMessages, listAttachments, listFolders, listFolderMessages, childFolders, folderPage, getMessage };
 
 /** Is this email worth reading? Attachments (PDF / real photos), or a body that talks about an invoice. */
 const INVOICE_WORDS = /\b(tax\s*invoice|invoice|inv\s*#?\d|receipt|bill|statement of account|remittance|payment due|amount due)\b/i;
@@ -227,6 +240,8 @@ async function importList({ repo, api, token, accountKey, onMail, messages }) {
   return result;
 }
 
+const skipCache = new Map(); // account -> { ids, at }
+
 async function checkOutlook({ repo, config, api = graphApi, onMail, log = console }) {
   const app = { clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId };
   let handled = 0;
@@ -241,11 +256,18 @@ async function checkOutlook({ repo, config, api = graphApi, onMail, log = consol
       // Look a little before the newest email seen (emails can arrive late); IDs stop repeats.
       const newest = conn.last_received ? Date.parse(conn.last_received) - 6 * 3600000 : Date.parse(conn.connected_at) - FIRST_LOOK_BACK_DAYS * 86400000;
       const messages = await api.listMessages(token, new Date(newest));
+      // Sent, Deleted, Drafts, Junk and Outbox are skipped (looked up once a day per mailbox)
+      const cached = skipCache.get(conn.account_key);
+      const skip = cached && Date.now() - cached.at < 86400000 ? cached.ids
+        : (api.skippedFolderIds ? await api.skippedFolderIds(token).catch(() => []) : []);
+      if (!cached || cached.ids !== skip) skipCache.set(conn.account_key, { ids: skip, at: Date.now() });
       let last = conn.last_received;
       for (const m of messages) {
         const key = `ms:${m.id}`;
         const idKey = m.internetMessageId ? `id:${m.internetMessageId}` : null;
-        if (repo.isMailProcessed(key) || (idKey && repo.isMailProcessed(idKey))) continue;
+        // seen before (here, or brought in with "Import from Outlook"), or in a folder that's skipped
+        if (repo.isMailProcessed(key) || (idKey && repo.isMailProcessed(idKey)) || repo.isMailProcessed(importKey(m))) continue;
+        if (m.parentFolderId && skip.includes(m.parentFolderId)) { repo.markMailProcessed(key); continue; }
         try {
           const text = m.body?.content || '';
           const attachments = m.hasAttachments ? await api.listAttachments(token, m.id) : [];
@@ -255,6 +277,7 @@ async function checkOutlook({ repo, config, api = graphApi, onMail, log = consol
           const mentionsInvoice = INVOICE_WORDS.test(`${mail.subject}\n${text.slice(0, 3000)}`);
           if (files.length || (mentionsInvoice && text.trim().length > 80)) {
             await onMail({ ...mail, attachments: files }, conn.account_key || null);
+            repo.markMailProcessed(importKey(m)); // shows as "✓ imported" in Import from Outlook
             handled++;
           }
         } catch (e) {

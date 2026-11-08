@@ -790,6 +790,7 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     refreshTokens: async () => ({ accessToken: 'ms-at2', refreshToken: 'ms-rt2', expiresAt: new Date(Date.now() + 3600e3).toISOString() }),
     fetchMe: async () => ({ email: 'accounts@doorimage.com.au', name: 'Accounts' }),
     listMessages: async (token) => { assert.ok(token.startsWith('ms-at')); calls.list++; return inbox; },
+    skippedFolderIds: async () => ['f-sent', 'f-deleted'],
     listAttachments: async (token, id) => [...inbox, ...folderMail, ...taMail].find((m) => m.id === id).files,
     listFolders: async () => [{ id: 'f-inbox', path: 'Inbox' }, { id: 'f-gl', path: 'Inbox / Need to pay / Gliderol', count: 2 }],
     listFolderMessages: async (token, folderId, from, to) => { calls.folder = { folderId, from, to }; return folderId === 'f-gl' ? folderMail : folderId === 'f-ta' ? taMail : []; },
@@ -902,10 +903,22 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     await processor.idle();
     assert.equal((await get('?folder=f-ta')).messages[0].imported, true);
 
+    // The automatic check looks in every folder: one filed in a subfolder is found, one in Sent Items isn't,
+    // and one already brought in with Import from Outlook isn't brought in again
+    inbox.push({ id: 'm8', internetMessageId: '<m8@x>', parentFolderId: 'f-paid', subject: 'Invoice for 208777', from: { emailAddress: { address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('Tax_Invoice_S690777_ref208777.pdf')] });
+    inbox.push({ id: 'm9', internetMessageId: '<m9@x>', parentFolderId: 'f-sent', subject: 'Our invoice to the customer', from: { emailAddress: { address: 'accounts@doorimage.com.au' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('Tax_Invoice_S690888_ref208777.pdf')] });
+    inbox.push({ ...taMail[0], parentFolderId: 'f-ta' });
+    await app3.locals.checkOutlook();
+    await processor.idle();
+    const names = mine().map((i) => i.file_name);
+    assert.ok(names.includes('Tax_Invoice_S690777_ref208777.pdf'), 'filed in a subfolder: found');
+    assert.ok(!names.includes('Tax_Invoice_S690888_ref208777.pdf'), 'Sent Items: skipped');
+    assert.equal(names.filter((n) => n === 'Tax_Invoice_S690001_ref208777.pdf').length, 1, 'imported by hand: not brought in twice');
+
     // Checking again doesn't add the same emails twice
     await app3.locals.checkOutlook();
     await processor.idle();
-    assert.equal(mine().length, 5);
+    assert.equal(mine().length, 6);
     st = await fetch(`${b3}/api/outlook`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(st.connected, true);
     assert.equal(st.email, 'accounts@doorimage.com.au');
