@@ -1098,6 +1098,18 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(seen.data.money_checks.checked_total_inc_gst, 1889.6, 'the review gets the totals worked out in code');
     assert.deepEqual(c.reconcile.amount_mismatches, [], 'the credit is not compared with the invoice');
     assert.equal(c.reconcile.ok, true);
+    // the rest of the statement: August, only checked for paid / not paid
+    assert.deepEqual(c.reconcile.period, { from: '2026-09-01', to: null });
+    assert.equal(c.reconcile.rest.earlier_count, 1);
+    assert.equal(c.reconcile.rest.earlier_total, 21.56);
+    assert.equal(c.reconcile.rest.later_count, 0);
+    assert.equal(c.reconcile.rest.payments_total, -500);
+    assert.equal(Math.round(c.reconcile.checked_total_inc_gst * 100) + Math.round(c.reconcile.rest.earlier_total * 100), Math.round(c.reconcile.statement_lines_total * 100), 'period + earlier = the whole statement');
+    assert.deepEqual(c.reconcile.rest.earlier_unpaid.map((l) => [l.reference, l.in_job_costs]), [['S600000', false]]);
+    assert.equal(c.reconcile.rest.paid_but_listed.length, 0);
+    const past = (await call(t, '/checks').then((x) => x.json())).checks.find((x) => x.id === id);
+    assert.equal(past.period_total, 1889.6);
+    assert.equal(past.period_count, 3);
     assert.equal(c.matched[0].jobs[0].job_number, '209500');
     assert.equal(c.matched[1].invoice, null);
     assert.deepEqual(seen.data.rules, ['Job 209500: Gliderol bills 1 door only'], 'only rules that are on');

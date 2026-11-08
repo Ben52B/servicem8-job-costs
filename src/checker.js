@@ -58,6 +58,8 @@ How to check:
 - ServiceM8 badges on the job: a "Paid Supplier" (or "partly paid") badge means the office already marked the supplier as
   paid for that job. If the invoice is on the statement as still owing, flag it (verdict at least "check"): possible double
   payment, or the badge is wrong. Say so in the job check and add it to the actions.
+- Only talk about the invoices in THIS check (the chosen period). The rest of the statement (earlier months, payments) is
+  summarised separately by the app; don't base the bottom line on the statement's overall total.
 - MONEY: "money_checks" was worked out in code. Use its totals exactly as given; never add amounts up yourself.
   Any amount mismatch or invoice that doesn't add up is at least "check", and goes in the actions.
 - Invoices marked as not found in Job Costs: verdict "missing".

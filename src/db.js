@@ -641,7 +641,8 @@ function createRepo(db, dataDir) {
     },
     listChecks(accountUUID) {
       return db.prepare(`SELECT id, status, file_name, supplier, statement_date, date_from, date_to, error, created_at, finished_at,
-        json_extract(statement, '$.total_due') AS total_due FROM statement_checks WHERE account_key = ? ORDER BY id DESC LIMIT 50`).all(accountUUID ?? '');
+        json_extract(statement, '$.total_due') AS total_due, json_extract(reconcile, '$.checked_total_inc_gst') AS period_total,
+        json_extract(reconcile, '$.checked_count') AS period_count FROM statement_checks WHERE account_key = ? ORDER BY id DESC LIMIT 50`).all(accountUUID ?? '');
     },
     updateCheck(id, fields) {
       const cols = { ...fields };

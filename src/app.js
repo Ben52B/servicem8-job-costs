@@ -397,7 +397,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
           jobs: jobs.map((j) => jobInfo.get(j.job_uuid)),
         });
       }
-      const reconcile = reconcileMoney(statement, matched, lines);
+      const reconcile = reconcileMoney(statement, matched, lines, { from: c.date_from, to: c.date_to, supplier: statement.supplier_name, accountUUID });
       const sup = String(statement.supplier_name || '').toLowerCase();
       const allLists = repo.listPriceLists(accountUUID);
       const word = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
@@ -435,7 +435,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
    * statement amount match the invoice in Job Costs, and does each invoice add up to its own total.
    * All in cents, so there's no rounding drift.
    */
-  function reconcileMoney(statement, matched, checkedLines) {
+  function reconcileMoney(statement, matched, checkedLines, { from = null, to = null, supplier = null, accountUUID = null } = {}) {
     const c = (n) => Math.round((Number(n) || 0) * 100);
     const $ = (cents) => cents / 100;
     const all = (statement.lines || []);
@@ -460,7 +460,29 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       }
     }
     const checked = checkedLines.reduce((s, l) => s + c(l.amount), 0);
+    // The rest of the statement (only when a date range was chosen): earlier months, quickly – no price or job check.
+    const outside = (from || to) ? unique.filter((l) => l.type !== 'payment' && !((!from || (l.date && l.date >= from)) && (!to || (l.date && l.date <= to)))) : [];
+    const earlierLines = outside.filter((l) => !from || !l.date || l.date < from);
+    const laterLines = outside.filter((l) => !earlierLines.includes(l));
+    const earlier = earlierLines.map((l) => {
+      const inv = l.type === 'invoice' ? repo.findInvoiceByNumber(accountUUID, l.reference, supplier) : null;
+      const items = inv ? repo.itemsOf(inv.id) : [];
+      return { reference: l.reference, date: l.date, amount: $(c(l.amount)), type: l.type, invoice_id: inv ? inv.id : null,
+        in_job_costs: !!inv, paid: !!inv && items.length > 0 && items.every((x) => x.paid) };
+    });
+    const sum = (arr) => $(arr.reduce((s, l) => s + c(l.amount), 0));
+    const rest = (from || to) ? {
+      earlier_count: earlierLines.length, earlier_total: sum(earlierLines),
+      later_count: laterLines.length, later_total: sum(laterLines),
+      payments_total: sum(unique.filter((l) => l.type === 'payment')),
+      // you marked these paid, but the supplier still lists them as owing
+      paid_but_listed: earlier.filter((l) => l.paid && l.type === 'invoice'),
+      earlier_unpaid: earlier.filter((l) => !l.paid && l.type === 'invoice'),
+      earlier_credits: earlier.filter((l) => l.type === 'credit'),
+    } : null;
     return {
+      period: from || to ? { from, to } : null,
+      rest,
       statement_total: total == null ? null : $(total),
       statement_lines_total: $(owing),
       statement_adds_up: statementAddsUp,
