@@ -107,13 +107,17 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
    * data: { statement, lines: [{ reference, date, amount, invoice: {...} | null, jobs: [...] }], rules: [text], instructions }
    * files: { priceLists: [{ supplier, name, file_path, mime_type }], invoices: [{ reference, file_path, file_name, mime_type }] }
    */
-  async function review(data, { priceLists = [], invoiceFiles = [] } = {}) {
+  /**
+   * The whole statement. The invoices go in as the lines Job Costs already read from them (not the PDFs again):
+   * much less to read, so it's quicker. onProgress(text) is told how far Claude has got, every few seconds.
+   */
+  async function review(data, { priceLists = [], invoiceFiles = [], withInvoicePdfs = false, onProgress = () => {} } = {}) {
     const content = [];
     for (const p of priceLists) {
       content.push({ type: 'text', text: `PRICE LIST – ${p.supplier}${p.name ? ` (${p.name})` : ''}:` });
       content.push(fileToBlock(path.join(filesDir, p.file_path), p.name || 'price-list.pdf', p.mime_type));
     }
-    for (const f of invoiceFiles) {
+    for (const f of withInvoicePdfs ? invoiceFiles : []) {
       content.push({ type: 'text', text: `INVOICE ${f.reference} (the supplier's document):` });
       content.push(fileToBlock(path.join(filesDir, f.file_path), f.file_name, f.mime_type));
     }
@@ -122,10 +126,25 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
       ...common,
       max_tokens: 64000,
       system: REVIEW_PROMPT,
-      output_config: { effort, format: betaZodOutputFormat(ReviewSchema) },
+      output_config: { effort: 'medium', format: betaZodOutputFormat(ReviewSchema) },
       messages: [{ role: 'user', content }],
     }, { timeout: 9 * 60 * 1000, maxRetries: 1 }); // never hangs: at most ~18 minutes, then it says so
-    const message = await stream.finalMessage();
+    // a sign of life while Claude works: thinking first, then writing the report (how many invoices so far)
+    let phase = 'thinking', chars = 0, last = 0;
+    const tick = (force) => {
+      if (!force && Date.now() - last < 4000) return;
+      last = Date.now();
+      const done = phase === 'writing' ? (stream.currentMessage?.content || []).map((b) => b.text || '').join('').split('"reference"').length - 1 : 0;
+      try { onProgress(phase === 'thinking' ? 'Claude is reading the price list and working through the invoices…' : `Claude is writing the report… (${done} invoice${done === 1 ? '' : 's'} done)`); } catch (e) { stream.abort(); }
+    };
+    stream.on('streamEvent', (ev) => {
+      if (ev.type === 'content_block_start' && ev.content_block.type === 'text') phase = 'writing';
+      if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') chars += ev.delta.text.length;
+      tick(false);
+    });
+    const timer = setInterval(() => tick(true), 15000);
+    let message;
+    try { message = await stream.finalMessage(); } finally { clearInterval(timer); }
     if (message.stop_reason === 'refusal') throw new Error('The check could not be done (declined by the model).');
     if (message.stop_reason === 'max_tokens') throw new Error('The statement is too long to check in one go. Narrow the dates and try again.');
     if (!message.parsed_output) throw new Error('The check came back incomplete. Try again.');

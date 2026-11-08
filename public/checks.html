@@ -175,11 +175,14 @@ function renderCheck() {
   const title = `<h2 style="margin:0 0 6px">${esc(c.supplier || c.file_name || 'Statement')}${c.statement_date ? ' · statement ' + esc(fmtDate(c.statement_date)) : ''}
     ${c.date_from || c.date_to ? `<span class="muted" style="font-weight:600;font-size:13px"> · only invoices ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</span>` : ''}</h2>`;
   if (c.status === 'reading' || c.status === 'checking') {
-    const mins = (t) => Math.max(0, Math.round((Date.now() - Date.parse(t)) / 60000));
+    // times from the server's clock (this computer's clock may be a bit off)
+    const nowMs = Date.parse(c.server_now) || Date.now();
+    const mins = (t) => Math.max(0, Math.floor((nowMs - Date.parse(t)) / 60000));
+    const ago = (t) => { const s = Math.max(0, Math.round((nowMs - Date.parse(t)) / 1000)); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
     const started = c.started_at || c.created_at;
-    const stale = Date.now() - Date.parse(c.progress_at || started) > 12 * 60000;
+    const stale = nowMs - Date.parse(c.progress_at || started) > 12 * 60000;
     $('#content').innerHTML = back + title + `<div class="panel">${stale ? '⚠' : '<span class="spin"></span>'} <b>${esc(c.progress || STATUS[c.status])}</b>
-      <div class="muted" style="margin-top:6px">Running for ${mins(started)} min${c.progress_at ? ` · last step ${mins(c.progress_at) === 0 ? 'just now' : mins(c.progress_at) + ' min ago'}` : ''}. You can close this window – it carries on, and the result is saved under Past checks.</div>
+      <div class="muted" style="margin-top:6px">Running for ${ago(started)}${c.progress_at ? ` · last update ${ago(c.progress_at)} ago` : ''}. You can close this window – it carries on, and the result is saved under Past checks.</div>
       ${stale ? `<div class="row"><span style="color:var(--bad)">This check hasn't moved on for over 12 minutes (the app may have restarted).</span><button class="primary" data-rerun>↻ Run again</button></div>` : ''}</div>`;
     return;
   }

@@ -414,7 +414,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         lines: forClaude,
         // Worked out in code: use these totals as they are (don't add them up again).
         money_checks: reconcile,
-      }, { priceLists, invoiceFiles });
+      }, { priceLists, invoiceFiles, onProgress: (text) => progress(text) });
       stillWanted();
       repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, attempts: 0, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
@@ -470,9 +470,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       ok: statementAddsUp !== false && !amountMismatches.length && !invoiceMath.length,
     };
   }
+  const appStarted = Date.now();
   // Checks interrupted by a restart: run them again, but not forever (a check that keeps getting cut short stops).
   if (checker) setTimeout(() => {
-    for (const c of repo.db.prepare("SELECT id, account_key, attempts FROM statement_checks WHERE status IN ('reading', 'checking')").all()) {
+    for (const c of repo.db.prepare("SELECT id, account_key, attempts, progress_at, started_at FROM statement_checks WHERE status IN ('reading', 'checking')").all()) {
+      if (Date.parse(c.progress_at || c.started_at || 0) >= appStarted) continue; // started by this app, not cut short
       if ((c.attempts || 0) >= 2) {
         repo.updateCheck(c.id, { status: 'error', progress: null, attempts: 0, finished_at: new Date().toISOString(),
           error: 'The app restarted 3 times while this check was running, so it was stopped. Try a shorter date range, or send the Render logs from that time.' });
@@ -1289,7 +1291,7 @@ window.addEventListener('message', function (e) {
     const jobs = Object.fromEntries(repo.listJobs(req.account).map((j) => [String(j.job_number), j.job_uuid]));
     // Paid can change after the check ran: show it as it is now.
     for (const m of c.matched || []) if (m.invoice) m.invoice.paid = repo.itemsOf(m.invoice.id).every((x) => x.paid) && repo.itemsOf(m.invoice.id).length > 0;
-    res.json({ ...c, file_path: undefined, jobs });
+    res.json({ ...c, file_path: undefined, jobs, server_now: new Date().toISOString() });
   });
   api.get('/checks/:id/file', (req, res) => {
     const c = repo.getCheck(req.account, req.params.id);
