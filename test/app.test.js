@@ -917,8 +917,11 @@ test('upload supplier invoices to the Inbox: the job number on each is found in 
   assert.equal(b.suggestion, null, 'no such job');
   // Type the job number yourself
   assert.equal((await post(t, `/inbox/${b.id}/assign`, { job_number: '404040' })).status, 404);
-  const r = await post(t, `/inbox/${b.id}/assign`, { job_number: '206594' }).then((x) => x.json());
+  const r = await post(t, `/inbox/${b.id}/assign`, { job_number: '206594', paid: true }).then((x) => x.json());
   assert.equal(r.job_number, '206594');
+  assert.ok(repo.itemsOf(b.id).every((x) => x.paid), 'the Paid tick marks it paid as it goes on the job');
+  assert.equal((await post(t, `/suggestions/${a.id}/accept`)).status, 200);
+  assert.ok(repo.itemsOf(a.id).every((x) => !x.paid), 'no tick: stays unpaid');
   assert.ok(repo.jobsOnInvoice(b.id).some((j) => j.job_number === '206594'));
 });
 
@@ -955,7 +958,7 @@ test('Bills: find invoices across jobs and mark several paid at once', async () 
   const gl = bills.filter((b) => /Gliderol/.test(b.supplier));
   assert.equal(gl.length, 2);
   assert.ok(gl.some((b) => b.jobs.some((j) => j.job_number === '206594')));
-  assert.ok(gl.every((b) => b.payment_state === 'unpaid'));
+  assert.equal(gl.filter((b) => b.payment_state === 'unpaid').length, 1, 'one was marked paid when it was approved');
   assert.equal((await post(t, '/bills/paid', { ids: gl.map((b) => b.id), paid: true })).status, 200);
   ({ bills } = await json(t, '/bills'));
   assert.ok(bills.filter((b) => /Gliderol/.test(b.supplier)).every((b) => b.payment_state === 'paid' && b.paid_at));

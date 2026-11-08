@@ -316,7 +316,8 @@ function renderSuggestions() {
   $('#suggest').innerHTML = (s.length ? `<datalist id="moveJobs">${jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>` : '') + (!s.length ? '' : `<div class="suggest"><div class="h">📨 New invoice${s.length > 1 ? 's' : ''} that look${s.length > 1 ? '' : 's'} like ${s.length > 1 ? 'they’re' : 'it’s'} for this ${state.data.stock ? 'stock order' : 'job'} <span class="badge">${s.length}</span></div>
     ${s.map((x) => `<div class="srow"><div><b>${esc(x.supplier || 'Unknown supplier')}</b> <span class="muted">${x.invoice_number ? '#' + esc(x.invoice_number) + ' · ' : ''}${money(x.total_ex ?? x.total)} ex GST</span>
       <div class="why">${esc(x.reason || '')}</div></div>
-      <div class="acts"><button class="primary small" data-accept="${x.id}">${confirm}</button>
+      <div class="acts"><label title="Tick to mark it paid when you add it" style="display:inline-flex;align-items:center;gap:4px;font-weight:600;font-size:12.5px;white-space:nowrap"><input type="checkbox" id="spd-${x.id}"> Paid</label>
+        <button class="primary small" data-accept="${x.id}">${confirm}</button>
         <span style="display:inline-flex;gap:4px"><input id="mv-${x.id}" list="moveJobs" data-move-input="${x.id}" placeholder="Other job #" autocomplete="off" title="Wrong job? Type the right job number"
           style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px"><button class="small" data-move-btn="${x.id}">Move</button></span>
         <button class="small" data-to-stock="${x.id}" title="Not for one job – keep it as stock">📦 Send to stock</button>
@@ -747,9 +748,10 @@ document.addEventListener('click', async (e) => {
     }
     if (ds.addLine !== undefined) { readManual(); state.modal.manual.items.push({ description: '', amount: '' }); renderModal(); $$('#manualForm .lines .row [name=description]').pop()?.focus(); return; }
     if (ds.removeLine) { readManual(); state.modal.manual.items.splice(Number(ds.removeLine), 1); return renderModal(); }
-    if (ds.accept) { await post(`/suggestions/${ds.accept}/accept`); toast('Added to this job'); state.selected = Number(ds.accept); state.previewKey = null; return load(); }
+    const sPaid = (id) => !!($('#spd-' + id) && $('#spd-' + id).checked);
+    if (ds.accept) { const p = sPaid(ds.accept); await post(`/suggestions/${ds.accept}/accept`, { paid: p }); toast('Added to this job' + (p ? ' and marked paid' : '')); state.selected = Number(ds.accept); state.previewKey = null; return load(); }
     if (ds.dismiss) { await post(`/suggestions/${ds.dismiss}/dismiss`); toast('OK – it stays in the Inbox'); return load(); }
-    if (ds.toStock) { await post(`/inbox/${ds.toStock}/stock`); toast('Sent to stock – take items from it on any job'); return load(); }
+    if (ds.toStock) { const p = sPaid(ds.toStock); await post(`/inbox/${ds.toStock}/stock`, { paid: p }); toast('Sent to stock' + (p ? ' and marked paid' : '') + ' – take items from it on any job'); return load(); }
     if (ds.copy !== undefined) {
       const text = $('#inbox').textContent;
       try { await navigator.clipboard.writeText(text); } catch { const r = document.createRange(); r.selectNodeContents($('#inbox')); getSelection().removeAllRanges(); getSelection().addRange(r); document.execCommand('copy'); }
@@ -784,8 +786,9 @@ document.addEventListener('click', async (e) => {
     if (ds.moveBtn) {
       const n = $('#mv-' + ds.moveBtn).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
       if (!n) { $('#mv-' + ds.moveBtn).focus(); return toast('Type the job number'); }
-      const r = await post(`/inbox/${ds.moveBtn}/assign`, { job_number: n });
-      toast('Moved to #' + (r.job_number || n)); return load();
+      const p = sPaid(ds.moveBtn);
+      const r = await post(`/inbox/${ds.moveBtn}/assign`, { job_number: n, paid: p });
+      toast('Moved to #' + (r.job_number || n) + (p ? ' and marked paid' : '')); return load();
     }
     if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
     if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }

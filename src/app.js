@@ -873,6 +873,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (!inv) return;
     repo.assignWhole(inv.id, req.job.job_uuid, { category: inv.category });
     repo.markApproved(inv.id, repo.isStockJob(req.job.job_uuid) ? null : req.job.job_uuid);
+    if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
     res.json({ ok: true });
   });
   api.post('/suggestions/:id/dismiss', (req, res) => {
@@ -904,6 +905,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
     repo.assignWhole(inv.id, job.job_uuid, { category: c.category || inv.category });
     repo.markApproved(inv.id, job.is_stock ? null : job.job_uuid);
+    if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
     res.json({ ok: true, job_number: job.job_number });
   });
   // Upload invoices straight into the Inbox (read, then a job is suggested for each).
@@ -918,6 +920,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (!inv) return;
     repo.keepAsStock(inv.id);
     repo.markApproved(inv.id, null);
+    if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
     res.json({ ok: true });
   });
   // Approved by mistake: back to the Inbox (and out of the ServiceM8 diary if it was copied there).

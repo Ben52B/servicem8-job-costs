@@ -123,6 +123,7 @@ function render() {
       ${i.looks_like_stock ? '<div class="trace"><span class="left">💡 Looks like stock – no job number or site on it, and it reads like a restock order</span></div>' : ''}
       ${dupNote(i.possible_duplicate, s && s.job_uuid)}</div>
       <div class="acts">${fileLink(i)}
+        <label title="Tick to mark it paid when you add it" style="display:inline-flex;align-items:center;gap:4px;font-weight:600;white-space:nowrap"><input type="checkbox" id="pd-${i.id}"> Paid</label>
         ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>` : ''}
         ${jobBox(i.id, !!s)}
         <button class="${i.looks_like_stock ? 'primary' : ''}" data-stock="${i.id}" title="Not for one job – keep it to take items from later">${i.looks_like_stock ? '✓ ' : ''}📦 Send to stock</button>
@@ -164,15 +165,17 @@ document.addEventListener('click', async (e) => {
   const d = b.dataset;
   try {
     if (d.copy !== undefined) { await navigator.clipboard.writeText($('#addr').textContent).catch(() => {}); return toast('Email address copied'); }
-    if (d.assign) { await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job }) }); toast('Added to the job'); return load(); }
+    const paidTick = (id) => !!($('#pd-' + id) && $('#pd-' + id).checked);
+    const andPaid = (id) => (paidTick(id) ? ' and marked paid' : '');
+    if (d.assign) { await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job, paid: paidTick(d.assign) }) }); toast('Added to the job' + andPaid(d.assign)); return load(); }
     if (d.assignPick) {
       const n = $('#j-' + d.assignPick).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
       if (!n) { $('#j-' + d.assignPick).focus(); return toast('Type a job number'); }
       b.disabled = true;
-      const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n }) });
-      toast('Added to #' + (r.job_number || n)); return load();
+      const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n, paid: paidTick(d.assignPick) }) });
+      toast('Added to #' + (r.job_number || n) + andPaid(d.assignPick)); return load();
     }
-    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST' }); toast('Sent to stock – take items from it on any job'); return load(); }
+    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid: paidTick(d.stock) }) }); toast('Sent to stock' + andPaid(d.stock) + ' – take items from it on any job'); return load(); }
     if (d.del) {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
       await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load();
