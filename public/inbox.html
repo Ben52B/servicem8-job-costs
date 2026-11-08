@@ -52,9 +52,13 @@
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span><label class="btn" style="margin-left:auto;background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label></header>
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📥 Inbox</h1><span class="muted">Invoices that came in by email and aren't on a job yet</span></header>
   <div class="address" id="address"></div>
-  <div class="muted" id="outlookBar" style="margin:-8px 0 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
+  <!-- Every way of adding invoices, together on one row -->
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-4px 0 14px">
+    <label class="btn" style="background:var(--brand);color:#fff;border-color:var(--brand)">⬆ Upload invoices<input type="file" id="inboxUpload" multiple accept="application/pdf,image/*" hidden></label>
+    <span id="outlookBar" class="muted" style="display:contents"></span>
+  </div>
   <div id="importBox" hidden style="background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 14px;margin:-4px 0 14px"></div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
@@ -100,8 +104,8 @@ const agoText = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 600
 function renderOutlook() {
   const o = outlookStatus;
   $('#outlookBar').innerHTML = !o || !o.connected ? ''
-    : `📥 Reading Outlook <b>${esc(o.email || '')}</b> (${esc(o.hours || '')})${o.lastCheck ? ' · checked ' + agoText(o.lastCheck) : ''} <button data-check-now>↻ Check now</button>
-      <button data-import-open>📂 Import from Outlook…</button>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
+    : `<button data-import-open>📂 Import from Outlook…</button><button data-check-now>↻ Check now</button>
+      <span class="muted" style="font-size:12.5px">📥 Reading <b>${esc(o.email || '')}</b> · ${esc(o.hours || '')}${o.lastCheck ? ' · last checked ' + agoText(o.lastCheck) : ''}</span>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''}`;
 }
 
 // ---------- Import from Outlook: browse folders, tick folders or emails ----------
