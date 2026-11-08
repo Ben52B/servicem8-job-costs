@@ -182,7 +182,7 @@ function renderCheck() {
     $('#content').innerHTML = back + title + `<div class="panel"><h2>📄 This statement came in by email / upload and hasn't been checked yet</h2>
       <div class="hint">Choose which invoices to check (e.g. one month) and run it. Takes 1–3 minutes.</div>
       <div class="row"><span class="muted">Only invoices dated</span><input type="date" id="wFrom"> <span class="muted">to</span> <input type="date" id="wTo"> <span class="muted" style="font-size:12px">(optional)</span></div>
-      <div class="row" style="display:block"><textarea id="wNotes" placeholder="Notes for this check only (optional)"></textarea></div>
+      <div class="row" style="display:block"><textarea id="wNotes" placeholder="Notes for this check only (optional) – for rules you'll use again, add them in 💲 Prices &amp; rules"></textarea></div>
       <div class="row"><button class="primary" data-run-waiting>🔎 Run check</button></div></div>`;
     return;
   }

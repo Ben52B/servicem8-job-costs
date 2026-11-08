@@ -1122,6 +1122,9 @@ test('statement check: price lists and rules are kept per business; each stateme
 
     // Each invoice is checked against its supplier's price list as it arrives
     processor.afterRead = app5.locals.priceCheck;
+    // one-time rules: one for this invoice, one for another
+    const once1 = await call(t, '/rules', { method: 'POST', json: { text: 'S700777: agreed $41 extra for a rush order', kind: 'once', target: 'S700777' } }).then((x) => x.json());
+    const once2 = await call(t, '/rules', { method: 'POST', json: { text: 'S999999: free delivery', kind: 'once', target: 'S999999' } }).then((x) => x.json());
     const ifd = new FormData(); ifd.append('files', new Blob(['%PDF-1.4 inv'], { type: 'application/pdf' }), 'Tax_Invoice_S700777_ref209500.pdf');
     await call(t, '/inbox/upload', { method: 'POST', body: ifd });
     await processor.idle();
@@ -1130,7 +1133,15 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(pcInv.price_check_status, 'done', 'checked automatically: Gliderol has a price list');
     assert.equal(seen.invFiles.priceList.supplier, 'Gliderol');
     assert.equal(seen.inv.money_checks.adds_up, true, '1226 + 122.60 = 1348.60');
-    assert.deepEqual(seen.inv.rules, ['Job 209500: Gliderol bills 1 door only']);
+    assert.deepEqual(seen.inv.rules, ['Job 209500: Gliderol bills 1 door only', 'S700777: agreed $41 extra for a rush order'], 'the always rule + the one-time rule for this invoice only');
+    const r1 = repo.listRules('acc-chk').find((r) => r.id === once1.id);
+    assert.ok(r1.used_at && !r1.active, 'a one-time rule switches itself off once used');
+    assert.match(r1.used_on, /S700777/);
+    assert.ok(!repo.listRules('acc-chk').find((r) => r.id === once2.id).used_at, 'the one for another invoice waits');
+    // ticking a used one-time rule back on makes it ready again
+    await call(t, `/rules/${once1.id}`, { method: 'PATCH', json: { active: true } });
+    assert.equal(repo.rulesFor('acc-chk', ['S700777']).some((r) => r.id === once1.id), true);
+    await call(t, `/rules/${once1.id}`, { method: 'PATCH', json: { active: false } });
     const ibx = await call(t, '/inbox').then((x) => x.json());
     const shown = ibx.invoices.find((i) => i.invoice_number === 'S700777');
     assert.equal(shown.price_check.verdict, 'problem');

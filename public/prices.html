@@ -78,6 +78,11 @@
   tr.main { cursor: pointer; }
   ol.actions { margin: 6px 0 0; padding-left: 20px; } ol.actions li { margin: 4px 0; }
 </style>
+<style>
+  /* Prices page: the price-list table needs room, so the two panels stack below 1250px */
+  @media (max-width: 1250px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  table.t td { overflow-wrap: anywhere; }
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -107,10 +112,13 @@ function render() {
       <td class="num">${p.checked ? `${p.checked}${p.flagged ? ` <span class="chip v-check" title="Flagged for a look">${p.flagged} flagged</span>` : ''}` : '<span class="muted">–</span>'}</td>
       <td><a class="lnk" href="${p.mime_type === 'application/pdf' ? `/viewer.html?pl=${p.id}&t=${T}&name=${encodeURIComponent(p.name || 'Price list')}` : `/api/price-lists/${p.id}/file?t=${T}`}" target="_blank" rel="noopener">View</a></td>
       <td><button class="danger" data-pl-del="${p.id}">Delete</button></td></tr>`).join('');
+  const kindChip = (r) => (r.kind !== 'once' ? '<span class="chip v-done" style="font-size:10.5px">Always</span>'
+    : r.used_at ? `<span class="chip v-missing" style="font-size:10.5px" title="Switched off after it was used">One time · used ${esc(fmtDate(r.used_at))}${r.used_on ? ' on ' + esc(r.used_on) : ''}</span>`
+    : `<span class="chip v-waiting" style="font-size:10.5px">One time · ${r.target ? 'for ' + esc(r.target) : 'next check'}</span>`);
   const rules = data.rules.map((r) => `<div class="rule ${r.active ? '' : 'off'}">
       <input type="checkbox" data-rule-on="${r.id}" ${r.active ? 'checked' : ''} title="Use this rule">
       ${editingRule === r.id ? `<div><textarea id="ruleEdit">${esc(r.text)}</textarea><div class="row"><button class="primary" data-rule-save="${r.id}">Save</button><button data-rule-cancel>Cancel</button></div></div>`
-        : `<div class="txt" data-rule-edit="${r.id}" title="Click to change">${esc(r.text)}</div>`}
+        : `<div><div class="txt" data-rule-edit="${r.id}" title="Click to change">${esc(r.text)}</div><div style="margin-top:3px">${kindChip(r)}</div></div>`}
       <button class="danger" data-rule-del="${r.id}" title="Delete this rule">🗑</button></div>`).join('');
   $('#content').innerHTML = `${data.available ? '' : '<div class="note bad">Price checks need ANTHROPIC_API_KEY on the server.</div>'}
   <div class="grid2"><div>
@@ -125,7 +133,11 @@ function render() {
       <div class="row" style="display:block;border-top:1px solid var(--line2);padding-top:10px"><textarea id="newRule" placeholder="e.g. Job 207932: Gliderol said they'll bill us for 1 door only
 e.g. Taurean: price list shows net prices; store delivery is now $25.68
 e.g. Joe's Installs: $50 extra per door for removal is agreed"></textarea></div>
-      <div class="row"><button class="primary" data-rule-add>＋ Add rule</button></div></div>
+      <div class="row"><label><input type="radio" name="ruleKind" value="always" checked> Always</label>
+        <label><input type="radio" name="ruleKind" value="once"> One time</label>
+        <input type="text" id="ruleTarget" placeholder="for invoice no. (optional)" style="width:190px" title="A one-time rule is used once, on the next check of this invoice (or the next check at all), then switches off">
+        <button class="primary" data-rule-add>＋ Add rule</button></div>
+      <div class="hint" style="margin-top:6px">A <b>one-time</b> rule is used once – on the next check of that invoice number (or the next check, if you leave it empty) – then switches itself off. Tick it again to use it once more.</div></div>
     <div class="panel"><a class="btn" href="/checks?t=${T}">🔎 Statement check</a> <span class="muted" style="font-size:12.5px">checks a supplier's whole monthly statement with these price lists and rules.</span></div>
   </div></div>`;
 }
@@ -148,7 +160,9 @@ document.addEventListener('click', async (e) => {
     if (d.ruleAdd !== undefined) {
       const text = $('#newRule').value.trim();
       if (!text) { $('#newRule').focus(); return toast('Write the rule first'); }
-      await api('/rules', { method: 'POST', body: JSON.stringify({ text }) }); toast('Rule added'); return load();
+      const kind = (document.querySelector('input[name=ruleKind]:checked') || {}).value || 'always';
+      await api('/rules', { method: 'POST', body: JSON.stringify({ text, kind, target: kind === 'once' ? $('#ruleTarget').value.trim() : null }) });
+      toast(kind === 'once' ? 'One-time rule added' : 'Rule added'); return load();
     }
     if (d.ruleEdit) { editingRule = Number(d.ruleEdit); render(); return $('#ruleEdit').focus(); }
     if (d.ruleCancel !== undefined) { editingRule = null; return render(); }

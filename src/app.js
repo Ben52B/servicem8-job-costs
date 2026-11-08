@@ -258,17 +258,17 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   };
   // ---------- price check of each invoice as it arrives ----------
   let priceQueue = Promise.resolve(); // one at a time
-  function priceCheck(invoiceId, { priceListId = null, auto = false } = {}) {
+  function priceCheck(invoiceId, { priceListId = null, auto = false, note = null } = {}) {
     const inv = repo.getInvoice(invoiceId);
     if (!inv || inv.status !== 'ready' || !checker) return { started: false };
     const pl = priceListId ? repo.getPriceList(inv.account_uuid ?? null, priceListId) : repo.priceListFor(inv.account_uuid ?? null, inv.supplier);
     if (!pl) { if (!inv.price_check_status) repo.setPriceCheck(inv.id, { status: 'none' }); return { started: false }; }
     if (auto && inv.price_check_status === 'done') return { started: false }; // already checked; "Check again" redoes it
     repo.setPriceCheck(inv.id, { status: 'checking' });
-    priceQueue = priceQueue.then(() => runPriceCheck(inv.id, pl)).catch(() => {});
+    priceQueue = priceQueue.then(() => runPriceCheck(inv.id, pl, note)).catch(() => {});
     return { started: true, price_list: pl.supplier };
   }
-  async function runPriceCheck(invoiceId, pl) {
+  async function runPriceCheck(invoiceId, pl, note = null) {
     const inv = repo.getInvoice(invoiceId);
     if (!inv) return;
     try {
@@ -286,13 +286,16 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         const info = token ? await fetchJobImpl(jobUUID, token).catch(() => null) : null;
         job = { job_number: local.job_number, client: local.client_name, address: local.job_title, quoted_price_ex_gst: local.quote_amount ?? null, notes: (info && info.description) || null };
       }
+      const rulesUsed = repo.rulesFor(inv.account_uuid ?? null, [inv.invoice_number]);
       const result = await checker.reviewInvoice({
         invoice: { supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, subtotal_ex_gst: inv.subtotal, gst: inv.tax, total_inc_gst: inv.total,
           references: (() => { try { return JSON.parse(inv.refs || '[]'); } catch { return []; } })(), lines: repo.itemsOf(inv.id).map(({ paid, ...x }) => x) },
-        rules: repo.listRules(inv.account_uuid ?? null).filter((r) => r.active).map((r) => r.text),
+        rules: rulesUsed.map((r) => r.text),
+        notes_for_this_check: note || null,
         job, money_checks,
       }, { priceList: pl, invoiceFile: inv.file_path && isSupported(inv.file_name, inv.mime_type) ? { file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type } : null });
-      repo.setPriceCheck(inv.id, { status: 'done', result: { ...result, money_checks, price_list: { id: pl.id, supplier: pl.supplier, name: pl.name }, checked_at: new Date().toISOString() } });
+      repo.setPriceCheck(inv.id, { status: 'done', result: { ...result, money_checks, note: note || null, price_list: { id: pl.id, supplier: pl.supplier, name: pl.name }, checked_at: new Date().toISOString() } });
+      repo.markRulesUsed(rulesUsed, `price check of invoice ${inv.invoice_number || inv.id}`);
     } catch (e) {
       console.error(`Price check of invoice ${invoiceId}: ${e.message}`);
       repo.setPriceCheck(invoiceId, { status: 'error', result: { error: /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit.' : e.message } });
@@ -368,10 +371,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const word = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
       const fits = allLists.filter((p) => word(p.supplier).some((w) => sup.includes(w)));
       const priceLists = (fits.length ? fits : allLists).slice(0, 4);
+      const rulesUsed = repo.rulesFor(accountUUID, lines.map((l) => l.reference));
       const result = await checker.review({
         statement: { supplier: statement.supplier_name, account_number: statement.account_number, statement_date: statement.statement_date, total_due: statement.total_due,
           checking_only: c.date_from || c.date_to ? `invoices dated ${c.date_from || 'any'} to ${c.date_to || 'any'}` : 'all invoices on the statement' },
-        rules: repo.listRules(accountUUID).filter((r) => r.active).map((r) => r.text),
+        rules: rulesUsed.map((r) => r.text),
         notes_for_this_check: c.instructions || null,
         price_lists: priceLists.map((p) => `${p.supplier}: ${p.name || 'price list'} (uploaded ${String(p.created_at).slice(0, 10)})`),
         lines: forClaude,
@@ -379,6 +383,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         money_checks: reconcile,
       }, { priceLists, invoiceFiles });
       repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, finished_at: new Date().toISOString() });
+      repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
     } catch (e) {
       console.error(`Statement check ${id}: ${e.message}`);
       const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
@@ -886,7 +891,7 @@ window.addEventListener('message', function (e) {
     if (!inv) return;
     if (!checker) return res.status(500).json({ error: 'Price checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
-    const r = priceCheck(inv.id, { priceListId: req.body?.price_list_id ? Number(req.body.price_list_id) : null });
+    const r = priceCheck(inv.id, { priceListId: req.body?.price_list_id ? Number(req.body.price_list_id) : null, note: String(req.body?.note || '').trim().slice(0, 2000) || null });
     if (!r.started) return res.status(400).json({ error: 'There\u2019s no price list for this supplier. Choose one, or upload it in 🔎 Statement check → Price lists.' });
     res.json({ ok: true, price_list: r.price_list });
   });
@@ -1193,7 +1198,7 @@ window.addEventListener('message', function (e) {
   api.post('/rules', (req, res) => {
     const text = String(req.body?.text || '').trim().slice(0, 2000);
     if (!text) return res.status(400).json({ error: 'Write the rule first' });
-    res.status(201).json(repo.addRule(req.account, text));
+    res.status(201).json(repo.addRule(req.account, text, { kind: req.body?.kind === 'once' ? 'once' : 'always', target: req.body?.target || null }));
   });
   api.patch('/rules/:id', (req, res) => {
     const b = req.body || {};

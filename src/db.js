@@ -327,6 +327,10 @@ function migrateColumns(db) {
   // Price check of the invoice against the supplier's / subcontractor's price list
   add('price_check', 'TEXT');          // JSON: the result
   add('price_check_status', 'TEXT');   // checking | done | error | none (no price list)
+  // Rules: "always", or "once" (optionally for one invoice number), switched off after the check that used it
+  for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT']]) {
+    if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
+  }
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
@@ -588,8 +592,9 @@ function createRepo(db, dataDir) {
     listRules(accountUUID) {
       return db.prepare('SELECT * FROM check_rules WHERE account_key = ? ORDER BY id').all(accountUUID ?? '');
     },
-    addRule(accountUUID, text) {
-      const r = db.prepare('INSERT INTO check_rules (account_key, text) VALUES (?, ?)').run(accountUUID ?? '', text);
+    addRule(accountUUID, text, { kind = 'always', target = null } = {}) {
+      const r = db.prepare('INSERT INTO check_rules (account_key, text, kind, target) VALUES (?, ?, ?, ?)')
+        .run(accountUUID ?? '', text, kind === 'once' ? 'once' : 'always', kind === 'once' && target ? String(target).trim().slice(0, 60) : null);
       return db.prepare('SELECT * FROM check_rules WHERE id = ?').get(Number(r.lastInsertRowid));
     },
     updateRule(accountUUID, id, { text, active }) {
@@ -597,7 +602,23 @@ function createRepo(db, dataDir) {
       if (!row) return null;
       db.prepare('UPDATE check_rules SET text = ?, active = ? WHERE id = ?')
         .run(text !== undefined ? text : row.text, active !== undefined ? (active ? 1 : 0) : row.active, row.id);
+      // switching a used one-time rule back on makes it ready for one more check
+      if (active === true && row.kind === 'once') db.prepare('UPDATE check_rules SET used_at = NULL, used_on = NULL WHERE id = ?').run(row.id);
       return db.prepare('SELECT * FROM check_rules WHERE id = ?').get(row.id);
+    },
+    /**
+     * The rules for a check that covers these invoice numbers: every "always" rule that's on, plus one-time
+     * rules not used yet whose invoice number is in this check (or that are for no particular invoice).
+     */
+    rulesFor(accountUUID, invoiceNumbers = []) {
+      const norm = (n) => String(n || '').replace(/\D/g, '').replace(/^0+/, '') || String(n || '').toLowerCase().replace(/[^0-9a-z]/g, '');
+      const nums = new Set(invoiceNumbers.filter(Boolean).map(norm));
+      return repo.listRules(accountUUID).filter((r) => r.active && (r.kind !== 'once' || (!r.used_at && (!r.target || nums.has(norm(r.target))))));
+    },
+    /** One-time rules that were used: switch them off, noting where. */
+    markRulesUsed(rules, usedOn) {
+      const upd = db.prepare("UPDATE check_rules SET used_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), used_on = ?, active = 0 WHERE id = ? AND kind = 'once'");
+      for (const r of rules) if (r.kind === 'once') upd.run(usedOn, r.id);
     },
     deleteRule(accountUUID, id) {
       return db.prepare('DELETE FROM check_rules WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0;

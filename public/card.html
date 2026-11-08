@@ -540,6 +540,7 @@ function priceCheckBox(inv) {
   const pc = inv.price_check, st = inv.price_check_status;
   const lists = state.data.priceLists || [];
   const chooser = lists.length ? `<select id="pcList-${inv.id}" style="max-width:220px">${lists.map((p) => `<option value="${p.id}" ${pc && pc.price_list && pc.price_list.id === p.id ? 'selected' : ''}>${esc(p.supplier)}${p.name ? ' – ' + esc(p.name) : ''}</option>`).join('')}</select>
+    <input id="pcNote-${inv.id}" placeholder="Note for this check only (optional)" style="flex:1;min-width:180px;font:inherit;font-size:12.5px;border:1px solid #d6e2de;border-radius:8px;padding:4px 8px">
     <button class="small" data-price-check="${inv.id}">💲 Check price</button>` : '';
   if (st === 'checking') return `<div class="note info"><span class="spin"></span> Checking the prices against the price list…</div>`;
   if (st === 'error') return `<div class="note bad">Price check failed: ${esc(pc && pc.error || 'try again')} ${chooser}</div>`;
@@ -557,6 +558,7 @@ function priceCheckBox(inv) {
   return `<div class="note ${cls}"><b>💲 ${label}</b> – ${esc(pc.headline || '')}${pc.difference_ex_gst ? ` <b>(${pc.difference_ex_gst > 0 ? '+' : ''}${money(pc.difference_ex_gst)} ex GST)</b>` : ''}${mc}
     ${rows ? `<table style="margin-top:6px"><thead><tr><th>Line</th><th class="num">Invoiced</th><th class="num">Price list</th><th class="num">Diff</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
     ${pc.rules_applied && pc.rules_applied.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Rules used: ${pc.rules_applied.map(esc).join(' · ')}</div>` : ''}
+    ${pc.note ? `<div class="muted" style="font-size:12px;margin-top:2px">Note for this check: ${esc(pc.note)}</div>` : ''}
     <div class="muted" style="font-size:12px;margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Checked against ${esc(pc.price_list ? pc.price_list.supplier + (pc.price_list.name ? ' – ' + pc.price_list.name : '') : 'the price list')}${pc.checked_at ? ' · ' + new Date(pc.checked_at).toLocaleDateString('en-AU') : ''} · ${chooser.replace('💲 Check price', '↻ Check again')}</div></div>`;
 }
 
@@ -819,7 +821,8 @@ document.addEventListener('click', async (e) => {
     }
     if (ds.priceCheck) {
       const sel = $('#pcList-' + ds.priceCheck);
-      await post(`/invoices/${ds.priceCheck}/price-check`, { price_list_id: sel ? Number(sel.value) : null });
+      const nt = $('#pcNote-' + ds.priceCheck);
+      await post(`/invoices/${ds.priceCheck}/price-check`, { price_list_id: sel ? Number(sel.value) : null, note: nt ? nt.value : '' });
       toast('Checking prices…'); state.forceDetail = true; return load();
     }
     if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
