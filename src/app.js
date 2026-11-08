@@ -314,9 +314,14 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   };
 
   /** Read the statement (once), find each invoice and its jobs, then have Claude review it all. */
+  const stopRequested = new Set(); // checks asked to stop (they stop at the next step)
   async function runCheck(accountUUID, id) {
     const now = () => new Date().toISOString();
-    const progress = (text) => repo.updateCheck(id, { progress: text, progress_at: now() });
+    stopRequested.delete(id);
+    const progress = (text) => {
+      if (stopRequested.has(id)) { const e = new Error('stopped'); e.stopped = true; throw e; }
+      repo.updateCheck(id, { progress: text, progress_at: now() });
+    };
     try {
       let c = repo.getCheck(accountUUID, id);
       repo.updateCheck(id, { started_at: now() });
@@ -409,9 +414,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         // Worked out in code: use these totals as they are (don't add them up again).
         money_checks: reconcile,
       }, { priceLists, invoiceFiles });
+      if (stopRequested.has(id)) { const e = new Error('stopped'); e.stopped = true; throw e; }
       repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
     } catch (e) {
+      if (e.stopped) { stopRequested.delete(id); repo.updateCheck(id, { status: 'waiting', progress: null, error: null }); return; }
       console.error(`Statement check ${id}: ${e.message}`);
       const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
         : e.status === 429 || e.status >= 500 ? 'Claude is busy right now. Click Run again in a minute.' : e.message || 'The check failed.';
@@ -1293,6 +1300,17 @@ window.addEventListener('message', function (e) {
     if (!checker) return res.status(500).json({ error: 'Statement checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
     repo.updateCheck(c.id, { ...set, status: c.statement ? 'checking' : 'reading', error: null });
     runCheck(req.account, c.id).catch(() => {});
+    res.json({ ok: true });
+  });
+  // Stop a running check: it goes back to "not run yet" and keeps its statement.
+  api.post('/checks/:id/stop', (req, res) => {
+    const c = repo.getCheck(req.account, req.params.id);
+    if (!c) return res.status(404).json({ error: 'Not found' });
+    if (!['reading', 'checking'].includes(c.status)) return res.json({ ok: true });
+    stopRequested.add(c.id);
+    // if nothing is running it (e.g. the app restarted), stop it straight away
+    if (Date.now() - (Date.parse(c.progress_at || c.started_at || c.created_at) || 0) > 60000) repo.updateCheck(c.id, { status: 'waiting', progress: null });
+    else repo.updateCheck(c.id, { progress: 'Stopping…' });
     res.json({ ok: true });
   });
   api.delete('/checks/:id', (req, res) => (repo.deleteCheck(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));

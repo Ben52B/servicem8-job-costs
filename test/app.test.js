@@ -1176,6 +1176,18 @@ test('statement check: price lists and rules are kept per business; each stateme
     for (let i = 0; i < 50; i++) { w = await call(t, `/checks/${waiting.id}`).then((x) => x.json()); if (w.status === 'done' || w.status === 'error') break; await new Promise((r) => setTimeout(r, 20)); }
     assert.equal(w.status, 'done', w.error);
     assert.equal(w.date_from, '2026-09-01');
+
+    // Stop keeps the statement; deleting the check frees the email in Import from Outlook
+    repo.updateCheck(w.id, { status: 'checking', progress_at: new Date(Date.now() - 5 * 60000).toISOString() });
+    assert.equal((await call(t, `/checks/${w.id}/stop`, { method: 'POST' })).status, 200);
+    const stopped = await call(t, `/checks/${w.id}`).then((x) => x.json());
+    assert.equal(stopped.status, 'waiting', 'stopped: back to not run yet');
+    assert.ok(stopped.file_name, 'the statement is still there');
+    repo.recordImport('import:<stmt@x>', [987654]);
+    repo.setImportOutcome(987654, 'statement', w.id);
+    assert.equal(repo.importStatus('acc-chk', 'import:<stmt@x>').state, 'statement');
+    assert.equal((await call(t, `/checks/${w.id}`, { method: 'DELETE' })).status, 200);
+    assert.equal(repo.importStatus('acc-chk', 'import:<stmt@x>').state, 'deleted', 'its check is gone, so the email can be imported again');
   } finally {
     srv.close();
   }

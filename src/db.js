@@ -333,6 +333,7 @@ function migrateColumns(db) {
   }
   // what a running check is doing right now, and when it last moved on
   for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
+  if (!cols(db, 'mail_imports').includes('check_id')) db.exec('ALTER TABLE mail_imports ADD COLUMN check_id INTEGER'); // a statement: which check it went to
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
@@ -549,8 +550,8 @@ function createRepo(db, dataDir) {
       if (!invoiceIds.length) ins.run(mailKey, 0, 'nothing');
       for (const id of invoiceIds) ins.run(mailKey, id, null);
     },
-    setImportOutcome(invoiceId, outcome) {
-      db.prepare('UPDATE mail_imports SET outcome = ? WHERE invoice_id = ?').run(outcome, invoiceId);
+    setImportOutcome(invoiceId, outcome, checkId = null) {
+      db.prepare('UPDATE mail_imports SET outcome = ?, check_id = ? WHERE invoice_id = ?').run(outcome, checkId, invoiceId);
     },
     /**
      * Where an email stands: "imported" (an invoice from it is in Job Costs), "statement" (went to Statement check),
@@ -561,7 +562,9 @@ function createRepo(db, dataDir) {
       if (rows.length) {
         const kept = rows.filter((r) => r.invoice_id && !r.outcome && repo.getInvoice(r.invoice_id));
         if (kept.length) return { state: 'imported' };
-        if (rows.some((r) => r.outcome === 'statement')) return { state: 'statement' };
+        // a statement counts only while its check is still there
+        if (rows.some((r) => r.outcome === 'statement' && r.check_id && db.prepare('SELECT 1 FROM statement_checks WHERE id = ?').get(r.check_id))) return { state: 'statement' };
+        if (rows.some((r) => r.outcome === 'statement')) return { state: 'deleted' };
         if (rows.some((r) => r.invoice_id && !r.outcome)) return { state: 'deleted' }; // imported, then deleted in Job Costs
         const why = rows.map((r) => r.outcome).find(Boolean);
         return { state: 'skipped', why };

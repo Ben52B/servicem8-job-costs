@@ -33,8 +33,9 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
       });
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
       if (result.document_type === 'statement' && api.onStatement) {
-        try { api.onStatement(inv, result); } catch (e) { log.error(`Statement ${id}: ${e.message}`); return repo.setInvoiceError(id, 'This is a statement. Upload it in 🔎 Statement check.'); }
-        repo.setImportOutcome?.(id, 'statement');
+        let check;
+        try { check = api.onStatement(inv, result); } catch (e) { log.error(`Statement ${id}: ${e.message}`); return repo.setInvoiceError(id, 'This is a statement. Upload it in 🔎 Statement check.'); }
+        repo.setImportOutcome?.(id, 'statement', check && check.id);
         return repo.deleteInvoice(id);
       }
       // From the Outlook inbox: keep only real bills (quotes and other PDFs are dropped quietly).

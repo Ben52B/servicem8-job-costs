@@ -171,7 +171,7 @@ function renderCheck() {
   const back = `<div class="row" style="margin:0 0 10px"><button data-home>← All checks</button>
     <a class="btn" href="/api/checks/${c.id}/file?t=${T}" target="_blank" rel="noopener">View statement</a>
     ${['reading', 'checking'].includes(c.status) ? '' : `<button data-rerun title="Uses your current rules and price lists">↻ Run again</button>`}
-    <span style="flex:1"></span><button class="danger" data-del-check>Delete check</button></div>`;
+    <span style="flex:1"></span>${['reading', 'checking'].includes(c.status) ? '<button data-stop-check title="Stop now – the statement stays, ready to run again">■ Stop</button>' : ''}<button class="danger" data-del-check title="Removes the check and its statement">🗑 Delete check &amp; statement</button></div>`;
   const title = `<h2 style="margin:0 0 6px">${esc(c.supplier || c.file_name || 'Statement')}${c.statement_date ? ' · statement ' + esc(fmtDate(c.statement_date)) : ''}
     ${c.date_from || c.date_to ? `<span class="muted" style="font-weight:600;font-size:13px"> · only invoices ${esc(fmtDate(c.date_from) || '…')} – ${esc(fmtDate(c.date_to) || '…')}</span>` : ''}</h2>`;
   if (c.status === 'reading' || c.status === 'checking') {
@@ -292,7 +292,8 @@ document.addEventListener('click', async (e) => {
       return loadCheck(check.id);
     }
     if (d.rerun !== undefined) { await api(`/checks/${check.id}/rerun`, { method: 'POST' }); toast('Running again with your current rules and price lists'); return loadCheck(check.id); }
-    if (d.delCheck !== undefined) { if (!confirm('Delete this check?')) return; await api(`/checks/${check.id}`, { method: 'DELETE' }); return loadHome(); }
+    if (d.stopCheck !== undefined) { await api(`/checks/${check.id}/stop`, { method: 'POST' }); toast('Stopping – the statement stays here, ready to run again'); return loadCheck(check.id); }
+    if (d.delCheck !== undefined) { if (!confirm('Delete this check AND its statement?\n\nTo just stop a running check, use ■ Stop instead.')) return; await api(`/checks/${check.id}`, { method: 'DELETE' }); return loadHome(); }
     if (d.pay) {
       const rows = (check.matched || []).filter((m) => m.invoice && !m.invoice.paid);
       const okRefs = new Set((check.result?.invoices || []).filter((x) => x.verdict === 'ok').map((x) => String(x.reference).toLowerCase()));
