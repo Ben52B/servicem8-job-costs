@@ -209,6 +209,7 @@
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
     <a class="btn" id="inboxLink">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
     <a class="btn" id="checkLink">🔎 Statement check</a>
+    <a class="btn" id="pricesLink">💲 Prices</a>
     <a class="btn" id="billsLink">🧾 Bills</a>
     <a class="btn" id="reportsLink">📊 Reports</a>
   </header>
@@ -278,7 +279,7 @@ async function load() {
     render();
   } catch (e) { toast(e.message); }
   clearTimeout(state.pollTimer);
-  if (state.data && (state.data.totals.processing > 0 || state.data.sm8Loading)) state.pollTimer = setTimeout(load, 3000);
+  if (state.data && (state.data.totals.processing > 0 || state.data.sm8Loading || state.data.invoices.some((i) => i.price_check_status === 'checking'))) state.pollTimer = setTimeout(load, 3000);
 }
 
 const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.selected) || null;
@@ -476,6 +477,7 @@ function renderDetail() {
       <label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label>
     </div>` : ''}</div>`;
   if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice… it goes on this job when it’s done.</div>';
+  if (ready) h += priceCheckBox(inv);
   if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
   else if (ready && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
@@ -531,6 +533,31 @@ function renderDetail() {
     </form>`;
   }
   el.innerHTML = h;
+}
+
+// ---------- Price check against the supplier's / subcontractor's price list ----------
+function priceCheckBox(inv) {
+  const pc = inv.price_check, st = inv.price_check_status;
+  const lists = state.data.priceLists || [];
+  const chooser = lists.length ? `<select id="pcList-${inv.id}" style="max-width:220px">${lists.map((p) => `<option value="${p.id}" ${pc && pc.price_list && pc.price_list.id === p.id ? 'selected' : ''}>${esc(p.supplier)}${p.name ? ' – ' + esc(p.name) : ''}</option>`).join('')}</select>
+    <button class="small" data-price-check="${inv.id}">💲 Check price</button>` : '';
+  if (st === 'checking') return `<div class="note info"><span class="spin"></span> Checking the prices against the price list…</div>`;
+  if (st === 'error') return `<div class="note bad">Price check failed: ${esc(pc && pc.error || 'try again')} ${chooser}</div>`;
+  if (st !== 'done' || !pc || !pc.verdict) {
+    return lists.length ? `<div class="note" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">💲 No price list matched “${esc(inv.supplier || 'this supplier')}”. Check against: ${chooser}</div>` : '';
+  }
+  const cls = { ok: 'info', check: '', problem: 'bad', no_match: '' }[pc.verdict] || '';
+  const label = { ok: '✓ Prices match the price list', check: 'Prices: worth a look', problem: '⚠ Charged more than the price list', no_match: 'Not on the price list' }[pc.verdict];
+  const rows = (pc.lines || []).map((l) => {
+    const diff = l.invoiced_ex_gst != null && l.expected_ex_gst != null ? Math.round((l.invoiced_ex_gst - l.expected_ex_gst) * 100) / 100 : null;
+    return `<tr><td>${esc(l.description)}<div class="muted" style="font-size:11.5px">${esc(l.note || '')}</div></td><td class="num">${l.invoiced_ex_gst != null ? money(l.invoiced_ex_gst) : '–'}</td>
+      <td class="num">${l.expected_ex_gst != null ? money(l.expected_ex_gst) : '–'}</td><td class="num" style="color:${diff > 0.004 ? 'var(--bad)' : diff < -0.004 ? 'var(--ok)' : 'inherit'}">${diff == null ? '' : diff === 0 ? '✓' : (diff > 0 ? '+' : '') + money(diff)}</td></tr>`;
+  }).join('');
+  const mc = pc.money_checks && pc.money_checks.adds_up === false ? `<div style="color:var(--bad);margin-top:4px">⚠ The invoice doesn't add up: ${money(pc.money_checks.subtotal_ex_gst)} + GST ${money(pc.money_checks.gst)} ≠ ${money(pc.money_checks.total_inc_gst)}</div>` : '';
+  return `<div class="note ${cls}"><b>💲 ${label}</b> – ${esc(pc.headline || '')}${pc.difference_ex_gst ? ` <b>(${pc.difference_ex_gst > 0 ? '+' : ''}${money(pc.difference_ex_gst)} ex GST)</b>` : ''}${mc}
+    ${rows ? `<table style="margin-top:6px"><thead><tr><th>Line</th><th class="num">Invoiced</th><th class="num">Price list</th><th class="num">Diff</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+    ${pc.rules_applied && pc.rules_applied.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Rules used: ${pc.rules_applied.map(esc).join(' · ')}</div>` : ''}
+    <div class="muted" style="font-size:12px;margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Checked against ${esc(pc.price_list ? pc.price_list.supplier + (pc.price_list.name ? ' – ' + pc.price_list.name : '') : 'the price list')}${pc.checked_at ? ' · ' + new Date(pc.checked_at).toLocaleDateString('en-AU') : ''} · ${chooser.replace('💲 Check price', '↻ Check again')}</div></div>`;
 }
 
 // ---------- Original invoice (only reloads when a different file is selected) ----------
@@ -790,6 +817,11 @@ document.addEventListener('click', async (e) => {
       const r = await post(`/inbox/${ds.moveBtn}/assign`, { job_number: n, paid: p });
       toast('Moved to #' + (r.job_number || n) + (p ? ' and marked paid' : '')); return load();
     }
+    if (ds.priceCheck) {
+      const sel = $('#pcList-' + ds.priceCheck);
+      await post(`/invoices/${ds.priceCheck}/price-check`, { price_list_id: sel ? Number(sel.value) : null });
+      toast('Checking prices…'); state.forceDetail = true; return load();
+    }
     if (ds.diaryHidden !== undefined) { state.modal.showHidden = !state.modal.showHidden; return renderModal(); }
     if (ds.diaryKeep) { await post(`/invoices/${ds.diaryKeep}/diary-keep`); toast('Kept in Job Costs'); return load(); }
     if (ds.diaryAdd) {
@@ -913,6 +945,7 @@ wireDrop($('#aside'), uploadFiles);
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
 $('#checkLink').href = '/checks?t=' + encodeURIComponent(BOOT.token);
+$('#pricesLink').href = '/prices?t=' + encodeURIComponent(BOOT.token);
 // The full view needs the big ServiceM8 window; "Compact view" goes back to the summary.
 try { window.parent.postMessage({ jobcosts: 'size', size: 'full' }, '*'); } catch (e) {}
 {

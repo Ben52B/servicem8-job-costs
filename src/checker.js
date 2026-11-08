@@ -62,6 +62,29 @@ How to check:
 - Be specific and short. Always write job numbers as "job 207651" and use invoice numbers exactly as printed (e.g. S667642),
   so they can be turned into links. Amounts in AUD; say ex or inc GST.`;
 
+const InvoiceReviewSchema = z.object({
+  verdict: z.enum(['ok', 'check', 'problem', 'no_match']).describe('ok = priced as the list (and rules) say; check = worth a look; problem = charged more than it should be; no_match = nothing on this invoice is on the price list.'),
+  headline: z.string().describe('One short line, e.g. "All 2 lines match the price list" or "Door $41 above the list".'),
+  lines: z.array(z.object({
+    description: z.string(),
+    invoiced_ex_gst: z.number().nullable(),
+    expected_ex_gst: z.number().nullable().describe('What the price list (and any rule) says it should cost, ex GST. null if not on the list.'),
+    note: z.string().describe('Which price-list entry / size band / rule you used, or why it differs.'),
+  })),
+  difference_ex_gst: z.number().nullable().describe('Total invoiced minus total expected, ex GST, for the lines you could price. Positive = charged more.'),
+  rules_applied: z.array(z.string()),
+});
+
+const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against their price list, for a garage door installation business.
+- RULES COME FIRST: apply every rule of the business that fits this invoice (agreed discounts, "bill 1 door only", etc.) and list them.
+- Price lists differ: some show list prices with a discount to apply, some show net prices; door prices are grids by size band
+  (height × width) and range/colour; installers may price per door, per hour or per extra. Read the price list's own notes.
+  Read invoice door sizes as HEIGHT x WIDTH. Compare ex GST.
+- Freight/delivery, packaging and extras count too, if the price list has them.
+- If most lines are higher by the same percentage, the price list is probably older than the invoice: say so in the headline.
+- "money_checks" was worked out in code. Use its figures as given; never add amounts up yourself.
+- Be specific and short. Write job numbers as "job 207651".`;
+
 function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', filesDir }) {
   const client = new Anthropic(apiKey ? { apiKey } : {});
   const common = { model, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
@@ -107,7 +130,35 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
     return message.parsed_output;
   }
 
-  return { readStatement, review };
+  /**
+   * One invoice against its price list, as it arrives. data: { invoice, rules, job, money_checks }.
+   * The price list goes first and is cached, so a batch of invoices from one supplier reuses it.
+   */
+  async function reviewInvoice(data, { priceList, invoiceFile }) {
+    const plBlock = fileToBlock(path.join(filesDir, priceList.file_path), priceList.name || 'price-list.pdf', priceList.mime_type);
+    const content = [
+      { type: 'text', text: `PRICE LIST – ${priceList.supplier}${priceList.name ? ` (${priceList.name})` : ''}:` },
+      { ...plBlock, cache_control: { type: 'ephemeral' } },
+    ];
+    if (invoiceFile) {
+      content.push({ type: 'text', text: 'THE INVOICE (the supplier\u2019s document):' });
+      content.push(fileToBlock(path.join(filesDir, invoiceFile.file_path), invoiceFile.file_name, invoiceFile.mime_type));
+    }
+    content.push({ type: 'text', text: `THE CHECK (JSON):\n${JSON.stringify(data, null, 1)}\n\nCheck every charged line of this invoice against the price list.` });
+    const stream = client.beta.messages.stream({
+      ...common,
+      max_tokens: 32000,
+      system: INVOICE_PROMPT,
+      output_config: { effort: 'medium', format: betaZodOutputFormat(InvoiceReviewSchema) },
+      messages: [{ role: 'user', content }],
+    });
+    const message = await stream.finalMessage();
+    if (message.stop_reason === 'refusal') throw new Error('The price check could not be done (declined by the model).');
+    if (!message.parsed_output) throw new Error('The price check came back incomplete.');
+    return message.parsed_output;
+  }
+
+  return { readStatement, review, reviewInvoice };
 }
 
 module.exports = { createChecker, StatementSchema, ReviewSchema };

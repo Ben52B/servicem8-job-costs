@@ -1042,6 +1042,11 @@ test('statement check: price lists and rules are kept per business; each stateme
           { date: '2026-09-09', reference: 'EFT', type: 'payment', amount: -500 },
         ] };
     },
+    async reviewInvoice(data, files) {
+      seen.inv = data; seen.invFiles = files;
+      return { verdict: 'problem', headline: 'Door $41 above the list', lines: [{ description: 'AA roller door 2100x4840', invoiced_ex_gst: 1226, expected_ex_gst: 1185, note: 'AA 1201-2100 × 4371-5100' }],
+        difference_ex_gst: 41, rules_applied: [] };
+    },
     async review(data, files) {
       seen.data = data; seen.files = files;
       return { summary: 'OK to pay except S799999. Check job 209500.', price_list_notes: null, actions: ['Ask Gliderol for S799999'],
@@ -1109,9 +1114,37 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(boot.select, c.matched[0].invoice.id);
     assert.equal(boot.back, `check:${id}`);
     assert.equal((await fetch(`${b5}/checks?t=${encodeURIComponent(t)}`)).status, 200);
+    assert.equal((await fetch(`${b5}/prices?t=${encodeURIComponent(t)}`)).status, 200);
+
+    // Each invoice is checked against its supplier's price list as it arrives
+    processor.afterRead = app5.locals.priceCheck;
+    const ifd = new FormData(); ifd.append('files', new Blob(['%PDF-1.4 inv'], { type: 'application/pdf' }), 'Tax_Invoice_S700777_ref209500.pdf');
+    await call(t, '/inbox/upload', { method: 'POST', body: ifd });
+    await processor.idle();
+    let pcInv;
+    for (let i = 0; i < 50; i++) { pcInv = repo.db.prepare("SELECT * FROM invoices WHERE invoice_number = 'S700777'").get(); if (pcInv && pcInv.price_check_status === 'done') break; await new Promise((r) => setTimeout(r, 20)); }
+    assert.equal(pcInv.price_check_status, 'done', 'checked automatically: Gliderol has a price list');
+    assert.equal(seen.invFiles.priceList.supplier, 'Gliderol');
+    assert.equal(seen.inv.money_checks.adds_up, true, '1226 + 122.60 = 1348.60');
+    assert.deepEqual(seen.inv.rules, ['Job 209500: Gliderol bills 1 door only']);
+    const ibx = await call(t, '/inbox').then((x) => x.json());
+    const shown = ibx.invoices.find((i) => i.invoice_number === 'S700777');
+    assert.equal(shown.price_check.verdict, 'problem');
+    assert.equal(shown.price_check.difference_ex_gst, 41);
+    // a supplier with no price list: nothing runs by itself; you can choose a price list
+    const joe = repo.createInvoice({ accountUUID: 'acc-chk', source: 'upload' });
+    repo.saveExtraction(joe.id, { supplier_name: 'Joe the Installer', invoice_number: 'J-1', total: 550, tax: 50, subtotal: 500, items: [{ description: 'Install 1 door', category: 'subcontractor', line_total: 500 }] });
+    app5.locals.priceCheck(joe.id);
+    assert.equal(repo.getInvoice(joe.id).price_check_status, 'none');
+    const plId = (await call(t, '/checks').then((x) => x.json())).priceLists[0].id;
+    assert.equal((await call(t, `/invoices/${joe.id}/price-check`, { method: 'POST', json: { price_list_id: plId } })).status, 200);
+    for (let i = 0; i < 50 && repo.getInvoice(joe.id).price_check_status !== 'done'; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(repo.getInvoice(joe.id).price_check_status, 'done');
+    const prices = await call(t, '/prices').then((x) => x.json());
+    assert.deepEqual([prices.priceLists[0].checked, prices.priceLists[0].flagged], [2, 2], 'the Prices page counts the invoices checked against each list');
 
     // A statement dropped into the Inbox goes to Statement check, "not run yet", instead of disappearing
-    processor.onStatement = app5.locals.onStatement; // other test apps share this processor
+    processor.onStatement = app5.locals.onStatement; // joe test apps share this processor
     const sfd = new FormData(); sfd.append('files', new Blob(['%PDF-1.4 statement'], { type: 'application/pdf' }), 'Gliderol Statement October.pdf');
     assert.equal((await call(t, '/inbox/upload', { method: 'POST', body: sfd })).status, 201);
     await processor.idle();
@@ -1134,7 +1167,7 @@ test('statement check: price lists and rules are kept per business; each stateme
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

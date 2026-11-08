@@ -86,9 +86,16 @@ async function load() {
   api('/outlook').then((o) => { outlookStatus = o; renderOutlook(); }).catch(() => {});
   try { data = await api('/inbox'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   clearTimeout(timer);
-  if (data.pending.some((p) => p.status === 'processing')) timer = setTimeout(load, 3000);
+  if (data.pending.some((p) => p.status === 'processing') || data.invoices.some((i) => i.price_check_status === 'checking')) timer = setTimeout(load, 3000);
 }
 
+const PC = { ok: ['✓ Price OK', 'c-proc'], check: ['Check price', 'c-sugg'], problem: ['⚠ Price problem', 'c-err'], no_match: ['Not on price list', 'c-dup'] };
+function pcChip(inv) {
+  if (inv.price_check_status === 'checking') return '<span class="chip c-sugg"><span class="spin"></span> 💲 checking price</span>';
+  const pc = inv.price_check;
+  if (inv.price_check_status !== 'done' || !pc || !PC[pc.verdict]) return '';
+  return `<span class="chip ${PC[pc.verdict][1]}" title="${esc(pc.headline || '')}">💲 ${PC[pc.verdict][0]}</span>`;
+}
 const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title : ''}${j.is_stock ? ' (stock order)' : ''}`;
 const fileLink = (i) => (!i.file_path ? '' : `<a class="btn" href="${i.mime_type === 'application/pdf'
   ? `/viewer.html?id=${i.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(i.supplier || 'Invoice')}`
@@ -174,6 +181,7 @@ function render() {
     const s = i.suggestion;
     h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total_ex ?? i.total)} ex GST</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
       <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from, i.source === 'outlook' && 'from Outlook'].filter(Boolean).join(' · '))}</div>
+      ${pcChip(i) ? `<div style="margin-top:5px;font-size:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
       ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}
       ${i.looks_like_stock ? '<div class="trace"><span class="left">💡 Looks like stock – no job number or site on it, and it reads like a restock order</span></div>' : ''}
       ${dupNote(i.possible_duplicate, s && s.job_uuid)}</div>

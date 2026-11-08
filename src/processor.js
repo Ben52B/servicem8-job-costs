@@ -52,6 +52,8 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         // A job number on it that Job Costs hasn't seen yet (e.g. a completed job): ask ServiceM8.
         try { if (await api.lookupJobs(id)) repo.suggestJob(id); } catch (e) { log.error(`Job lookup for invoice ${id}: ${e.message}`); }
       }
+      // Check its prices against the supplier's / subcontractor's price list (in the background).
+      if (api.afterRead) Promise.resolve().then(() => api.afterRead(id)).catch((e) => log.error(`Price check ${id}: ${e.message}`));
     } catch (e) {
       if (inv.source === 'outlook' && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
@@ -65,6 +67,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
   const api = {
     lookupJobs: null, // set by the app: (invoiceId) => found a job?
     onStatement: null, // set by the app: (invoice, what was read) => file it under Statement check
+    afterRead: null, // set by the app: (invoiceId) => price check against a matching price list
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);

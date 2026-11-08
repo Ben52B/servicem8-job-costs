@@ -124,7 +124,7 @@ function render() {
     <div class="tile"><div class="l">To pay</div><div class="v ${t.outstanding > 0.004 ? 'warn' : 'good'}">${t.outstanding > 0.004 ? money0(t.outstanding) : '✓ $0'}</div><div class="s">${unpaid.length ? `${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}` : 'all paid'}</div></div>
     <div class="tile"><div class="l">⚠ Screw-ups</div><div class="v ${t.mistakes > 0 ? 'bad' : ''}">${money0(t.mistakes)}</div><div class="s">${t.mistakes > 0 ? t.mistakePct + '% of costs' : 'none 🎉'}</div></div></div>`;
   const ready = d.invoices.filter((i) => i.status === 'ready' && !i.duplicate_of);
-  const lines = ready.slice(0, 5).map((i) => `<div class="line"><span class="nm"><b>${esc(i.supplier || 'Unknown supplier')}</b>${i.invoice_number ? ' <span class="muted">#' + esc(i.invoice_number) + '</span>' : ''}${i.mistake_state && i.mistake_state !== 'none' ? ' <span class="bad" title="Screw-up">⚠</span>' : ''}</span>
+  const lines = ready.slice(0, 5).map((i) => `<div class="line"><span class="nm"><b>${esc(i.supplier || 'Unknown supplier')}</b>${i.invoice_number ? ' <span class="muted">#' + esc(i.invoice_number) + '</span>' : ''}${i.mistake_state && i.mistake_state !== 'none' ? ' <span class="bad" title="Screw-up">⚠</span>' : ''}${i.price_check && ['problem', 'check'].includes(i.price_check.verdict) && i.price_check_status === 'done' ? ` <span class="${i.price_check.verdict === 'problem' ? 'bad' : 'warn'}" title="${esc(i.price_check.headline || '')}">💲</span>` : ''}</span>
       <span>${money0(i.job_total)}</span><span class="chip ${i.payment_state === 'paid' ? 'p' : i.payment_state === 'part' ? 'pt' : 'u'}">${i.payment_state === 'paid' ? 'Paid' : i.payment_state === 'part' ? 'Part' : 'Unpaid'}</span></div>`).join('');
   const reading = d.invoices.filter((i) => i.status === 'processing').length;
   const costs = `<div class="box"><h3>Costs on this job${ready.length > 5 ? ` · showing 5 of ${ready.length}` : ''}</h3>${lines || '<div class="muted" style="font-size:13px">No costs yet.</div>'}
@@ -141,7 +141,7 @@ function render() {
 async function load() {
   try { data = await api('/job'); render(); } catch (e) { $('#sum').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   clearTimeout(timer);
-  if (data && (data.totals.processing > 0 || data.sm8Loading)) timer = setTimeout(load, 3000);
+  if (data && (data.totals.processing > 0 || data.sm8Loading || data.invoices.some((i) => i.price_check_status === 'checking'))) timer = setTimeout(load, 3000);
 }
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;

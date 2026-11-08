@@ -15,7 +15,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -256,6 +256,50 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     repo.updateCheck(c.id, { status: 'waiting', supplier: read.supplier_name || null, statement_date: read.invoice_date || null });
     return c;
   };
+  // ---------- price check of each invoice as it arrives ----------
+  let priceQueue = Promise.resolve(); // one at a time
+  function priceCheck(invoiceId, { priceListId = null, auto = false } = {}) {
+    const inv = repo.getInvoice(invoiceId);
+    if (!inv || inv.status !== 'ready' || !checker) return { started: false };
+    const pl = priceListId ? repo.getPriceList(inv.account_uuid ?? null, priceListId) : repo.priceListFor(inv.account_uuid ?? null, inv.supplier);
+    if (!pl) { if (!inv.price_check_status) repo.setPriceCheck(inv.id, { status: 'none' }); return { started: false }; }
+    if (auto && inv.price_check_status === 'done') return { started: false }; // already checked; "Check again" redoes it
+    repo.setPriceCheck(inv.id, { status: 'checking' });
+    priceQueue = priceQueue.then(() => runPriceCheck(inv.id, pl)).catch(() => {});
+    return { started: true, price_list: pl.supplier };
+  }
+  async function runPriceCheck(invoiceId, pl) {
+    const inv = repo.getInvoice(invoiceId);
+    if (!inv) return;
+    try {
+      const c = (n) => Math.round((Number(n) || 0) * 100);
+      const money_checks = {
+        adds_up: inv.subtotal == null || inv.tax == null || inv.total == null ? null : Math.abs(c(inv.subtotal) + c(inv.tax) - c(inv.total)) <= 2,
+        subtotal_ex_gst: inv.subtotal, gst: inv.tax, total_inc_gst: inv.total,
+      };
+      // the job it's on (or suggested for), with the notes from ServiceM8 where we can get them
+      const jobUUID = (repo.jobsOnInvoice(inv.id)[0] || {}).job_uuid || inv.origin_job_uuid || inv.suggested_job_uuid || null;
+      let job = null;
+      if (jobUUID) {
+        const local = repo.getJob(jobUUID) || {};
+        const token = await accessTokenFor(inv.account_uuid ?? null, eventTokens.get(inv.account_uuid ?? null)).catch(() => null);
+        const info = token ? await fetchJobImpl(jobUUID, token).catch(() => null) : null;
+        job = { job_number: local.job_number, client: local.client_name, address: local.job_title, quoted_price_ex_gst: local.quote_amount ?? null, notes: (info && info.description) || null };
+      }
+      const result = await checker.reviewInvoice({
+        invoice: { supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, subtotal_ex_gst: inv.subtotal, gst: inv.tax, total_inc_gst: inv.total,
+          references: (() => { try { return JSON.parse(inv.refs || '[]'); } catch { return []; } })(), lines: repo.itemsOf(inv.id).map(({ paid, ...x }) => x) },
+        rules: repo.listRules(inv.account_uuid ?? null).filter((r) => r.active).map((r) => r.text),
+        job, money_checks,
+      }, { priceList: pl, invoiceFile: inv.file_path && isSupported(inv.file_name, inv.mime_type) ? { file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type } : null });
+      repo.setPriceCheck(inv.id, { status: 'done', result: { ...result, money_checks, price_list: { id: pl.id, supplier: pl.supplier, name: pl.name }, checked_at: new Date().toISOString() } });
+    } catch (e) {
+      console.error(`Price check of invoice ${invoiceId}: ${e.message}`);
+      repo.setPriceCheck(invoiceId, { status: 'error', result: { error: /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit.' : e.message } });
+    }
+  }
+  processor.afterRead = app.locals.priceCheck = (id, opts) => priceCheck(id, { auto: true, ...(opts || {}) });
+
   processor.lookupJobs = app.locals.lookupJobs = async (invoiceId) => {
     const inv = repo.getInvoice(invoiceId);
     let found = false;
@@ -574,7 +618,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices']) {
     app.get(`/${name}`, (req, res) => {
       if (!jobFromToken(req.query.t)) {
         return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');
@@ -606,6 +650,7 @@ window.addEventListener('message', function (e) {
     const note = sm8Notes.get(req.job.job_uuid) || null;
     res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
       diaryNote: diaryErrors.get(req.account) || null,
+      priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),
       jobs: repo.listJobs(req.account).filter((j) => j.job_uuid !== req.job.job_uuid) });
   });
@@ -833,6 +878,17 @@ window.addEventListener('message', function (e) {
     const inv = addInvoiceFile({ accountUUID: req.account, originJobUUID: req.job.job_uuid, source: 'diary', name, contentType: file.contentType, buffer: file.buffer });
     repo.setDiary(inv.id, { sm8_attachment_uuid: f.uuid, sm8_job_uuid: f.job_uuid, sm8_link: 'pulled' });
     res.status(201).json({ id: inv.id });
+  });
+
+  // Check this invoice's prices now (optionally against a chosen price list).
+  api.post('/invoices/:id/price-check', (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    if (!checker) return res.status(500).json({ error: 'Price checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
+    if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    const r = priceCheck(inv.id, { priceListId: req.body?.price_list_id ? Number(req.body.price_list_id) : null });
+    if (!r.started) return res.status(400).json({ error: 'There\u2019s no price list for this supplier. Choose one, or upload it in 🔎 Statement check → Price lists.' });
+    res.json({ ok: true, price_list: r.price_list });
   });
 
   api.get('/invoices/:id/file', (req, res) => {
@@ -1119,6 +1175,18 @@ window.addEventListener('message', function (e) {
     priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name, created_at: p.created_at, mime_type: p.mime_type })),
     available: !!checker,
   }));
+  // The Prices & rules page: price lists (with how many invoices were checked against each) and the rules.
+  api.get('/prices', (req, res) => {
+    const counts = new Map(repo.db.prepare(`SELECT json_extract(price_check, '$.price_list.id') AS pl, COUNT(*) AS n,
+        SUM(CASE WHEN json_extract(price_check, '$.verdict') IN ('problem', 'check') THEN 1 ELSE 0 END) AS flagged
+      FROM invoices WHERE account_uuid IS ? AND price_check_status = 'done' GROUP BY pl`).all(req.account).map((r) => [Number(r.pl), r]));
+    res.json({
+      available: !!checker,
+      priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name, created_at: p.created_at, mime_type: p.mime_type,
+        checked: (counts.get(p.id) || {}).n || 0, flagged: (counts.get(p.id) || {}).flagged || 0 })),
+      rules: repo.listRules(req.account),
+    });
+  });
   api.post('/rules', (req, res) => {
     const text = String(req.body?.text || '').trim().slice(0, 2000);
     if (!text) return res.status(400).json({ error: 'Write the rule first' });

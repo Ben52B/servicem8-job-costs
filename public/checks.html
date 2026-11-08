@@ -159,14 +159,9 @@ function renderHome() {
       </form></div>
     <div class="panel"><h2>Past checks</h2>${h.checks.length ? `<table class="t"><thead><tr><th>Run</th><th>Supplier</th><th>Statement</th><th class="num">Total due</th><th>Status</th><th></th></tr></thead><tbody>${checks}</tbody></table>` : '<div class="hint">No checks yet.</div>'}</div>
   </div><div>
-    <div class="panel"><h2>Rules</h2><div class="hint">Agreements and exceptions to follow on every check. Untick a rule to pause it.</div>
-      ${rules || '<div class="hint">No rules yet.</div>'}
-      <div class="row" style="display:block;border-top:1px solid var(--line2);padding-top:10px"><textarea id="newRule" placeholder="e.g. Job 207932: Gliderol said they'll bill us for 1 door only
-e.g. Job 207659: Gliderol gives 20% off the price list"></textarea></div>
-      <div class="row"><button class="primary" data-rule-add>＋ Add rule</button></div></div>
-    <div class="panel"><h2>Price lists</h2><div class="hint">Your suppliers' price lists. They stay private to your business. Upload the newest one when a supplier changes prices.</div>
-      ${lists ? `<table class="t"><thead><tr><th>Supplier</th><th>File</th><th>Uploaded</th><th></th><th></th></tr></thead><tbody>${lists}</tbody></table>` : ''}
-      <form id="newList" class="row"><input type="text" name="supplier" placeholder="Supplier, e.g. Gliderol" required style="width:180px"><input type="file" name="file" accept="application/pdf,image/*" required><button type="submit">⬆ Upload</button></form></div>
+    <div class="panel"><h2>Price lists &amp; rules</h2><div class="hint">The check uses your ${h.priceLists.length} price list${h.priceLists.length === 1 ? '' : 's'} and ${h.rules.filter((r) => r.active).length} rule${h.rules.filter((r) => r.active).length === 1 ? '' : 's'}.</div>
+      ${h.priceLists.map((p) => `<div class="muted" style="font-size:13px">• <b>${esc(p.supplier)}</b> – ${esc(p.name || '')}</div>`).join('')}
+      <div class="row"><a class="btn" href="/prices?t=${T}">💲 Prices &amp; rules</a></div></div>
   </div></div>`;
 }
 

@@ -317,6 +317,9 @@ function migrateColumns(db) {
   // Approved from the Inbox (so it can be undone): when, and onto which job (null = stock).
   add('approved_at', 'TEXT');
   add('approved_job_uuid', 'TEXT');
+  // Price check of the invoice against the supplier's / subcontractor's price list
+  add('price_check', 'TEXT');          // JSON: the result
+  add('price_check_status', 'TEXT');   // checking | done | error | none (no price list)
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
@@ -513,6 +516,18 @@ function createRepo(db, dataDir) {
     /** ServiceM8 access for an account, from approving the add-on (OAuth). */
     itemsOf(invoiceId) {
       return db.prepare('SELECT description, quantity, unit, unit_price, line_total, category, paid FROM items WHERE invoice_id = ? ORDER BY position, id').all(invoiceId);
+    },
+
+    setPriceCheck(id, { status, result }) {
+      db.prepare('UPDATE invoices SET price_check_status = ?, price_check = COALESCE(?, price_check) WHERE id = ?')
+        .run(status, result === undefined ? null : JSON.stringify(result), id);
+    },
+    /** The price list for this supplier / subcontractor: a word of the price list's name appears in the supplier's name. */
+    priceListFor(accountUUID, supplier) {
+      const sup = String(supplier || '').toLowerCase();
+      if (!sup) return null;
+      const words = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !['pty', 'ltd', 'the', 'and', 'group'].includes(w));
+      return repo.listPriceLists(accountUUID).find((p) => words(p.supplier).some((w) => sup.includes(w))) || null;
     },
 
     // ----- statement checks -----
@@ -1166,6 +1181,7 @@ function createRepo(db, dataDir) {
           diary_missing: !!inv.sm8_missing,
           total_ex: exGst(inv.total, inv.tax),
           refs: parseJson(inv.refs, []),
+          price_check: parseJson(inv.price_check, null),
           items: lines,
           other_lines: otherLines,
           job_total: total,
@@ -1286,7 +1302,8 @@ function createRepo(db, dataDir) {
         out.push({
           id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
           total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
-          untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf, possible_duplicate: untouched ? repo.possibleDuplicate(inv) : null,
+          untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
+          price_check: parseJson(inv.price_check, null), price_check_status: inv.price_check_status || null, possible_duplicate: untouched ? repo.possibleDuplicate(inv) : null,
           stock_job: inv.stock_job_uuid && jobsById.get(inv.stock_job_uuid)
             ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,
           left_amount: round2(left.reduce((s, l) => s + l.trace.left_amount, 0)),

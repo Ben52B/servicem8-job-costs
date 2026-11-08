@@ -38,6 +38,10 @@ One place for every supplier invoice, matched to your ServiceM8 jobs. For a gara
 - **Removing:** taking an invoice off a job in Job Costs offers *Also remove it from the ServiceM8 job diary*. If a file is deleted in the diary, the next time the card opens it asks whether to remove it from Job Costs too.
 - Needs the attachment and note permissions in `SERVICEM8_SCOPES` (`read_attachments manage_attachments read_job_notes publish_job_notes`; if ServiceM8 rejects one, smaller sets are tried automatically). After upgrading, open the add-on's install link once and approve again.
 
+## Price check of every invoice
+
+As soon as an invoice has been read, Job Costs looks for a price list whose name appears in the invoice's supplier name (suppliers and subcontractors alike) and has Claude compare every line with it, applying your rules first. The result shows on the invoice in the Inbox (💲 Price OK / Check price / Price problem) and line by line on the job card (invoiced vs price list vs difference), with **Check again** against any price list. Price lists and rules live on **💲 Prices & rules** (job card header); the same ones are used by the Statement check.
+
 ## Statement check
 
 **🔎 Statement check** (top of the job card) checks a supplier's monthly statement before you pay it:
