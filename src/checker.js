@@ -132,7 +132,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
     // a sign of life while Claude works: thinking first, then writing the report (how many invoices so far)
     let phase = 'thinking', chars = 0, last = 0;
     const tick = (force) => {
-      if (!force && Date.now() - last < 4000) return;
+      if (!force && Date.now() - last < 3000) return;
       last = Date.now();
       const done = phase === 'writing' ? (stream.currentMessage?.content || []).map((b) => b.text || '').join('').split('"reference"').length - 1 : 0;
       try { onProgress(phase === 'thinking' ? 'Claude is reading the price list and working through the invoices…' : `Claude is writing the report… (${done} invoice${done === 1 ? '' : 's'} done)`); } catch (e) { stream.abort(); }
@@ -142,7 +142,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
       if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') chars += ev.delta.text.length;
       tick(false);
     });
-    const timer = setInterval(() => tick(true), 15000);
+    const timer = setInterval(() => tick(true), 3000); // also how quickly a Stop cancels the request
     let message;
     try { message = await stream.finalMessage(); } finally { clearInterval(timer); }
     if (message.stop_reason === 'refusal') throw new Error('The check could not be done (declined by the model).');

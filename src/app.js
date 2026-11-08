@@ -419,7 +419,9 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, attempts: 0, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
     } catch (e) {
-      if (e.stopped) { stopRequested.delete(id); const cur = repo.db.prepare('SELECT status FROM statement_checks WHERE id = ?').get(id); if (cur && cur.status !== 'error') repo.updateCheck(id, { status: 'waiting', progress: null, error: null }); return; }
+      // stopped (the Claude request is cancelled too): leave it as "not run yet", not as an error
+      const cur = repo.db.prepare('SELECT status FROM statement_checks WHERE id = ?').get(id);
+      if (e.stopped || (cur && cur.status === 'waiting')) { stopRequested.delete(id); if (cur && cur.status !== 'error') repo.updateCheck(id, { status: 'waiting', progress: null, error: null }); return; }
       console.error(`Statement check ${id}: ${e.message}`);
       const msg = /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit. Add credit at console.anthropic.com, then click Run again.'
         : e.status === 429 || e.status >= 500 ? 'Claude is busy right now. Click Run again in a minute.' : e.message || 'The check failed.';
