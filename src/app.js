@@ -209,6 +209,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         do {
           diaryAgain = false;
           await diaryPass();
+          await summaryPass();
         } while (diaryAgain);
       } catch (e) {
         console.error(`Diary copier: ${e.message}`);
@@ -255,6 +256,56 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       }
     }
   }
+  /** The summary note for a job's diary (plain text; ServiceM8 shows it as written). */
+  function summaryText(jobUUID, accountUUID) {
+    const sm = repo.getJobSummary(jobUUID);
+    const t = sm.totals || {};
+    const tz = settingsFor(accountUUID).timezone || 'UTC';
+    const m = (n) => (n < 0 ? '-' : '') + '$' + Math.abs(Number(n) || 0).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const when = new Date().toLocaleString('en-AU', { timeZone: tz, day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const bills = (sm.invoices || []).filter((i) => i.status === 'ready' && !i.duplicate_of);
+    const lines = [`Job Costs summary (updated ${when})`,
+      `Costs: ${m(t.total)} ex GST from ${t.invoiceCount || 0} bill${t.invoiceCount === 1 ? '' : 's'}`,
+      `Paid: ${m(t.paid)} · Still to pay: ${m(t.outstanding)}`];
+    if (t.quote != null) lines.push(`Quoted: ${m(t.quote)} ex GST · Profit so far: ${m(t.margin)} (${t.marginPct}%)`);
+    if (t.mistakes > 0.004) lines.push(`Screw-ups: ${m(t.mistakes)}`);
+    const flagged = repo.checkFlagsFor(accountUUID, bills.map((i) => i.id)).size;
+    if (flagged) lines.push(`⚠ ${flagged} bill${flagged === 1 ? '' : 's'} flagged by a statement check`);
+    return { text: lines.join('\n').slice(0, 1000), empty: !bills.length && t.quote == null };
+  }
+  async function summaryPass() {
+    for (const row of repo.dirtySummaries()) {
+      const acc = row.account_uuid ?? null;
+      if (!row.known) { repo.clearSummaryDirty(row.job_uuid); continue; } // job not in Job Costs
+      if (!settingsFor(acc).diary_summary || repo.isStockJob(row.job_uuid)) { repo.clearSummaryDirty(row.job_uuid); continue; }
+      const { text, empty } = summaryText(row.job_uuid, acc);
+      const same = row.text && row.text.split('\n').slice(1).join('\n') === text.split('\n').slice(1).join('\n'); // only the time differs
+      if (same || (empty && !row.note_uuid)) { repo.clearSummaryDirty(row.job_uuid); continue; }
+      if ((diaryRetryAt.get('s:' + row.job_uuid) || 0) > Date.now()) continue;
+      const token = await diaryToken(acc);
+      if (!token) continue;
+      try {
+        let uuid = row.note_uuid;
+        if (uuid) {
+          try { await diaryApi.updateJobNote(uuid, { text }, token); } catch (e) {
+            if (/\b429\b/.test(e.message)) throw e;
+            // can't change it (deleted in ServiceM8, or not allowed): replace it
+            await diaryApi.removeJobNote(uuid, token).catch(() => {});
+            uuid = null;
+          }
+        }
+        if (!uuid) uuid = await diaryApi.addJobNote({ jobUUID: row.job_uuid, text }, token);
+        repo.saveSummaryNote(row.job_uuid, uuid, text);
+        repo.clearSummaryDirty(row.job_uuid);
+        diaryRetryAt.delete('s:' + row.job_uuid);
+      } catch (e) {
+        console.error(`Diary summary for job ${row.job_uuid} failed: ${e.message}`);
+        diaryErrors.set(acc, diaryProblem(e));
+        diaryRetryAt.set('s:' + row.job_uuid, Date.now() + (/\b429\b/.test(e.message) ? 60000 : 5 * 60000));
+      }
+    }
+  }
+  app.locals.summaryPass = summaryPass;
   let diaryKick = null;
   const kickDiary = () => { if (!diaryKick) diaryKick = setTimeout(() => { diaryKick = null; syncDiary(); }, 1500); };
   app.locals.syncDiary = syncDiary;
@@ -816,7 +867,9 @@ window.addEventListener('message', function (e) {
     }
     if ((ch.check_from ?? settingsFor(req.account).check_from) >= (ch.check_to ?? settingsFor(req.account).check_to)) return res.status(400).json({ error: 'The checking hours end before they start' });
     if (b.diary_summary !== undefined) ch.diary_summary = !!b.diary_summary;
+    const wasOn = settingsFor(req.account).diary_summary;
     const saved = repo.saveSettings(req.account, ch);
+    if (saved.diary_summary && !wasOn) { repo.markSummaryDirty(repo.jobsWithCosts(req.account)); kickDiary(); }
     // new stock words: sort the business's jobs again
     if (ch.stock_clients || ch.stock_categories) {
       const w = stockWords(req.account);

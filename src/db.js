@@ -358,6 +358,17 @@ function migrateColumns(db) {
   for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
   if (!cols(db, 'mail_imports').includes('check_id')) db.exec('ALTER TABLE mail_imports ADD COLUMN check_id INTEGER'); // a statement: which check it went to
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
+  // Diary summary: one note per job in ServiceM8, rewritten when the job's costs, paid ticks or price change.
+  db.exec(`CREATE TABLE IF NOT EXISTS job_summary_notes (job_uuid TEXT PRIMARY KEY, note_uuid TEXT, text TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS summary_dirty (job_uuid TEXT PRIMARY KEY);
+    -- (no "OR IGNORE" in triggers: an upsert that fires them would override it)
+    CREATE TRIGGER IF NOT EXISTS sd_alloc_ins2 AFTER INSERT ON allocations BEGIN INSERT INTO summary_dirty SELECT NEW.job_uuid WHERE NEW.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = NEW.job_uuid); END;
+    CREATE TRIGGER IF NOT EXISTS sd_alloc_del2 AFTER DELETE ON allocations BEGIN INSERT INTO summary_dirty SELECT OLD.job_uuid WHERE OLD.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = OLD.job_uuid); END;
+    CREATE TRIGGER IF NOT EXISTS sd_alloc_upd2 AFTER UPDATE ON allocations BEGIN INSERT INTO summary_dirty SELECT NEW.job_uuid WHERE NEW.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = NEW.job_uuid); INSERT INTO summary_dirty SELECT OLD.job_uuid WHERE OLD.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = OLD.job_uuid); END;
+    CREATE TRIGGER IF NOT EXISTS sd_item_upd2 AFTER UPDATE OF paid, cost ON items BEGIN
+      INSERT INTO summary_dirty SELECT DISTINCT a.job_uuid FROM allocations a WHERE a.item_id = NEW.id AND NOT EXISTS (SELECT 1 FROM summary_dirty d WHERE d.job_uuid = a.job_uuid); END;
+    CREATE TRIGGER IF NOT EXISTS sd_job_quote2 AFTER UPDATE OF quote_amount ON jobs WHEN COALESCE(OLD.quote_amount, -1) != COALESCE(NEW.quote_amount, -1)
+      BEGIN INSERT INTO summary_dirty SELECT NEW.job_uuid WHERE NEW.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = NEW.job_uuid); END;`);
   // Settings per business. Businesses already here when settings arrived keep how the app worked for them.
   const hadSettings = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_settings'").get();
   db.exec('CREATE TABLE IF NOT EXISTS account_settings (account_key TEXT PRIMARY KEY, data TEXT NOT NULL)');
@@ -1554,6 +1565,23 @@ function createRepo(db, dataDir) {
           file_path: i.file_path, mime_type: i.mime_type, jobs: repo.jobsOnInvoice(i.id).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number })) }));
       const leftTotal = round2(inStock.reduce((s, i) => s + i.left_amount, 0));
       return { stock: inStock, usedUp, leftTotal };
+    },
+
+    // ---------- the diary summary note of each job ----------
+    dirtySummaries(limit = 50) {
+      return db.prepare(`SELECT summary_dirty.job_uuid, jobs.job_uuid AS known, jobs.account_uuid, job_summary_notes.note_uuid, job_summary_notes.text FROM summary_dirty
+        LEFT JOIN jobs ON jobs.job_uuid = summary_dirty.job_uuid LEFT JOIN job_summary_notes ON job_summary_notes.job_uuid = summary_dirty.job_uuid LIMIT ?`).all(limit);
+    },
+    clearSummaryDirty(jobUUID) { db.prepare('DELETE FROM summary_dirty WHERE job_uuid = ?').run(jobUUID); },
+    markSummaryDirty(jobUUIDs) { const ins = db.prepare('INSERT OR IGNORE INTO summary_dirty VALUES (?)'); for (const j of jobUUIDs) ins.run(j); },
+    saveSummaryNote(jobUUID, noteUUID, text) {
+      db.prepare(`INSERT INTO job_summary_notes (job_uuid, note_uuid, text, updated_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        ON CONFLICT(job_uuid) DO UPDATE SET note_uuid = excluded.note_uuid, text = excluded.text, updated_at = excluded.updated_at`).run(jobUUID, noteUUID, text);
+    },
+    /** Open jobs of a business that have costs: their summaries are written when the switch is turned on. */
+    jobsWithCosts(accountUUID) {
+      return db.prepare(`SELECT DISTINCT allocations.job_uuid FROM allocations JOIN jobs ON jobs.job_uuid = allocations.job_uuid
+        WHERE jobs.account_uuid IS ? AND COALESCE(jobs.sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(accountUUID).map((r) => r.job_uuid);
     },
 
     // ---------- settings of a business ----------

@@ -1696,6 +1696,49 @@ test('settings per business: your own setup is kept; stock words, email hours an
   assert.match((await json(t, '/inbox')).outlookHours, /Sat 7am–3pm/);
 });
 
+test('diary summary: one note per job in ServiceM8, kept up to date, only when switched on', async () => {
+  JOBS['sum-job'] = { jobNumber: '208900', jobTitle: '9 Summary St', quoteAmount: 5000, status: 'Work Order' };
+  const t = await openCard('sum-job', 'acc-sum');
+  const updates = [];
+  fakeDiary.updateJobNote = async (uuid, { text }) => {
+    updates.push(uuid);
+    if (fakeDiary.refuseUpdate) throw new Error('ServiceM8 said 403');
+    const n = diary.notes.find((x) => x.uuid === uuid); n.text = text; return uuid;
+  };
+  const mine = () => diary.notes.filter((n) => n.job_uuid === 'sum-job');
+  const [id] = await upload(t, 'sum-door.pdf'); // $3,000 ex GST
+  await app.locals.summaryPass();
+  assert.equal(mine().length, 0, 'off by default: nothing in the diary');
+  // switched on: the job gets its summary
+  assert.equal((await api(t, '/settings', { method: 'PUT', json: { diary_summary: true } })).status, 200);
+  await app.locals.summaryPass();
+  assert.equal(mine().length, 1);
+  const text = mine()[0].text;
+  assert.match(text, /^Job Costs summary \(updated .+\)\nCosts: \$3,000\.00 ex GST from 1 bill\nPaid: \$0\.00 · Still to pay: \$3,000\.00\nQuoted: \$5,000\.00 ex GST · Profit so far: \$2,000\.00 \(40%\)$/, text);
+  // marked paid: the same note is changed, not a new one
+  await api(t, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
+  await app.locals.summaryPass();
+  assert.equal(mine().length, 1);
+  assert.match(mine()[0].text, /Paid: \$3,000\.00 · Still to pay: \$0\.00/);
+  assert.equal(updates.length, 1);
+  // nothing changed: ServiceM8 isn't touched
+  repo.markSummaryDirty(['sum-job']);
+  await app.locals.summaryPass();
+  assert.equal(updates.length, 1, 'only the time would differ: left alone');
+  // the note can't be changed (e.g. deleted in ServiceM8): a fresh one replaces it
+  fakeDiary.refuseUpdate = true;
+  await api(t, '/job', { method: 'PATCH', json: { quote_amount: 6000 } });
+  await app.locals.summaryPass();
+  assert.equal(mine().length, 1);
+  assert.match(mine()[0].text, /Quoted: \$6,000\.00 ex GST · Profit so far: \$3,000\.00 \(50%\)/);
+  fakeDiary.refuseUpdate = false;
+  // switched off: no more changes
+  await api(t, '/settings', { method: 'PUT', json: { diary_summary: false } });
+  await api(t, `/invoices/${id}`, { method: 'PATCH', json: { paid: false } });
+  await app.locals.summaryPass();
+  assert.match(mine()[0].text, /Still to pay: \$0\.00/);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

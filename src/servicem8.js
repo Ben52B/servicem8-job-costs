@@ -342,11 +342,17 @@ async function addJobNote({ jobUUID, text }, accessToken) {
   return created.uuid || null;
 }
 
+/** Change the text of a note in the job diary. */
+async function updateJobNote(uuid, { text }, accessToken) {
+  await sm8('POST', `note/${encodeURIComponent(uuid)}.json`, accessToken, { json: { note: text, active: 1 } });
+  return uuid;
+}
+
 const removeJobFile = (uuid, accessToken) => sm8('DELETE', `attachment/${encodeURIComponent(uuid)}.json`, accessToken);
 const removeJobNote = (uuid, accessToken) => sm8('DELETE', `note/${encodeURIComponent(uuid)}.json`, accessToken);
 
 module.exports = {
   verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob, extractToken, fullPriceFromLines, findJobByNumber,
   authorizeUrl, exchangeCode, refreshAccessToken, fetchAccount,
-  listJobFiles, downloadJobFile, addJobFile, addJobNote, removeJobFile, removeJobNote,
+  listJobFiles, downloadJobFile, addJobFile, addJobNote, updateJobNote, removeJobFile, removeJobNote,
 };
