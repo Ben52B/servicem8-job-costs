@@ -1559,6 +1559,63 @@ test('standing price changes are rules for one supplier; a pattern a check spots
   assert.deepEqual(texts('Taurean Door Systems'), ['All suppliers: freight over $100 needs a look', 'Taurean: expect the price list + 5%']);
 });
 
+test('Export everything: one zip with every invoice (paid or not, which job), lines, jobs, rules and the original files', async () => {
+  JOBS['ex-job'] = { jobNumber: '208700', jobTitle: '7 Export St', quoteAmount: 5000 };
+  JOBS['ex-job2'] = { jobNumber: '208701', jobTitle: '8 Export St' };
+  const t = await openCard('ex-job', 'acc-ex');
+  const t2 = await openCard('ex-job2', 'acc-ex');
+  const [aId] = await upload(t, 'ex-door.pdf'); const a = { id: aId };
+  await api(t, `/invoices/${a.id}`, { method: 'PATCH', json: { paid: true } });
+  const m = repo.createInvoice({ accountUUID: 'acc-ex', source: 'upload' });
+  repo.saveExtraction(m.id, { supplier_name: 'Merlin, "Motors"', invoice_number: 'M-700', total: 1100, tax: 100, subtotal: 1000, items: [{ description: 'Opener', quantity: 10, line_total: 1000, category: 'materials' }] });
+  repo.keepAsStock(m.id);
+  const item = repo.db.prepare('SELECT id FROM items WHERE invoice_id = ?').get(m.id).id;
+  assert.equal((await api(t2, `/items/${item}/share`, { method: 'PUT', json: { quantity: 3 } })).status, 200);
+  await post(t, '/rules', { text: 'Gliderol: expect the price list + 3%', kind: 'always', supplier: 'Gliderol' });
+
+  const res = await fetch(`${base}/api/export?t=${encodeURIComponent(t)}`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /attachment; filename="Job Costs export \d{4}-\d{2}-\d{2}\.zip"/);
+  const zipBuf = Buffer.from(await res.arrayBuffer());
+  // read it back: every entry's checksum must match
+  const files = {};
+  const zlib = require('zlib');
+  const eocd = zipBuf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const count = zipBuf.readUInt16LE(eocd + 10);
+  let p = zipBuf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    const method = zipBuf.readUInt16LE(p + 10), crc = zipBuf.readUInt32LE(p + 16), size = zipBuf.readUInt32LE(p + 20);
+    const nameLen = zipBuf.readUInt16LE(p + 28), extra = zipBuf.readUInt16LE(p + 30), comment = zipBuf.readUInt16LE(p + 32), off = zipBuf.readUInt32LE(p + 42);
+    const name = zipBuf.slice(p + 46, p + 46 + nameLen).toString('utf8');
+    const lh = off + 30 + zipBuf.readUInt16LE(off + 26) + zipBuf.readUInt16LE(off + 28);
+    const body = zipBuf.slice(lh, lh + size);
+    const data = method === 8 ? zlib.inflateRawSync(body) : body;
+    assert.equal(zlib.crc32(data) >>> 0, crc, name);
+    files[name] = data;
+    p += 46 + nameLen + extra + comment;
+  }
+  const names = Object.keys(files);
+  for (const n of ['Invoices.csv', 'Invoice lines.csv', 'Jobs.csv', 'Rules.csv', 'Price lists.csv', 'Statement checks.csv', 'READ ME.txt']) assert.ok(names.includes(n), n);
+  const invCsv = files['Invoices.csv'].toString('utf8');
+  assert.ok(invCsv.startsWith('﻿'), 'opens in Excel with the right characters');
+  const door = invCsv.split('\r\n').find((l) => l.includes('Door Supplies Pty Ltd'));
+  assert.match(door, /,3000,300,3300,Yes,\d{4}-\d{2}-\d{2},#208700 \(100%\),/, 'amounts, paid, paid date, job');
+  const merlin = invCsv.split('\r\n').find((l) => l.includes('M-700'));
+  assert.match(merlin, /^\d+,"Merlin, ""Motors""",M-700,/, 'commas and quotes in names are kept');
+  assert.match(merlin, /,No,,#208701 \(30%\),Yes,/, 'unpaid, 30% on a job, stock');
+  const lines = files['Invoice lines.csv'].toString('utf8');
+  assert.match(lines, /Opener,10,,1000,materials,No,#208701,3,300,/);
+  assert.match(lines, /Opener,10,,1000,materials,No,,,,,7 /, '7 left in stock');
+  assert.match(files['Jobs.csv'].toString('utf8'), /\r\n208700,,7 Export St,[^,]*,,5000,3000,3000,0,2000,40,0,1\r\n/, 'quote, costs, paid, to pay, profit, margin');
+  assert.match(files['Rules.csv'].toString('utf8'), /Gliderol: expect the price list \+ 3%,Yes,always,Gliderol/);
+  assert.ok(names.some((n) => /^invoices\/Door Supplies Pty Ltd – INV-100[-0-9]* – job 208700\.pdf$/.test(n)), names.join(' | '));
+  // another business gets only its own
+  const other = await openCard('job-a', 'acc-1');
+  const theirs = Buffer.from(await (await fetch(`${base}/api/export?t=${encodeURIComponent(other)}`)).arrayBuffer());
+  assert.ok(!theirs.includes(Buffer.from('M-700')) && !theirs.includes(Buffer.from('208700')));
+  assert.equal((await fetch(`${base}/api/export`)).status, 401);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

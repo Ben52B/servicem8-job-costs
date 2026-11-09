@@ -139,6 +139,7 @@ function render() {
   const sel = list.filter((b) => selected.has(b.id));
   const sum = (arr, k) => arr.reduce((s, b) => s + (Number(b[k]) || 0), 0);
   $('#foot').innerHTML = `<span><b>${list.length}</b> shown · ${money(sum(list, 'total'))} inc GST</span><span class="spacer"></span>
+    <a class="btn" href="/api/export?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener" title="One zip: spreadsheets of every invoice (paid or not, which job), every job's costs and profit, and all the original files">⬇ Export everything</a>
     ${sel.length ? `<span><b>${sel.length} selected</b> · ${money(sum(sel, 'total'))} inc GST</span>
       <button class="primary" data-mark="paid">✓ Mark as paid</button><button data-mark="unpaid">Mark as unpaid</button>` : '<span class="muted">Tick invoices (or the box at the top to select all shown)</span>'}`;
 }

@@ -11,6 +11,7 @@ const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = sm8;
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
 const { duplicateMessage } = require('./processor');
+const { exportEverything } = require('./export');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
@@ -1299,6 +1300,28 @@ window.addEventListener('message', function (e) {
 
   // Bills: every invoice of the business, to find them and mark several paid at once.
   api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
+  // "Export everything": one zip (spreadsheets + the original files) for the business's own records.
+  api.get('/export', async (req, res) => {
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="Job Costs export ${day}.zip"`, 'Cache-Control': 'no-store' });
+    let closed = false;
+    res.on('close', () => { closed = true; });
+    const write = (buf) => new Promise((resolve, reject) => {
+      if (closed) return reject(new Error('Download cancelled'));
+      if (res.write(buf)) return resolve();
+      const done = () => { res.off('close', gone); resolve(); };
+      const gone = () => { res.off('drain', done); reject(new Error('Download cancelled')); };
+      res.once('drain', done); res.once('close', gone);
+    });
+    try {
+      const r = await exportEverything(repo, req.account, write);
+      res.end();
+      console.log(`Export: ${r.invoices} invoices, ${r.jobs} jobs`);
+    } catch (e) {
+      console.error(`Export: ${e.message}`);
+      res.destroy();
+    }
+  });
   api.get('/stock', (req, res) => res.json({ ...repo.listStock(req.account), jobs: repo.listJobs(req.account) }));
   api.post('/bills/paid', (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger).slice(0, 500) : [];
