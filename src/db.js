@@ -369,6 +369,10 @@ function migrateColumns(db) {
       INSERT INTO summary_dirty SELECT DISTINCT a.job_uuid FROM allocations a WHERE a.item_id = NEW.id AND NOT EXISTS (SELECT 1 FROM summary_dirty d WHERE d.job_uuid = a.job_uuid); END;
     CREATE TRIGGER IF NOT EXISTS sd_job_quote2 AFTER UPDATE OF quote_amount ON jobs WHEN COALESCE(OLD.quote_amount, -1) != COALESCE(NEW.quote_amount, -1)
       BEGIN INSERT INTO summary_dirty SELECT NEW.job_uuid WHERE NEW.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = NEW.job_uuid); END;`);
+  // What each business used each month (Claude requests and their tokens), for limits and costs.
+  db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, PRIMARY KEY (account_key, month, kind))`);
   // Settings per business. Businesses already here when settings arrived keep how the app worked for them.
   const hadSettings = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_settings'").get();
   db.exec('CREATE TABLE IF NOT EXISTS account_settings (account_key TEXT PRIMARY KEY, data TEXT NOT NULL)');
@@ -1582,6 +1586,33 @@ function createRepo(db, dataDir) {
     jobsWithCosts(accountUUID) {
       return db.prepare(`SELECT DISTINCT allocations.job_uuid FROM allocations JOIN jobs ON jobs.job_uuid = allocations.job_uuid
         WHERE jobs.account_uuid IS ? AND COALESCE(jobs.sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(accountUUID).map((r) => r.job_uuid);
+    },
+
+    // ---------- usage ----------
+    /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */
+    addUsage(accountUUID, kind, { input = 0, output = 0, cacheWrite = 0, cacheRead = 0, cost = 0 } = {}, month = new Date().toISOString().slice(0, 7)) {
+      db.prepare(`INSERT INTO usage (account_key, month, kind, count, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, cost)
+          VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+        ON CONFLICT(account_key, month, kind) DO UPDATE SET count = count + 1, input_tokens = input_tokens + excluded.input_tokens,
+          output_tokens = output_tokens + excluded.output_tokens, cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+          cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens, cost = cost + excluded.cost`)
+        .run(accountUUID ?? '', month, kind, input, output, cacheWrite, cacheRead, cost);
+    },
+    /** Usage by month (newest first), each with its kinds. */
+    listUsage(accountUUID, months = 6) {
+      const rows = db.prepare('SELECT * FROM usage WHERE account_key = ? ORDER BY month DESC, kind').all(accountUUID ?? '');
+      const out = [];
+      for (const r of rows) {
+        let m = out.find((x) => x.month === r.month);
+        if (!m) { if (out.length >= months) break; m = { month: r.month, kinds: {}, cost: 0 }; out.push(m); }
+        m.kinds[r.kind] = { count: r.count, input_tokens: r.input_tokens, output_tokens: r.output_tokens, cache_write_tokens: r.cache_write_tokens, cache_read_tokens: r.cache_read_tokens, cost: Math.round(r.cost * 10000) / 10000 };
+        m.cost = Math.round((m.cost + r.cost) * 10000) / 10000;
+      }
+      return out;
+    },
+    usageCount(accountUUID, kind, month = new Date().toISOString().slice(0, 7)) {
+      const r = db.prepare('SELECT count FROM usage WHERE account_key = ? AND month = ? AND kind = ?').get(accountUUID ?? '', month, kind);
+      return r ? r.count : 0;
     },
 
     // ---------- settings of a business ----------

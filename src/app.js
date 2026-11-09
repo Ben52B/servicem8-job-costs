@@ -379,14 +379,24 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         notes_for_this_check: note || null,
         job, money_checks,
       }, { priceList: pl, invoiceFile: inv.file_path && isSupported(inv.file_name, inv.mime_type) ? { file_path: inv.file_path, file_name: inv.file_name, mime_type: inv.mime_type } : null });
+      recordUsage(inv.account_uuid ?? null, 'price_check', result && result.usage);
       repo.setPriceCheck(inv.id, { status: 'done', result: { ...result, money_checks, note: note || null, price_list: { id: pl.id, supplier: pl.supplier, name: pl.name }, checked_at: new Date().toISOString() } });
       repo.markRulesUsed(rulesUsed, `price check of invoice ${inv.invoice_number || inv.id}`);
     } catch (e) {
       console.error(`Price check of invoice ${invoiceId}: ${e.message}`);
+      if (e && e.usage) recordUsage(repo.getInvoice(invoiceId)?.account_uuid ?? null, 'price_check', e.usage);
       repo.setPriceCheck(invoiceId, { status: 'error', result: { error: /credit balance/i.test(e.message || '') ? 'Your Claude API account is out of credit.' : e.message } });
     }
   }
   processor.afterRead = app.locals.priceCheck = (id, opts) => priceCheck(id, { auto: true, ...(opts || {}) });
+  // Count each Claude request per business, with an estimate of what it cost (USD).
+  const recordUsage = app.locals.recordUsage = (accountUUID, kind, u) => {
+    const pr = config.claudePrices || { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 };
+    const t = { input: (u && u.input_tokens) || 0, output: (u && u.output_tokens) || 0, cacheWrite: (u && u.cache_creation_input_tokens) || 0, cacheRead: (u && u.cache_read_input_tokens) || 0 };
+    const cost = (t.input * pr.input + t.output * pr.output + t.cacheWrite * pr.cacheWrite + t.cacheRead * pr.cacheRead) / 1e6;
+    try { repo.addUsage(accountUUID, kind, { ...t, cost }); } catch (e) { console.error(`Usage not counted: ${e.message}`); }
+  };
+  processor.onUsage = recordUsage;
 
   processor.lookupJobs = app.locals.lookupJobs = async (invoiceId) => {
     const inv = repo.getInvoice(invoiceId);
@@ -416,6 +426,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         repo.updateCheck(id, { status: 'reading' });
         progress('Reading the statement…');
         statement = await checker.readStatement({ filePath: path.join(repo.filesDir, c.file_path), fileName: c.file_name, mimeType: c.mime_type });
+        recordUsage(accountUUID, 'statement_read', statement && statement.usage);
         repo.updateCheck(id, { statement, supplier: statement.supplier_name || null, statement_date: statement.statement_date || null });
       }
       repo.updateCheck(id, { status: 'checking' });
@@ -501,6 +512,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         // Worked out in code: use these totals as they are (don't add them up again).
         money_checks: reconcile,
       }, { priceLists, invoiceFiles, onProgress: (text) => progress(text) });
+      recordUsage(accountUUID, 'statement_check', result && result.usage);
       stillWanted();
       repo.updateCheck(id, { status: 'done', matched, result, reconcile, error: null, progress: null, attempts: 0, finished_at: new Date().toISOString() });
       repo.markRulesUsed(rulesUsed, `statement check of ${statement.supplier_name || 'a statement'}${statement.statement_date ? ' ' + statement.statement_date : ''}`);
@@ -845,7 +857,9 @@ window.addEventListener('message', function (e) {
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   api.get('/settings', (req, res) => {
     const o = repo.getOutlook(req.account);
-    res.json({ settings: settingsFor(req.account), days: DAYS,
+    const month = repo.listUsage(req.account, 1).find((m) => m.month === new Date().toISOString().slice(0, 7));
+    const used = Object.fromEntries(Object.entries(month ? month.kinds : {}).map(([k, v]) => [k, v.count]));
+    res.json({ settings: settingsFor(req.account), days: DAYS, used,
       outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null } });
   });
   api.put('/settings', (req, res) => {
@@ -1640,6 +1654,26 @@ window.addEventListener('message', function (e) {
   });
 
   app.use('/api', api);
+
+  // For the add-on's owner only (ADMIN_KEY): what each business used and roughly cost, to set prices and limits.
+  app.get('/admin/usage', (req, res) => {
+    if (!config.adminKey || String(req.query.key || '') !== config.adminKey) return res.status(404).type('text').send('Not found');
+    const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const kinds = ['invoice_read', 'price_check', 'statement_read', 'statement_check'];
+    const rows = [];
+    for (const a of repo.db.prepare('SELECT account_key FROM accounts ORDER BY account_key').all()) {
+      const acc = a.account_key === '' ? null : a.account_key;
+      const st = repo.getSettings(acc);
+      for (const m of repo.listUsage(acc, 3)) {
+        rows.push(`<tr><td>${esc(st.business_name || a.account_key || '(test)')}</td><td>${esc(m.month)}</td>${kinds.map((k) => `<td style="text-align:right">${(m.kinds[k] || {}).count || 0}</td>`).join('')}
+          <td style="text-align:right"><b>$${m.cost.toFixed(2)}</b></td><td style="text-align:right">${(m.kinds.invoice_read || {}).count ? '$' + (((m.kinds.invoice_read || {}).cost || 0) / m.kinds.invoice_read.count).toFixed(3) : ''}</td></tr>`);
+      }
+    }
+    res.set('Cache-Control', 'no-store').type('html').send(htmlPage('Job Costs usage', `<h2 style="margin-top:0">Usage by business</h2>
+      <p style="color:#6b8a82">Claude requests per month and the estimated cost in USD (from the token counts and CLAUDE_PRICE_* rates).</p>
+      <table style="border-collapse:collapse;font-size:13px" cellpadding="6"><tr style="text-align:left"><th>Business</th><th>Month</th><th>Invoices read</th><th>Price checks</th><th>Statements read</th><th>Statement checks</th><th>Est. cost</th><th>Per invoice read</th></tr>
+      ${rows.join('') || '<tr><td colspan="8">Nothing yet.</td></tr>'}</table>`).replace('max-width:460px', 'max-width:980px'));
+  });
 
   // Opened in a browser by mistake: explain instead of "Cannot GET".
   app.get('/inbound/email', (req, res) => {

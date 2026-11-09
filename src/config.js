@@ -42,6 +42,13 @@ const config = {
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
   supportEmail: process.env.SUPPORT_EMAIL || null,
+  // Opens /admin/usage?key=... (for the add-on's owner); not set = the page is off.
+  adminKey: process.env.ADMIN_KEY || '',
+  // Claude prices in USD per million tokens (input, output, cache write, cache read), to estimate what each business costs.
+  claudePrices: {
+    input: Number(process.env.CLAUDE_PRICE_INPUT || 4), output: Number(process.env.CLAUDE_PRICE_OUTPUT || 20),
+    cacheWrite: Number(process.env.CLAUDE_PRICE_CACHE_WRITE || 5), cacheRead: Number(process.env.CLAUDE_PRICE_CACHE_READ || 0.2),
+  },
   // (kept for older setups; each business now sets these in ⚙ Settings)
   stockJobClients: list(process.env.STOCK_JOB_CLIENTS ?? ''),
   stockJobCategories: list(process.env.STOCK_JOB_CATEGORIES ?? 'stock'),

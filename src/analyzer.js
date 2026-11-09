@@ -96,6 +96,9 @@ function fileToBlock(filePath, fileName, mime) {
   throw new Error(`Unsupported file type (${m}). Send a PDF or a photo (JPG/PNG).`);
 }
 
+const withUsage = (out, msg) => { if (out && typeof out === 'object' && msg && msg.usage) Object.defineProperty(out, 'usage', { value: { ...msg.usage, model: msg.model }, enumerable: false }); return out; };
+const usageError = (message, msg) => Object.assign(new Error(message), { usage: msg && msg.usage ? { ...msg.usage, model: msg.model } : null });
+
 function createAnalyzer({ apiKey, model, effort }) {
   const client = new Anthropic(apiKey ? { apiKey } : {});
 
@@ -126,12 +129,12 @@ function createAnalyzer({ apiKey, model, effort }) {
       }],
     });
 
-    if (response.stop_reason === 'refusal') throw new Error('The document could not be read (declined by the model).');
-    if (response.stop_reason === 'max_tokens') throw new Error('The document is too long to read in one go.');
+    if (response.stop_reason === 'refusal') throw usageError('The document could not be read (declined by the model).', response);
+    if (response.stop_reason === 'max_tokens') throw usageError('The document is too long to read in one go.', response);
     const out = response.parsed_output;
-    if (!out) throw new Error('Could not read the invoice details.');
-    if (!out.is_financial_document) throw new Error('This does not look like an invoice or receipt.');
-    return out;
+    if (!out) throw usageError('Could not read the invoice details.', response);
+    if (!out.is_financial_document) throw usageError('This does not look like an invoice or receipt.', response);
+    return withUsage(out, response);
   }
 
   return { analyzeFile };

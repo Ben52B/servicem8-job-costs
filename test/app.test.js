@@ -1739,6 +1739,26 @@ test('diary summary: one note per job in ServiceM8, kept up to date, only when s
   assert.match(mine()[0].text, /Still to pay: \$0\.00/);
 });
 
+test('usage per business: each Claude request is counted, with tokens and an estimated cost', async () => {
+  JOBS['use-job'] = { jobNumber: '208950', jobTitle: '5 Use St' };
+  const t = await openCard('use-job', 'acc-use');
+  await upload(t, 'use-a.pdf', 'use-b.pdf');
+  assert.equal(repo.usageCount('acc-use', 'invoice_read'), 2, 'every invoice read is counted');
+  assert.equal(repo.usageCount('acc-1', 'invoice_read') >= 0, true);
+  // the cost of a request, from its tokens: 10,000 in × $4 + 2,000 out × $20 + 100,000 cache reads × $0.20 (per million)
+  app.locals.recordUsage('acc-use', 'statement_check', { input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 100000, cache_creation_input_tokens: 0 });
+  const [m] = repo.listUsage('acc-use');
+  assert.equal(m.kinds.statement_check.count, 1);
+  assert.equal(m.kinds.statement_check.cost, 0.1, '0.04 + 0.04 + 0.02');
+  assert.equal(m.kinds.statement_check.cache_read_tokens, 100000);
+  const s = await json(t, '/settings');
+  assert.deepEqual([s.used.invoice_read, s.used.statement_check], [2, 1], 'the business sees its counts (not the cost)');
+  assert.ok(!('cost' in s.used));
+  // the owner's page needs the key
+  assert.equal((await fetch(`${base}/admin/usage`)).status, 404);
+  assert.equal((await fetch(`${base}/admin/usage?key=wrong`)).status, 404);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

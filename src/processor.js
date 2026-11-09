@@ -6,7 +6,7 @@ const crypto = require('crypto');
  * Small in-process queue: reads invoices with Claude one or two at a time so a
  * big email with many attachments doesn't fire off dozens of requests at once.
  */
-function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
+function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsage = null }) {
   const queue = [];
   let running = 0;
   const idleWaiters = [];
@@ -53,6 +53,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         context: { emailFrom: inv.email_from, emailSubject: inv.email_subject,
           ...(repo.getSettings ? { businessType: repo.getSettings(inv.account_uuid).business_type, businessName: repo.getSettings(inv.account_uuid).business_name } : {}) },
       });
+      if (onUsage || api.onUsage) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', result && result.usage);
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
       if (result.document_type === 'statement' && api.onStatement) {
         let check;
@@ -81,6 +82,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
       // Check its prices against the supplier's / subcontractor's price list (in the background).
       if (api.afterRead) Promise.resolve().then(() => api.afterRead(id)).catch((e) => log.error(`Price check ${id}: ${e.message}`));
     } catch (e) {
+      if (e && e.usage && (onUsage || api.onUsage)) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', e.usage); // read, but not kept
       if (inv.source === 'outlook' && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
         repo.setImportOutcome?.(id, 'not_invoice');
@@ -95,6 +97,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
     lookupJobs: null, // set by the app: (invoiceId) => found a job?
     onStatement: null, // set by the app: (invoice, what was read) => file it under Statement check
     afterRead: null, // set by the app: (invoiceId) => price check against a matching price list
+    onUsage: null, // set by the app: (account, kind, usage) => count what Claude was used for
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);

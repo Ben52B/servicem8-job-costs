@@ -94,6 +94,9 @@ const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against 
 - "money_checks" was worked out in code. Use its figures as given; never add amounts up yourself.
 - Be specific and short. Write job numbers as "job 207651".`;
 
+const withUsage = (out, msg) => { if (out && typeof out === 'object' && msg && msg.usage) Object.defineProperty(out, 'usage', { value: { ...msg.usage, model: msg.model }, enumerable: false }); return out; };
+const usageError = (message, msg) => Object.assign(new Error(message), { usage: msg && msg.usage ? { ...msg.usage, model: msg.model } : null });
+
 function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', filesDir }) {
   const client = new Anthropic(apiKey ? { apiKey } : {});
   const common = { model, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' };
@@ -105,9 +108,9 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
       output_config: { effort: 'medium', format: betaZodOutputFormat(StatementSchema) },
       messages: [{ role: 'user', content: [fileToBlock(filePath, fileName, mimeType), { type: 'text', text: 'Read this supplier statement.' }] }],
     });
-    if (response.stop_reason === 'refusal') throw new Error('The statement could not be read (declined by the model).');
-    if (!response.parsed_output) throw new Error('Could not read the statement.');
-    return response.parsed_output;
+    if (response.stop_reason === 'refusal') throw usageError('The statement could not be read (declined by the model).', response);
+    if (!response.parsed_output) throw usageError('Could not read the statement.', response);
+    return withUsage(response.parsed_output, response);
   }
 
   /**
@@ -152,10 +155,10 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
     const timer = setInterval(() => tick(true), 3000); // also how quickly a Stop cancels the request
     let message;
     try { message = await stream.finalMessage(); } finally { clearInterval(timer); }
-    if (message.stop_reason === 'refusal') throw new Error('The check could not be done (declined by the model).');
-    if (message.stop_reason === 'max_tokens') throw new Error('The statement is too long to check in one go. Narrow the dates and try again.');
-    if (!message.parsed_output) throw new Error('The check came back incomplete. Try again.');
-    return message.parsed_output;
+    if (message.stop_reason === 'refusal') throw usageError('The check could not be done (declined by the model).', message);
+    if (message.stop_reason === 'max_tokens') throw usageError('The statement is too long to check in one go. Narrow the dates and try again.', message);
+    if (!message.parsed_output) throw usageError('The check came back incomplete. Try again.', message);
+    return withUsage(message.parsed_output, message);
   }
 
   /**
@@ -181,9 +184,9 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
       messages: [{ role: 'user', content }],
     });
     const message = await stream.finalMessage();
-    if (message.stop_reason === 'refusal') throw new Error('The price check could not be done (declined by the model).');
-    if (!message.parsed_output) throw new Error('The price check came back incomplete.');
-    return message.parsed_output;
+    if (message.stop_reason === 'refusal') throw usageError('The price check could not be done (declined by the model).', message);
+    if (!message.parsed_output) throw usageError('The price check came back incomplete.', message);
+    return withUsage(message.parsed_output, message);
   }
 
   return { readStatement, review, reviewInvoice };

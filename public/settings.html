@@ -145,6 +145,9 @@ function render() {
   <div class="panel"><h2>ServiceM8 job diary</h2>
     <label class="switch"><input type="checkbox" id="ds" ${st.diary_summary ? 'checked' : ''}><span><b>Keep a Job Costs summary in each job's diary</b><br>
       <span class="muted" style="font-size:12.5px">One note per job, kept up to date: costs, paid, still to pay and profit – so everyone sees it in the diary, on the desktop and in the app.</span></span></label></div>
+  <div class="panel"><h2>This month</h2><div class="hint">How much Job Costs has read and checked for you this month.</div>
+    <div class="days" style="gap:14px">${[['invoice_read', 'invoices read'], ['price_check', 'price checks'], ['statement_check', 'statement checks']]
+      .map(([k, l]) => `<span><b style="font-size:18px">${(data.used || {})[k] || 0}</b> <span class="muted">${l}</span></span>`).join('')}</div></div>
   <div class="save"><button class="primary" id="save">Save</button></div>`;
 }
 async function load() {
