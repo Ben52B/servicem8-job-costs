@@ -50,7 +50,8 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         filePath: path.join(repo.filesDir, inv.file_path),
         fileName: inv.file_name,
         mimeType: inv.mime_type,
-        context: { emailFrom: inv.email_from, emailSubject: inv.email_subject },
+        context: { emailFrom: inv.email_from, emailSubject: inv.email_subject,
+          ...(repo.getSettings ? { businessType: repo.getSettings(inv.account_uuid).business_type, businessName: repo.getSettings(inv.account_uuid).business_name } : {}) },
       });
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
       if (result.document_type === 'statement' && api.onStatement) {

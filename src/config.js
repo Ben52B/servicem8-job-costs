@@ -42,8 +42,11 @@ const config = {
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
   supportEmail: process.env.SUPPORT_EMAIL || null,
-  stockJobClients: list(process.env.STOCK_JOB_CLIENTS ?? 'Door Image'),
-  stockJobCategories: list(process.env.STOCK_JOB_CATEGORIES ?? 'Internal'),
+  // (kept for older setups; each business now sets these in ⚙ Settings)
+  stockJobClients: list(process.env.STOCK_JOB_CLIENTS ?? ''),
+  stockJobCategories: list(process.env.STOCK_JOB_CATEGORIES ?? 'stock'),
+  // time zone for new businesses until they choose one in ⚙ Settings
+  defaultTimezone: (process.env.DEFAULT_TIMEZONE || process.env.OUTLOOK_TIMEZONE || '').trim() || null,
 };
 
 module.exports = config;

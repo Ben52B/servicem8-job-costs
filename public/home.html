@@ -133,7 +133,7 @@ async function load() {
     </div>
     <div class="menu">
       <a class="btn" href="${link('inbox')}">📥 Inbox</a><a class="btn" href="${link('bills')}">🧾 Bills</a><a class="btn" href="${link('stock')}">📦 Stock</a>
-      <a class="btn" href="${link('checks')}">🔎 Statement check</a><a class="btn" href="${link('prices')}">💲 Prices &amp; rules</a><a class="btn" href="${link('report')}">📊 Reports</a>
+      <a class="btn" href="${link('checks')}">🔎 Statement check</a><a class="btn" href="${link('prices')}">💲 Prices &amp; rules</a><a class="btn" href="${link('report')}">📊 Reports</a><a class="btn" href="${link('settings')}">⚙ Settings</a>
     </div>`;
   } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }

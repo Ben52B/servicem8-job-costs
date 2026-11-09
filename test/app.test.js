@@ -1656,8 +1656,48 @@ test('the iPhone app and the Add-ons menu: a job button in the app, and Job Cost
   assert.equal((await json(t2, '/home')).unpaidCount, 0);
 });
 
+test('settings per business: your own setup is kept; stock words, email hours and the business type', async () => {
+  // a business that was already using Job Costs keeps how it worked (Door Image / Internal, Melbourne, Mon–Fri 6–6)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-settings-'));
+  const old = openDb(dir);
+  old.ensureAccount('acc-old');
+  old.db.exec('DROP TABLE account_settings');
+  old.db.close();
+  const again = openDb(dir);
+  const st = again.getSettings('acc-old');
+  assert.deepEqual([st.stock_clients, st.stock_categories, st.timezone, st.check_from, st.check_to, st.business_type],
+    [['door image'], ['internal'], 'Australia/Melbourne', 6, 18, 'garage door installation business']);
+  again.ensureAccount('acc-new');
+  assert.equal(again.getSettings('acc-new').business_type, 'trades business', 'a new business starts neutral');
+  again.db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  // the Settings page
+  JOBS['set-job'] = { jobNumber: '208800', jobTitle: '8 Set St', clientName: 'Our Warehouse', categoryName: 'Supply' };
+  const t = await openCard('set-job', 'acc-set');
+  assert.equal(repo.getJob('set-job').is_stock, false);
+  assert.equal((await fetch(`${base}/settings?t=${encodeURIComponent(t)}`)).status, 200);
+  const g = await json(t, '/settings');
+  assert.equal(g.settings.diary_summary, false, 'the diary summary is off until switched on');
+  const put = (body) => api(t, '/settings', { method: 'PUT', json: body });
+  assert.equal((await put({ check_from: 18, check_to: 6 })).status, 400, 'hours the wrong way round');
+  assert.equal((await put({ timezone: 'Mars/Base' })).status, 400);
+  const r = await put({ business_name: 'Smith Doors', business_type: 'roller door business', stock_clients: 'Our Warehouse, Stock', check_days: ['sat', 'xyz'],
+    check_from: 7, check_to: 15, timezone: 'Australia/Perth' }).then((x) => x.json());
+  assert.deepEqual([r.settings.stock_clients, r.settings.check_days, r.settings.timezone], [['our warehouse', 'stock'], ['sat'], 'Australia/Perth']);
+  assert.equal(repo.getJob('set-job').is_stock, true, 'jobs are sorted again with the new words');
+  // automatic email checks only in each business's hours
+  const { inCheckingHours } = require('../src/outlook');
+  const sat10perth = new Date('2026-11-14T02:00:00Z'); // Saturday 10am in Perth
+  const mon10perth = new Date('2026-11-16T02:00:00Z');
+  const hours = { outlookTimezone: 'Australia/Perth', outlookDays: ['sat'], outlookFromHour: 7, outlookToHour: 15 };
+  assert.equal(inCheckingHours(hours, sat10perth), true);
+  assert.equal(inCheckingHours(hours, mon10perth), false);
+  assert.match((await json(t, '/inbox')).outlookHours, /Sat 7am–3pm/);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

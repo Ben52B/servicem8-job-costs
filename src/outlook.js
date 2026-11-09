@@ -284,10 +284,11 @@ async function importList({ repo, api, token, accountKey, onMail, messages, forc
 
 const skipCache = new Map(); // account -> { ids, at }
 
-async function checkOutlook({ repo, config, api = graphApi, onMail, log = console }) {
+async function checkOutlook({ repo, config, api = graphApi, onMail, log = console, only = null }) {
   const app = { clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId };
   let handled = 0;
   for (const conn of repo.listOutlookConnections()) {
+    if (only && !only(conn.account_key)) continue; // e.g. outside that business's checking hours
     try {
       let token = conn.access_token;
       if (!token || Date.parse(conn.expires_at) - Date.now() < 120000) {

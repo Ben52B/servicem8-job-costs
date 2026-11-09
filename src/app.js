@@ -17,7 +17,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -141,14 +141,23 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const jobList = (jobs) => jobs.map((j) => (j.job_number ? '#' + j.job_number : 'another job')).join(', ');
 
   // A job is a stock order job when its client or category matches (see config); unknown names change nothing.
-  const withStockFlag = (info) => (info && (info.clientName || info.categoryName)
-    ? { ...info, stockAuto: looksLikeStockJob(info, config) } : info);
+  // Starting settings for a new business (each business changes them in ⚙ Settings)
+  if (config.defaultTimezone) repo.settingDefaults.timezone = config.defaultTimezone;
+  if (config.stockJobClients && config.stockJobClients.length) repo.settingDefaults.stock_clients = config.stockJobClients;
+  if (config.stockJobCategories && config.stockJobCategories.length) repo.settingDefaults.stock_categories = config.stockJobCategories;
+  /** A business's settings, in the shape the older code expects. */
+  const settingsFor = (accountUUID) => repo.getSettings(accountUUID);
+  const stockWords = (accountUUID) => { const st = settingsFor(accountUUID); return { stockJobClients: st.stock_clients || [], stockJobCategories: st.stock_categories || [] }; };
+  const hoursOf = (accountUUID) => { const st = settingsFor(accountUUID);
+    return { outlookTimezone: st.timezone, outlookDays: st.check_days, outlookFromHour: Number(st.check_from), outlookToHour: Number(st.check_to), outlookPollSeconds: config.outlookPollSeconds }; };
+  const withStockFlag = (info, accountUUID) => (info && (info.clientName || info.categoryName)
+    ? { ...info, stockAuto: looksLikeStockJob(info, stockWords(accountUUID)) } : info);
 
   // Keep a list of the business's active jobs, so emailed invoices can be matched to them.
   async function syncJobs(accountUUID, accessToken, { force = false } = {}) {
     if (!accessToken || (!force && repo.jobsSyncedRecently(accountUUID, 10))) return;
     const jobs = await fetchActiveJobsImpl(accessToken);
-    if (jobs.length) repo.saveSyncedJobs(accountUUID, jobs.map(withStockFlag));
+    if (jobs.length) repo.saveSyncedJobs(accountUUID, jobs.map((j) => withStockFlag(j, accountUUID)));
   }
 
   /**
@@ -269,7 +278,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     const uuid = await findJobByNumberImpl(String(number), token);
     if (!uuid) return null;
     const info = await fetchJobImpl(uuid, token);
-    return repo.ensureJob({ jobUUID: uuid, accountUUID, ...(withStockFlag(info) || {}), jobNumber: (info && info.jobNumber) || String(number) });
+    return repo.ensureJob({ jobUUID: uuid, accountUUID, ...(withStockFlag(info, accountUUID) || {}), jobNumber: (info && info.jobNumber) || String(number) });
   }
   // Invoices with a job number Job Costs hasn't seen (e.g. completed jobs): look them up.
   // A statement read in the Inbox (uploaded or from Outlook) is filed under Statement check, ready to run.
@@ -312,6 +321,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       }
       const rulesUsed = repo.rulesFor(inv.account_uuid ?? null, [inv.invoice_number], inv.supplier || '');
       const result = await checker.reviewInvoice({
+        business: settingsFor(inv.account_uuid ?? null).business_type,
         invoice: { supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, subtotal_ex_gst: inv.subtotal, gst: inv.tax, total_inc_gst: inv.total,
           references: (() => { try { return JSON.parse(inv.refs || '[]'); } catch { return []; } })(), lines: repo.itemsOf(inv.id).map(({ paid, ...x }) => x) },
         rules: rulesUsed.map((r) => r.text),
@@ -430,6 +440,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const rulesUsed = repo.rulesFor(accountUUID, lines.map((l) => l.reference), statement.supplier_name || '');
       progress(`Claude is checking ${lines.length} line${lines.length === 1 ? '' : 's'} against the price list, your rules and the jobs… (usually 1–4 minutes)`);
       const result = await checker.review({
+        business: settingsFor(accountUUID).business_type,
         statement: { supplier: statement.supplier_name, account_number: statement.account_number, statement_date: statement.statement_date, total_due: statement.total_due,
           checking_only: c.date_from || c.date_to ? `invoices dated ${c.date_from || 'any'} to ${c.date_to || 'any'}` : 'all invoices on the statement' },
         rules: rulesUsed.map((r) => r.text),
@@ -695,7 +706,7 @@ window.addEventListener('message', function (e) {
       const alt = await fetchJobImpl(event.jobUUID, event.accessToken);
       if (alt && (!info || !alt.linesError)) { info = alt; token = event.accessToken; }
     }
-    let job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info) || {}) });
+    let job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info, event.accountUUID) || {}) });
     // A split part (#207974A) opens its main job (#207974): one Job Costs for the whole job.
     let partNote = null;
     const main = mainJobNumber(job.job_number);
@@ -706,7 +717,7 @@ window.addEventListener('message', function (e) {
         const partUUID = job.job_uuid;
         const mainInfo = await fetchJobImpl(mainUUID, token);
         if (mainInfo) info = mainInfo;
-        job = repo.ensureJob({ jobUUID: mainUUID, accountUUID: event.accountUUID, ...(withStockFlag(mainInfo) || { jobNumber: main }) });
+        job = repo.ensureJob({ jobUUID: mainUUID, accountUUID: event.accountUUID, ...(withStockFlag(mainInfo, event.accountUUID) || { jobNumber: main }) });
         // Anything added on the split part itself (e.g. before parts were linked) belongs to the main job.
         repo.mergeJobInto(partUUID, mainUUID);
       } else {
@@ -738,7 +749,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings']) {
     app.get(`/${name}`, (req, res) => {
       const sess = sessionFrom(req.query.t);
       if (!sess) {
@@ -779,6 +790,43 @@ window.addEventListener('message', function (e) {
     return n;
   }
   api.get('/ping', (req, res) => res.json({ ok: true }));
+  // ---------- Settings of the business ----------
+  const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  api.get('/settings', (req, res) => {
+    const o = repo.getOutlook(req.account);
+    res.json({ settings: settingsFor(req.account), days: DAYS,
+      outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null } });
+  });
+  api.put('/settings', (req, res) => {
+    const b = req.body || {};
+    const words = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim().toLowerCase()).filter(Boolean).slice(0, 20);
+    const ch = {};
+    if (b.business_name !== undefined) ch.business_name = String(b.business_name).trim().slice(0, 120);
+    if (b.business_type !== undefined) ch.business_type = String(b.business_type).trim().slice(0, 120) || repo.settingDefaults.business_type;
+    if (b.stock_clients !== undefined) ch.stock_clients = words(b.stock_clients);
+    if (b.stock_categories !== undefined) ch.stock_categories = words(b.stock_categories);
+    if (b.timezone !== undefined) {
+      try { new Intl.DateTimeFormat('en-AU', { timeZone: String(b.timezone) }); ch.timezone = String(b.timezone); } catch { return res.status(400).json({ error: 'Unknown time zone' }); }
+    }
+    if (b.check_days !== undefined) ch.check_days = (Array.isArray(b.check_days) ? b.check_days : []).map(String).filter((d) => DAYS.includes(d));
+    for (const k of ['check_from', 'check_to']) if (b[k] !== undefined) {
+      const n = Number(b[k]);
+      if (!Number.isInteger(n) || n < 0 || n > 24) return res.status(400).json({ error: 'Hours are 0 to 24' });
+      ch[k] = n;
+    }
+    if ((ch.check_from ?? settingsFor(req.account).check_from) >= (ch.check_to ?? settingsFor(req.account).check_to)) return res.status(400).json({ error: 'The checking hours end before they start' });
+    if (b.diary_summary !== undefined) ch.diary_summary = !!b.diary_summary;
+    const saved = repo.saveSettings(req.account, ch);
+    // new stock words: sort the business's jobs again
+    if (ch.stock_clients || ch.stock_categories) {
+      const w = stockWords(req.account);
+      const upd = repo.db.prepare('UPDATE jobs SET stock_auto = ? WHERE job_uuid = ?');
+      for (const j of repo.db.prepare('SELECT job_uuid, client_name, category_name FROM jobs WHERE account_uuid IS ?').all(req.account)) {
+        upd.run(looksLikeStockJob({ clientName: j.client_name, categoryName: j.category_name }, w) ? 1 : 0, j.job_uuid);
+      }
+    }
+    res.json({ ok: true, settings: saved });
+  });
   // Job Costs home (from the menu / the app's More tab): what needs doing across the business.
   api.get('/home', (req, res) => {
     const bills = repo.listBills(req.account);
@@ -1184,7 +1232,7 @@ window.addEventListener('message', function (e) {
       repo.suggestJob(i.id);
     }
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
-      recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config),
+      recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(hoursOf(req.account)),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length });
   });
   api.post('/inbox/:id/assign', async (req, res) => {
@@ -1273,7 +1321,7 @@ window.addEventListener('message', function (e) {
   // Outlook connection status (shown on the card and the Inbox).
   api.get('/outlook', (req, res) => {
     const o = repo.getOutlook(req.account);
-    res.json({ available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), hours: outlook.scheduleText(config),
+    res.json({ available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), hours: outlook.scheduleText(hoursOf(req.account)),
       email: o?.email || null, lastCheck: o?.last_check || null, error: o?.error || null });
   });
   api.delete('/outlook', (req, res) => { repo.removeOutlook(req.account); res.json({ ok: true }); });
@@ -1359,7 +1407,7 @@ window.addEventListener('message', function (e) {
   api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
   // "Export everything": one zip (spreadsheets + the original files) for the business's own records.
   api.get('/export', async (req, res) => {
-    const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' });
+    const day = new Date().toLocaleDateString('en-CA', { timeZone: settingsFor(req.account).timezone || 'UTC' });
     res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="Job Costs export ${day}.zip"`, 'Cache-Control': 'no-store' });
     let closed = false;
     res.on('close', () => { closed = true; });
@@ -1596,10 +1644,11 @@ window.addEventListener('message', function (e) {
   const msApp = () => ({ clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId });
   const outlookRedirect = () => `${config.publicUrl}/outlook/callback`;
   let outlookRunning = null; // one check at a time, so an email is never picked up twice
-  app.locals.checkOutlook = () => {
+  // { scheduled: true }: the automatic check, only for businesses in their checking hours ("Check now" checks any time)
+  app.locals.checkOutlook = ({ scheduled = false } = {}) => {
     if (!outlookRunning) {
       outlookRunning = outlook.checkOutlook({
-        repo, config, api: outlookApi,
+        repo, config, api: outlookApi, only: scheduled ? (acc) => outlook.inCheckingHours(hoursOf(acc === '' ? null : acc)) : null,
         onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }),
       }).finally(() => { outlookRunning = null; });
     }

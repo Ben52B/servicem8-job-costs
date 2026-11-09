@@ -107,6 +107,7 @@ function createAnalyzer({ apiKey, model, effort }) {
     const block = fileToBlock(filePath, fileName, mimeType);
     const hints = [
       fileName ? `File name: ${fileName}` : null,
+      context.businessType ? `The business these bills are for: a ${context.businessType}${context.businessName ? ` (${context.businessName})` : ''}` : null,
       context.emailFrom ? `Emailed by: ${context.emailFrom}` : null,
       context.emailSubject ? `Email subject: ${context.emailSubject}` : null,
     ].filter(Boolean).join('\n');

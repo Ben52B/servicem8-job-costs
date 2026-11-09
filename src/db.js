@@ -358,6 +358,14 @@ function migrateColumns(db) {
   for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
   if (!cols(db, 'mail_imports').includes('check_id')) db.exec('ALTER TABLE mail_imports ADD COLUMN check_id INTEGER'); // a statement: which check it went to
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
+  // Settings per business. Businesses already here when settings arrived keep how the app worked for them.
+  const hadSettings = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_settings'").get();
+  db.exec('CREATE TABLE IF NOT EXISTS account_settings (account_key TEXT PRIMARY KEY, data TEXT NOT NULL)');
+  if (!hadSettings) {
+    const legacy = JSON.stringify({ business_type: 'garage door installation business', stock_clients: ['door image'], stock_categories: ['internal'],
+      timezone: 'Australia/Melbourne', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18 });
+    for (const a of db.prepare('SELECT account_key FROM accounts').all()) db.prepare('INSERT OR IGNORE INTO account_settings (account_key, data) VALUES (?, ?)').run(a.account_key, legacy);
+  }
   if (!cols(db, 'statement_checks').includes('resolved')) db.exec('ALTER TABLE statement_checks ADD COLUMN resolved TEXT'); // JSON: flags sorted out, by invoice reference
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
@@ -1546,6 +1554,22 @@ function createRepo(db, dataDir) {
           file_path: i.file_path, mime_type: i.mime_type, jobs: repo.jobsOnInvoice(i.id).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number })) }));
       const leftTotal = round2(inStock.reduce((s, i) => s + i.left_amount, 0));
       return { stock: inStock, usedUp, leftTotal };
+    },
+
+    // ---------- settings of a business ----------
+    settingDefaults: {
+      business_name: '', business_type: 'trades business', stock_clients: [], stock_categories: ['stock'],
+      timezone: 'Australia/Sydney', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18, diary_summary: false,
+    },
+    getSettings(accountUUID) {
+      const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(accountUUID ?? '');
+      return { ...repo.settingDefaults, ...(row ? parseJson(row.data, {}) : {}) };
+    },
+    saveSettings(accountUUID, changes) {
+      const next = { ...repo.getSettings(accountUUID), ...changes };
+      db.prepare('INSERT INTO account_settings (account_key, data) VALUES (?, ?) ON CONFLICT(account_key) DO UPDATE SET data = excluded.data')
+        .run(accountUUID ?? '', JSON.stringify(next));
+      return next;
     },
 
     /** Count for the Inbox badge: invoices waiting for a decision. */

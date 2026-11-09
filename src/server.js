@@ -32,11 +32,10 @@ if (config.imapUser && config.imapPassword) {
 }
 // Outlook (Microsoft 365) inbox, once it's connected from the card.
 if (config.msClientId && config.msClientSecret) {
-  const tick = () => app.locals.checkOutlook().then((n) => { if (n) console.log(`Outlook: ${n} new email${n === 1 ? '' : 's'} with possible invoices`); })
+  const tick = () => app.locals.checkOutlook({ scheduled: true }).then((n) => { if (n) console.log(`Outlook: ${n} new email${n === 1 ? '' : 's'} with possible invoices`); })
     .catch((e) => console.error(`Outlook check failed: ${e.message}`));
-  const { inCheckingHours } = require('./outlook');
-  // Only in working hours (Mon–Fri 6am–6pm by default); "Check now" in the app works any time.
-  const maybeTick = () => { if (inCheckingHours(config)) tick(); };
+  // Each business only in its own checking hours (Settings); "Check now" in the app works any time.
+  const maybeTick = () => tick();
   setTimeout(maybeTick, 5000);
   setInterval(maybeTick, Math.max(60, config.outlookPollSeconds) * 1000);
 }

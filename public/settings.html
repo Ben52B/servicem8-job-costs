@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs Settings</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+.move{display:inline-flex;gap:4px;align-items:center}.move input{width:90px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px}
+.pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
+.dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
+  @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+</style>
+<style>
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
+  .bar input[type=search] { flex: 1; min-width: 220px; font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 12px; background: #fff; }
+  .seg button { border-radius: 10px; }
+  .seg button.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+  table.bills { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  table.bills th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 700; padding: 9px 10px; border-bottom: 1px solid var(--line); background: #fbfdfc; }
+  table.bills td { padding: 9px 10px; border-bottom: 1px solid var(--line2); vertical-align: middle; }
+  table.bills tr:last-child td { border-bottom: 0; }
+  table.bills tr.sel td { background: var(--brand-soft); }
+  .num, table.bills th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .c-paid { background: var(--brand-soft); color: var(--brand-dark); } .c-unpaid { background: var(--bad-soft); color: var(--bad); } .c-part { background: var(--warn-soft); color: #92400e; }
+  .foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 -4px 16px rgba(16,40,34,.06); }
+  .foot .spacer { flex: 1; }
+  .lnk { background: none; border: 0; padding: 0 2px; color: var(--brand-dark); text-decoration: underline; cursor: pointer; font: inherit; box-shadow: none; }
+</style>
+<style>
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; min-width: 150px; }
+  .kpi .l { font-size: 11.5px; color: var(--muted); font-weight: 700; } .kpi .v { font-size: 20px; font-weight: 800; }
+  .lines { margin-top: 6px; } .lines .ln { margin-top: 5px; font-size: 12.5px; }
+  details.used summary { cursor: pointer; font-weight: 700; font-size: 15px; margin: 20px 0 8px; }
+</style>
+<style>
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 12px; }
+  .panel h2 { margin: 0 0 4px; font-size: 15px; } .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  label.f { display: block; font-weight: 700; font-size: 12.5px; margin: 10px 0 4px; }
+  input[type=text], select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 10px; width: 100%; max-width: 420px; background: #fff; }
+  .days { display: flex; gap: 6px; flex-wrap: wrap; } .days label { display: inline-flex; gap: 4px; align-items: center; border: 1px solid #d6e2de; border-radius: 10px; padding: 5px 9px; font-weight: 600; }
+  .hours { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .hours select { width: auto; }
+  .switch { display: flex; gap: 10px; align-items: flex-start; } .switch input { margin-top: 3px; width: 18px; height: 18px; }
+  .save { position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
+  @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a class="btn" data-back href="#" onclick="location.href=(BOOT.home?'/home?t=':'/card?t=')+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>⚙ Settings</h1><span class="muted">For your whole business</span></header>
+  <div id="content"><div class="empty"><span class="spin"></span></div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+// Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
+function noteToken(res) {
+  const nt = res && res.headers && res.headers.get('X-Session-Token');
+  if (!nt || !BOOT || nt === BOOT.token) return;
+  const oldEnc = encodeURIComponent(BOOT.token), newEnc = encodeURIComponent(nt);
+  BOOT.token = nt;
+  try { T = newEnc; } catch (e) { /* this page keeps no copy */ }
+  document.querySelectorAll('a[href]').forEach((a) => { if (a.getAttribute('href').includes(oldEnc)) a.setAttribute('href', a.getAttribute('href').split(oldEnc).join(newEnc)); });
+  if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
+}
+try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
+setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const fmtDate = (d) => d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  noteToken(res);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+const ZONES = ['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide', 'Australia/Darwin', 'Australia/Perth', 'Australia/Hobart',
+  'Pacific/Auckland', 'Europe/London', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles'];
+const DAY = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+const hour = (n) => (n === 0 ? 'midnight' : n === 24 ? 'midnight' : n < 12 ? `${n}am` : n === 12 ? '12pm' : `${n - 12}pm`);
+let data = null;
+function render() {
+  const st = data.settings, o = data.outlook;
+  const zones = ZONES.includes(st.timezone) ? ZONES : [st.timezone, ...ZONES];
+  const hourOpts = (sel, from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i).map((h) => `<option value="${h}" ${h === Number(sel) ? 'selected' : ''}>${hour(h)}</option>`).join('');
+  $('#content').innerHTML = `
+  <div class="panel"><h2>Your business</h2>
+    <label class="f" for="bn">Business name</label><input type="text" id="bn" value="${esc(st.business_name)}" placeholder="e.g. Smith Garage Doors">
+    <label class="f" for="bt">What the business does</label><input type="text" id="bt" value="${esc(st.business_type)}" placeholder="e.g. garage door installation business, plumbing business">
+    <div class="hint" style="margin-top:4px">Helps when reading invoices and checking prices (e.g. door sizes for a garage door business).</div></div>
+  <div class="panel"><h2>Stock order jobs</h2><div class="hint">Some businesses open a ServiceM8 job for each stock order. Invoices for those jobs go into 📦 Stock instead of being a job's cost.
+    A job counts as a stock order job when its client or category contains one of these words. Each job also has a switch to correct it.</div>
+    <label class="f" for="sc">Client names (comma between)</label><input type="text" id="sc" value="${esc((st.stock_clients || []).join(', '))}" placeholder="e.g. Our Warehouse, Stock">
+    <label class="f" for="sk">Job categories (comma between)</label><input type="text" id="sk" value="${esc((st.stock_categories || []).join(', '))}" placeholder="e.g. Stock, Internal"></div>
+  <div class="panel"><h2>Email</h2>
+    ${o.connected ? `<div>📥 Reading <b>${esc(o.email || 'your Outlook')}</b>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Change</a></div>`
+      : o.available ? `<div><a class="btn" href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">📥 Connect Outlook</a> <span class="muted">to pick up invoices from your inbox automatically</span></div>` : '<div class="hint">Connecting a mailbox isn’t set up on this server.</div>'}
+    <label class="f">Check for new invoices on</label><div class="days">${data.days.map((d) => `<label><input type="checkbox" data-day="${d}" ${st.check_days.includes(d) ? 'checked' : ''}> ${DAY[d]}</label>`).join('')}</div>
+    <label class="f">Between</label><div class="hours"><select id="from">${hourOpts(st.check_from, 0, 23)}</select> and <select id="to">${hourOpts(st.check_to, 1, 24)}</select></div>
+    <label class="f" for="tz">Time zone</label><select id="tz">${zones.map((z) => `<option ${z === st.timezone ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select>
+    <div class="hint" style="margin-top:4px">Outside these hours nothing is checked automatically; <b>↻ Check now</b> works any time.</div></div>
+  <div class="panel"><h2>ServiceM8 job diary</h2>
+    <label class="switch"><input type="checkbox" id="ds" ${st.diary_summary ? 'checked' : ''}><span><b>Keep a Job Costs summary in each job's diary</b><br>
+      <span class="muted" style="font-size:12.5px">One note per job, kept up to date: costs, paid, still to pay and profit – so everyone sees it in the diary, on the desktop and in the app.</span></span></label></div>
+  <div class="save"><button class="primary" id="save">Save</button></div>`;
+}
+async function load() {
+  try { data = await api('/settings'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+document.addEventListener('click', async (e) => {
+  if (e.target.id !== 'save') return;
+  const b = e.target; b.disabled = true;
+  try {
+    const r = await api('/settings', { method: 'PUT', body: JSON.stringify({
+      business_name: $('#bn').value, business_type: $('#bt').value, stock_clients: $('#sc').value, stock_categories: $('#sk').value,
+      check_days: [...document.querySelectorAll('[data-day]')].filter((x) => x.checked).map((x) => x.dataset.day),
+      check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked }) });
+    data.settings = r.settings; render(); toast('Saved');
+  } catch (x) { toast(x.message); b.disabled = false; }
+});
+load();
+</script>
+</body>
+</html>

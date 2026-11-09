@@ -37,7 +37,7 @@ const ReviewSchema = z.object({
   suggested_rule: z.string().nullable().describe('Only when the prices follow a standing pattern that no rule covers yet (e.g. every line about 3% above the list): one short rule the owner could save so later checks use it, e.g. "Gliderol: expect the price list + 3% (2026 price rise, not confirmed)". null otherwise.'),
 });
 
-const REVIEW_PROMPT = `You check a supplier's monthly statement for a garage door installation business before it's paid.
+const REVIEW_PROMPT = `You check a supplier's monthly statement for a {business} before it's paid.
 For every invoice on the statement you get the invoice itself (the PDF where available, plus the lines already read from it),
 the ServiceM8 job(s) it was assigned to (client, address, status and the job notes, which usually hold a "NEW DOOR CALCULATIONS"
 section with height H, width W, door type/colour and the door price quoted), the supplier's price list(s), and the business's rules.
@@ -82,7 +82,7 @@ const InvoiceReviewSchema = z.object({
   suggested_rule: z.string().nullable().describe('Only when the prices follow a standing pattern that no rule covers yet (e.g. every line about 3% above the list): one short rule the owner could save so later checks use it, e.g. "Gliderol: expect the price list + 3% (2026 price rise, not confirmed)". null otherwise.'),
 });
 
-const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against their price list, for a garage door installation business.
+const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against their price list, for a {business}.
 - RULES COME FIRST: apply every rule of the business that fits this invoice (agreed discounts, "bill 1 door only", etc.) and list them.
 - Price lists differ: some show list prices with a discount to apply, some show net prices; door prices are grids by size band
   (height × width) and range/colour; installers may price per door, per hour or per extra. Read the price list's own notes.
@@ -118,7 +118,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
    * The whole statement. The invoices go in as the lines Job Costs already read from them (not the PDFs again):
    * much less to read, so it's quicker. onProgress(text) is told how far Claude has got, every few seconds.
    */
-  async function review(data, { priceLists = [], invoiceFiles = [], withInvoicePdfs = false, onProgress = () => {} } = {}) {
+  async function review({ business, ...data }, { priceLists = [], invoiceFiles = [], withInvoicePdfs = false, onProgress = () => {} } = {}) {
     const content = [];
     for (const p of priceLists) {
       content.push({ type: 'text', text: `PRICE LIST – ${p.supplier}${p.name ? ` (${p.name})` : ''}:` });
@@ -132,7 +132,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
     const stream = client.beta.messages.stream({
       ...common,
       max_tokens: 64000,
-      system: REVIEW_PROMPT,
+      system: REVIEW_PROMPT.replace('{business}', business || 'trades business'),
       output_config: { effort: 'medium', format: betaZodOutputFormat(ReviewSchema) },
       messages: [{ role: 'user', content }],
     }, { timeout: 9 * 60 * 1000, maxRetries: 1 }); // never hangs: at most ~18 minutes, then it says so
@@ -162,7 +162,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
    * One invoice against its price list, as it arrives. data: { invoice, rules, job, money_checks }.
    * The price list goes first and is cached, so a batch of invoices from one supplier reuses it.
    */
-  async function reviewInvoice(data, { priceList, invoiceFile }) {
+  async function reviewInvoice({ business, ...data }, { priceList, invoiceFile }) {
     const plBlock = fileToBlock(path.join(filesDir, priceList.file_path), priceList.name || 'price-list.pdf', priceList.mime_type);
     const content = [
       { type: 'text', text: `PRICE LIST – ${priceList.supplier}${priceList.name ? ` (${priceList.name})` : ''}:` },
@@ -176,7 +176,7 @@ function createChecker({ apiKey, model = 'claude-opus-5-5', effort = 'high', fil
     const stream = client.beta.messages.stream({
       ...common,
       max_tokens: 32000,
-      system: INVOICE_PROMPT,
+      system: INVOICE_PROMPT.replace('{business}', business || 'trades business'),
       output_config: { effort: 'medium', format: betaZodOutputFormat(InvoiceReviewSchema) },
       messages: [{ role: 'user', content }],
     });
