@@ -1162,6 +1162,27 @@ window.addEventListener('message', function (e) {
     repo.suggestJob(inv.id);
     res.json({ ok: true, diaryWarning });
   });
+  // Put a whole invoice somewhere else: another job, or stock (fixing a mistake). Not for invoices shared between jobs.
+  api.post('/inbox/:id/move', async (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    const on = repo.jobsOnInvoice(inv.id);
+    const from = on.length ? repo.wholeJobOf(inv.id) : null;
+    if (on.length && !from) return res.status(400).json({ error: 'This invoice is shared between jobs (or part of it is used) – change it on each job\u2019s card' });
+    let job = null;
+    if (!req.body?.to_stock) {
+      const typed = String(req.body?.job_number || '').trim().replace(/^#/, '');
+      if (!typed) return res.status(400).json({ error: 'Type a job number' });
+      job = await jobByNumber(req.account, typed).catch(() => null);
+      if (!job || (job.account_uuid ?? null) !== req.account) return res.status(404).json({ error: `Job #${typed} wasn\u2019t found in ServiceM8` });
+      if (from === job.job_uuid || (job.is_stock && inv.stock_job_uuid === job.job_uuid)) return res.json({ ok: true, job_number: job.job_number, unchanged: true });
+    }
+    // out of the old job's diary if Job Costs copied it there
+    const diaryWarning = from && inv.sm8_link === 'pushed' ? await removeFromDiary(inv, req.account).catch((e) => e.message) : null;
+    try { repo.moveWhole(inv.id, from, job ? job.job_uuid : null); } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+    res.json({ ok: true, job_number: job ? job.job_number : null, to_stock: !job || !!job.is_stock, diaryWarning });
+  });
   // Open another job's Job Costs (e.g. to check a possible duplicate there).
   api.get('/jobs/:uuid/open', (req, res) => {
     const job = repo.getJob(String(req.params.uuid));

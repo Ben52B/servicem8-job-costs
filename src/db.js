@@ -359,9 +359,11 @@ function migrateColumns(db) {
 }
 
 function createRepo(db, dataDir) {
+  let txDepth = 0; // a transaction inside another one just joins it
   const tx = (fn) => {
-    db.exec('BEGIN');
-    try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+    if (txDepth) { txDepth++; try { return fn(); } finally { txDepth--; } }
+    db.exec('BEGIN'); txDepth = 1;
+    try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; } finally { txDepth = 0; }
   };
   const fail = (message, status = 400, extra = {}) => Object.assign(new Error(message), { status, ...extra });
 
@@ -965,6 +967,7 @@ function createRepo(db, dataDir) {
           id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, due_date: i.due_date,
           total: i.total, total_ex: exGst(i.total, i.tax), file_path: i.file_path, mime_type: i.mime_type, source: i.source,
           jobs: jobs.get(i.id) || [], in_stock: !!i.kept_as_stock, paid_at: p.at || null,
+          movable: !(jobs.get(i.id) || []).length || ((jobs.get(i.id) || []).length === 1 && !!repo.wholeJobOf(i.id)),
           payment_state: !p.n ? 'unpaid' : p.p >= p.n ? 'paid' : p.p > 0 ? 'part' : 'unpaid',
           twin: p.p >= p.n && p.n ? null : (() => { const t = repo.twinOf(i, invs); return t && t.paid ? t : null; })(),
         };
@@ -1155,8 +1158,21 @@ function createRepo(db, dataDir) {
         .all(accountUUID, `-${days} days`).map((i) => ({
           id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, total_ex: exGst(i.total, i.tax),
           approved_at: i.approved_at, job_uuid: i.approved_job_uuid, job_number: i.job_number, job_title: i.job_title, to_stock: !i.approved_job_uuid,
+          stock_job_number: !i.approved_job_uuid && i.stock_job_uuid ? (repo.getJob(i.stock_job_uuid) || {}).job_number || null : null,
+          movable: !repo.jobsOnInvoice(i.id).length || !!repo.wholeJobOf(i.id),
           file_path: i.file_path, mime_type: i.mime_type, possible_duplicate: repo.possibleDuplicate(i),
         }));
+    },
+    /** Move a whole invoice from its job (or stock) to another job, or to stock when jobUUID is null. */
+    moveWhole(invoiceId, fromJobUUID, jobUUID) {
+      const inv = repo.getInvoice(invoiceId);
+      tx(() => {
+        if (fromJobUUID) repo.removeFromJob(invoiceId, fromJobUUID);
+        db.prepare('UPDATE invoices SET kept_as_stock = 0, stock_job_uuid = NULL WHERE id = ?').run(invoiceId);
+        if (jobUUID) repo.assignWhole(invoiceId, jobUUID, { category: inv.category });
+        else repo.keepAsStock(invoiceId);
+        repo.markApproved(invoiceId, jobUUID && !repo.isStockJob(jobUUID) ? jobUUID : null);
+      });
     },
     /** Put an approved invoice back in the Inbox. */
     undoApproval(invoiceId) {

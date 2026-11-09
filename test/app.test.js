@@ -1417,6 +1417,53 @@ test('sent to stock by mistake: move the whole invoice onto its job from the Inb
   assert.ok(!ib.invoices.some((i) => i.id === inv.id), 'gone from Stock & leftovers');
 });
 
+test('wrong job: ✎ Change moves a whole invoice to another job or to stock (Inbox and Bills)', async () => {
+  JOBS['mv2-a'] = { jobNumber: '208410', jobTitle: '1 First St' };
+  JOBS['mv2-b'] = { jobNumber: '208411', jobTitle: '2 Second St' };
+  JOBS['mv2-s'] = { jobNumber: '208412', jobTitle: 'Stock order' };
+  const ta = await openCard('mv2-a', 'acc-mv2');
+  const tb = await openCard('mv2-b', 'acc-mv2');
+  const ts = await openCard('mv2-s', 'acc-mv2');
+  await api(ts, '/job', { method: 'PATCH', json: { is_stock: true } });
+  const inv = repo.createInvoice({ accountUUID: 'acc-mv2', source: 'upload' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Merlin', invoice_number: 'M-410', total: 1100, tax: 100, subtotal: 1000, items: [{ description: 'Motor', quantity: 5, line_total: 1000, category: 'materials' }] });
+  // sent to a job marked as a stock order: it's in stock, and the Inbox says so
+  assert.equal((await post(ta, `/inbox/${inv.id}/assign`, { job_number: '208412' })).status, 200);
+  let ib = await json(ta, '/inbox');
+  let rec = ib.recent.find((r) => r.id === inv.id);
+  assert.deepEqual([rec.to_stock, rec.stock_job_number, rec.movable], [true, '208412', true]);
+  // ✎ Change → job 208410: a cost on that job, out of stock
+  let r = await post(ta, `/inbox/${inv.id}/move`, { job_number: '208410' }).then((x) => x.json());
+  assert.deepEqual([r.ok, r.job_number, r.to_stock], [true, '208410', false]);
+  assert.ok((await summary(ta)).invoices.some((i) => i.id === inv.id && i.whole));
+  assert.equal(repo.getInvoice(inv.id).kept_as_stock, 0);
+  ib = await json(ta, '/inbox');
+  rec = ib.recent.find((x) => x.id === inv.id);
+  assert.deepEqual([rec.to_stock, rec.job_number], [false, '208410'], 'Recently approved shows where it went');
+  // wrong job again → 208411: off the first job, onto the second
+  r = await post(ta, `/inbox/${inv.id}/move`, { job_number: '208411' }).then((x) => x.json());
+  assert.equal(r.job_number, '208411');
+  assert.ok(!(await summary(ta)).invoices.some((i) => i.id === inv.id));
+  assert.ok((await summary(tb)).invoices.some((i) => i.id === inv.id && i.whole));
+  const bill = (await json(ta, '/bills')).bills.find((b) => b.id === inv.id);
+  assert.deepEqual([bill.jobs.map((j) => j.job_number), bill.movable], [['208411'], true], 'Bills shows the job, with ✎');
+  // → stock
+  r = await post(ta, `/inbox/${inv.id}/move`, { to_stock: true }).then((x) => x.json());
+  assert.equal(r.to_stock, true);
+  assert.ok(!(await summary(tb)).invoices.some((i) => i.id === inv.id));
+  assert.equal(repo.getInvoice(inv.id).kept_as_stock, 1);
+  // a typo'd job number changes nothing
+  assert.equal((await post(ta, `/inbox/${inv.id}/move`, { job_number: '999999' })).status, 404);
+  assert.equal(repo.getInvoice(inv.id).kept_as_stock, 1);
+  // shared between two jobs: change it on the cards instead
+  const item = repo.db.prepare('SELECT id FROM items WHERE invoice_id = ?').get(inv.id).id;
+  assert.equal((await api(ta, `/items/${item}/share`, { method: 'PUT', json: { quantity: 2 } })).status, 200);
+  assert.equal((await api(tb, `/items/${item}/share`, { method: 'PUT', json: { quantity: 1 } })).status, 200);
+  const shared = await post(ta, `/inbox/${inv.id}/move`, { job_number: '208411' });
+  assert.equal(shared.status, 400);
+  assert.match((await shared.json()).error, /shared between jobs/);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

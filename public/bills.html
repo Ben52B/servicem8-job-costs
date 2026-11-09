@@ -44,6 +44,8 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
   @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+.move{display:inline-flex;gap:4px;align-items:center}.move input{width:90px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px}
+.pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
 .dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
 </style>
 <style>
@@ -90,6 +92,7 @@ async function api(path, opts = {}) {
 let bills = [];
 let show = 'all';
 const selected = new Set();
+const changing = new Set(); // rows with the "move to another job" box open
 const fileUrl = (b) => (b.mime_type === 'application/pdf'
   ? `/viewer.html?id=${b.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(b.supplier || 'Invoice')}`
   : `/api/invoices/${b.id}/file?t=${encodeURIComponent(BOOT.token)}${/^text\//.test(b.mime_type || '') ? '&view=html' : ''}`);
@@ -112,7 +115,9 @@ function render() {
       <th>Supplier</th><th>Invoice</th><th>Date</th><th>Job</th><th class="num">Ex GST</th><th class="num">Inc GST</th><th>Status</th><th></th></tr></thead><tbody>
       ${list.map((b) => `<tr class="${selected.has(b.id) ? 'sel' : ''}"><td><input type="checkbox" data-pick="${b.id}" ${selected.has(b.id) ? 'checked' : ''}></td>
         <td><b>${esc(b.supplier || 'Unknown supplier')}</b></td><td>${esc(b.invoice_number || '')}</td><td>${esc(fmtDate(b.invoice_date))}</td>
-        <td>${b.jobs.length ? b.jobs.map((j) => `<button class="lnk" data-open-job="${esc(j.job_uuid)}">#${esc(j.job_number || '?')}</button>`).join(' ') : `<span class="muted">${b.in_stock ? 'Stock' : 'Not assigned'}</span>`}</td>
+        <td>${changing.has(b.id)
+          ? `<span class="move"><input id="m-${b.id}" placeholder="Job #" autocomplete="off"><button class="primary" data-move-pick="${b.id}">Move</button>${b.jobs.length ? `<button data-move-stock="${b.id}" title="Not for one job">📦 Stock</button>` : ''}<button data-change="${b.id}">✕</button></span>`
+          : `${b.jobs.length ? b.jobs.map((j) => `<button class="lnk" data-open-job="${esc(j.job_uuid)}">#${esc(j.job_number || '?')}</button>`).join(' ') : `<span class="muted">${b.in_stock ? '📦 Stock' : 'Not assigned'}</span>`}${b.movable && (b.jobs.length || b.in_stock) ? ` <button class="pen" data-change="${b.id}" title="Wrong job? Move it">✎</button>` : ''}`}</td>
         <td class="num">${money(b.total_ex)}</td><td class="num">${money(b.total)}</td>
         <td><span class="chip c-${b.payment_state}">${b.payment_state === 'paid' ? 'Paid' + (b.paid_at ? ' ' + esc(fmtDate(b.paid_at)) : '') : b.payment_state === 'part' ? 'Part paid' : 'Unpaid'}</span>${b.twin ? `<div class="dupwarn" title="${esc(b.twin.reason)}">⚠ Duplicate – already paid${b.twin.paid_at ? ' ' + esc(fmtDate(String(b.twin.paid_at).slice(0, 10))) : ''} as another copy${b.twin.jobs.length ? ' on #' + b.twin.jobs.map((j) => esc(j.job_number || '?')).join(', #') : ''}. Don't pay it again.</div>` : ''}</td>
         <td>${b.file_path ? `<a class="lnk" href="${fileUrl(b)}" target="_blank" rel="noopener">View</a>` : ''}</td></tr>`).join('')}
@@ -143,6 +148,17 @@ document.addEventListener('click', async (e) => {
       const r = await api('/bills/paid', { method: 'POST', body: JSON.stringify({ ids, paid: b.dataset.mark === 'paid' }) });
       toast(`${r.updated} invoice${r.updated === 1 ? '' : 's'} marked as ${b.dataset.mark}${r.skipped && r.skipped.length ? ` · ${r.skipped.length} not marked: already paid as another copy (${r.skipped.map((x) => x.invoice_number || '#' + x.id).join(', ')})` : ''}`);
       selected.clear(); return load();
+    }
+    if (b.dataset.change) { const id = Number(b.dataset.change); changing.has(id) ? changing.delete(id) : changing.add(id); render(); const el = $('#m-' + id); if (el) el.focus(); return; }
+    if (b.dataset.movePick || b.dataset.moveStock) {
+      const id = Number(b.dataset.movePick || b.dataset.moveStock);
+      const n = b.dataset.movePick ? $('#m-' + id).value.trim().replace(/^#/, '') : null;
+      if (b.dataset.movePick && !n) { $('#m-' + id).focus(); return toast('Type a job number'); }
+      b.disabled = true;
+      const r = await api(`/inbox/${id}/move`, { method: 'POST', body: JSON.stringify(n ? { job_number: n } : { to_stock: true }) });
+      changing.delete(id);
+      toast(r.unchanged ? 'It\u2019s already there' : r.to_stock ? 'Moved to stock' : 'Moved to #' + r.job_number);
+      return load();
     }
     if (b.dataset.openJob) { const r = await api(`/jobs/${encodeURIComponent(b.dataset.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); }
   } catch (x) { toast(x.message); }

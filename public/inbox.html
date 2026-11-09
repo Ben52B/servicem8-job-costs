@@ -72,6 +72,7 @@ const fmtDate = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-AU',
 const qty = (n) => String(+(+n).toFixed(3));
 let data = null;
 let timer = null;
+const changing = new Set(); // invoices whose "✎ Change" box is open
 
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); }
 async function api(path, opts = {}) {
@@ -176,6 +177,9 @@ function render() {
   // Type a job number; the browser suggests matching jobs as you type.
   const jobBox = (id, other) => `<span style="display:inline-flex;gap:4px"><input id="j-${id}" list="jobList" data-job-input="${id}" placeholder="${other ? 'Other job #' : 'Job #'}" autocomplete="off"
     style="width:120px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button data-assign-pick="${id}">Add</button></span>`;
+  // key: which box (an invoice can show in two lists); id: the invoice
+  const moveBox = (key, id, { stock = true, label = 'Move' } = {}) => `<span style="display:inline-flex;gap:4px;flex-wrap:wrap"><input id="m-${key}" list="jobList" placeholder="Job #" autocomplete="off"
+    style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button class="primary" data-move-pick="${id}" data-key="${key}">${label}</button>${stock ? `<button data-move-stock="${id}" data-key="${key}" title="Not for one job">📦 To stock</button>` : ''}</span>`;
   let h = data.statementsWaiting ? `<div class="item" style="background:#eef2ff;border-color:#c7d2fe"><div>📄 <b>${data.statementsWaiting} supplier statement${data.statementsWaiting === 1 ? '' : 's'}</b> came in and ${data.statementsWaiting === 1 ? 'was' : 'were'} moved to Statement check, ready to run.</div>
     <div class="acts"><a class="btn" href="/checks?t=${encodeURIComponent(BOOT.token)}">🔎 Open Statement check</a></div></div>` : '';
   h += `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
@@ -206,9 +210,11 @@ function render() {
     h += `<h2>Recently approved <span class="muted" style="font-weight:600;font-size:12px">last 14 days – approved the wrong one? Undo puts it back above</span></h2><div class="recent">`;
     for (const r of recent) {
       h += `<div class="item"><div><div class="t">${esc(r.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(r.total_ex ?? r.total)} ex GST</span></div>
-        <div class="sub">${esc([r.invoice_number && '#' + r.invoice_number, fmtDate(r.invoice_date)].filter(Boolean).join(' · '))} → <b>${r.to_stock ? '📦 stock' : 'job #' + esc(r.job_number || '?')}</b> · ${agoText(r.approved_at)}</div>
+        <div class="sub">${esc([r.invoice_number && '#' + r.invoice_number, fmtDate(r.invoice_date)].filter(Boolean).join(' · '))} → <b>${r.to_stock ? '📦 stock' + (r.stock_job_number ? ' (stock order #' + esc(r.stock_job_number) + ')' : '') : 'job #' + esc(r.job_number || '?')}</b> · ${agoText(r.approved_at)}</div>
         ${dupNote(r.possible_duplicate, r.job_uuid)}</div>
-        <div class="acts">${fileLink(r)}${r.to_stock ? '' : openJob(r.job_uuid, r.job_number)}<button data-undo="${r.id}">↶ Undo</button></div></div>`;
+        <div class="acts">${fileLink(r)}${r.to_stock ? '' : openJob(r.job_uuid, r.job_number)}${changing.has('r' + r.id)
+          ? moveBox('r' + r.id, r.id, { stock: !r.to_stock }) + '<button data-change="r' + r.id + '">Cancel</button>'
+          : `${r.movable ? `<button data-change="r${r.id}" title="Put it on a different job${r.to_stock ? '' : ' or in stock'}">✎ Change</button>` : ''}<button data-undo="${r.id}">↶ Undo</button>`}</div></div>`;
     }
     h += '</div>';
   }
@@ -216,10 +222,12 @@ function render() {
   if (!stock.length) h += '<div class="empty">Nothing left over. When only part of an invoice is used, the rest shows here.</div>';
   for (const i of stock) {
     h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
-      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total), i.stock_job && 'stock order #' + i.stock_job.job_number].filter(Boolean).join(' · '))}</div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total)].filter(Boolean).join(' · '))}</div>
+      ${i.kept_as_stock ? `<div class="sub">→ <b>📦 In stock${i.stock_job ? ' (stock order #' + esc(i.stock_job.job_number || '?') + ')' : ''}</b>${i.untouched ? ' – nothing taken from it yet' : ''}</div>` : ''}
       ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
       <div class="acts">${fileLink(i)}${i.untouched
-        ? `${jobBox(i.id, false).replace(/(data-assign-pick="[^"]*"[^>]*>)[^<]*/, '$1Move to job')}<span class="muted" style="font-size:12px">Nothing used yet: move it onto a job as its cost,<br>or take items from a job's ＋ Add costs window</span>`
+        ? (changing.has('s' + i.id) ? moveBox('s' + i.id, i.id, { stock: false, label: 'Move to job' }) + `<button data-change="s${i.id}">Cancel</button>`
+          : `<button data-change="s${i.id}" title="Put the whole invoice on a job as its cost">✎ Change</button>`)
         : '<span class="muted" style="font-size:12px">Take items from a job\'s<br>＋ Add costs window</span>'}</div></div>`;
   }
   h += `<datalist id="jobList">${data.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : '', j.sm8_status && j.sm8_status !== 'Work Order' ? j.sm8_status : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>`;
@@ -251,6 +259,18 @@ document.addEventListener('click', async (e) => {
       b.disabled = true;
       const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n, paid: paidTick(d.assignPick) }) });
       toast('Added to #' + (r.job_number || n) + andPaid(d.assignPick)); return load();
+    }
+    if (d.change) { const k = d.change; changing.has(k) ? changing.delete(k) : changing.add(k); render(); const el = $('#m-' + k); if (el) el.focus(); return; }
+    if (d.movePick || d.moveStock) {
+      const id = Number(d.movePick || d.moveStock);
+      const n = d.movePick ? $('#m-' + d.key).value.trim().replace(/^#/, '').split(/[\s–-]/)[0] : null;
+      if (d.movePick && !n) { $('#m-' + d.key).focus(); return toast('Type a job number'); }
+      b.disabled = true;
+      const r = await api(`/inbox/${id}/move`, { method: 'POST', body: JSON.stringify(n ? { job_number: n } : { to_stock: true }) });
+      changing.delete(d.key);
+      toast(r.unchanged ? 'It\u2019s already there' : r.to_stock ? 'Moved to stock' + (r.job_number ? ' (stock order #' + r.job_number + ')' : '') : 'Moved to #' + r.job_number);
+      if (r.diaryWarning) toast(r.diaryWarning);
+      return load();
     }
     if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid: paidTick(d.stock) }) }); toast('Sent to stock' + andPaid(d.stock) + ' – take items from it on any job'); return load(); }
     if (d.del) {
