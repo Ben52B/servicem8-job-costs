@@ -88,6 +88,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     const header = req.get('authorization') || '';
     const job = jobFromToken(header.startsWith('Bearer ') ? header.slice(7) : req.query.t);
     if (!job) return res.status(401).json({ error: 'Session expired. Close and reopen Job Costs from the job card.' });
+    // Keep the window working while it's open: a fresh token once the one in use is over an hour old.
+    try {
+      const { iat } = jwt.decode(header.startsWith('Bearer ') ? header.slice(7) : String(req.query.t || '')) || {};
+      if (iat && Date.now() / 1000 - iat > 3600) res.set('X-Session-Token', sessionToken(job.job_uuid));
+    } catch { /* keep the old one */ }
     req.job = job;
     req.account = job.account_uuid ?? null;
     next(); // outside any try, so a bug in a route isn't reported as an expired session
@@ -733,6 +738,7 @@ window.addEventListener('message', function (e) {
     }
     return n;
   }
+  api.get('/ping', (req, res) => res.json({ ok: true })); // open windows check in, so their session stays fresh
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     if (checker) priceCheckUnchecked(req.account, summary.invoices || []);
@@ -1113,6 +1119,10 @@ window.addEventListener('message', function (e) {
   // ---------- Inbox (all invoices not assigned yet, for the whole business) ----------
   api.get('/inbox', (req, res) => {
     const acc = repo.ensureAccount(req.account);
+    for (const i of repo.db.prepare(`SELECT id FROM invoices WHERE account_uuid IS ? AND status = 'ready' AND suggested_job_uuid IS NULL AND kept_as_stock = 0
+        AND approved_at IS NULL AND NOT EXISTS (SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = invoices.id) LIMIT 100`).all(req.account)) {
+      repo.suggestJob(i.id);
+    }
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
       recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(config),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length });

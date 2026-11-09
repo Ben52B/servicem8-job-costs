@@ -241,6 +241,18 @@
 
 <script>
 const BOOT = /*__BOOT__*/null;
+// Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
+function noteToken(res) {
+  const nt = res && res.headers && res.headers.get('X-Session-Token');
+  if (!nt || !BOOT || nt === BOOT.token) return;
+  const oldEnc = encodeURIComponent(BOOT.token), newEnc = encodeURIComponent(nt);
+  BOOT.token = nt;
+  try { T = newEnc; } catch (e) { /* this page keeps no copy */ }
+  document.querySelectorAll('a[href]').forEach((a) => { if (a.getAttribute('href').includes(oldEnc)) a.setAttribute('href', a.getAttribute('href').split(oldEnc).join(newEnc)); });
+  if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
+}
+try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const state = { pcOpen: new Set(), data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null,
   mkOpen: null, forceDetail: false, modal: null, attachTo: null };
 const $ = (s, el = document) => el.querySelector(s);
@@ -270,6 +282,7 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 async function api(path, opts = {}) {
   const isJson = opts.body && !(opts.body instanceof FormData);
   const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(isJson ? { 'Content-Type': 'application/json' } : {}) } });
+  noteToken(res);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Something went wrong');
   return body;

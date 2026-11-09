@@ -1487,6 +1487,54 @@ test('Stock page: what is in stock, what is left, and stock used up recently', a
   assert.ok(!(await json(t, '/stock')).stock.some((i) => i.id === whole));
 });
 
+test('no job number on the invoice: the customer name suggests the job (surname or whole name; not first names or your own name)', async () => {
+  const A = 'acc-name';
+  repo.ensureAccount(A);
+  const job = (uuid, num, client, status = 'Work Order') => repo.ensureJob({ jobUUID: uuid, accountUUID: A, jobNumber: num, jobTitle: num + ' site', clientName: client, status });
+  job('n-1', '208501', 'Todd Gardiner');
+  job('n-2', '208502', 'Leading Edge Garage Doors');
+  job('n-3', '208503', 'Michael Smith');
+  job('n-4', '208504', 'Michael Jones');
+  // your own business on several internal jobs: its name never matches
+  job('n-5', '208505', 'Alpha Garage Doors'); job('n-6', '208506', 'Alpha Garage Doors'); job('n-7', '208507', 'Alpha Garage Doors');
+  job('n-8', '208508', 'Sam Burton', 'Completed');
+  const read = (fields) => {
+    const inv = repo.createInvoice({ accountUUID: A, source: 'upload' });
+    repo.saveExtraction(inv.id, { supplier_name: 'GDA', invoice_number: 'G-' + inv.id, total: 110, tax: 10, subtotal: 100, references: [], items: [{ description: 'Remote', line_total: 100, category: 'materials' }], ...fields });
+    return repo.getJob(repo.suggestJob(inv.id) || '') || null;
+  };
+  assert.equal(read({ customer_name: 'T. Gardiner' }).job_number, '208501', 'surname');
+  assert.match(repo.db.prepare('SELECT suggestion_reason FROM invoices ORDER BY id DESC LIMIT 1').get().suggestion_reason, /Gardiner/);
+  assert.equal(read({ customer_name: 'Leading Edge' }).job_number, '208502', 'the whole company name');
+  assert.equal(read({ references: ['Leading Edge GD'] }).job_number, '208502', 'in the references');
+  assert.equal(read({ customer_name: 'Michael' }), null, 'a first name alone');
+  assert.equal(read({ references: ['Alpha GD order'] }), null, 'your own business name');
+  assert.equal(read({ customer_name: 'Burton' }), null, 'only open jobs');
+  assert.equal(read({ customer_name: 'Smith' }).job_number, '208503');
+  job('n-9', '208509', 'Jane Smith');
+  assert.equal(read({ customer_name: 'Smith' }), null, 'two open jobs for a Smith: no guess');
+  // a job number still wins
+  assert.equal(read({ customer_name: 'Gardiner', references: ['PO 208502'] }).job_number, '208502');
+});
+
+test('sessions stay alive while the window is in use: a fresh token once the old one is over an hour old', async () => {
+  const t = await openCard('job-a');
+  const fresh = await api(t, '/ping');
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.headers.get('x-session-token'), null, 'a new token is used as is');
+  const now = Math.floor(Date.now() / 1000);
+  const old = jwt.sign({ jobUUID: 'job-a', iat: now - 2 * 3600, exp: now + 10 * 3600 }, 'session-secret');
+  const r = await api(old, '/ping');
+  assert.equal(r.status, 200);
+  const nt = r.headers.get('x-session-token');
+  assert.ok(nt, 'two hours old: a fresh one comes back');
+  assert.equal(jwt.decode(nt).jobUUID, 'job-a');
+  assert.ok(jwt.decode(nt).exp - now >= 11 * 3600, 'good for another 12 hours');
+  assert.equal((await api(nt, '/job')).status, 200);
+  const expired = jwt.sign({ jobUUID: 'job-a', iat: now - 13 * 3600, exp: now - 3600 }, 'session-secret');
+  assert.equal((await api(expired, '/ping')).status, 401, 'an expired one still needs Job Costs opened again');
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

@@ -28,6 +28,7 @@ const InvoiceSchema = z.object({
   })),
   references: z.array(z.string()).describe('Every reference the customer gave the supplier: PO number, order number, "your ref", job number, customer reference, project name. Copy them exactly as printed. Empty list if none.'),
   site_address: z.string().nullable().describe('Delivery or job-site address if shown (not the supplier\'s address and not the billing address unless it is the only one).'),
+  customer_name: z.string().nullable().describe('The end customer the goods or work are for, if printed (e.g. "Deliver to: J Smith", "Attn: Talia", "Customer: Leading Edge", "Site contact"). Not the supplier, and not the business being billed (the buyer).'),
   purchase_kind: z.enum(['job', 'stock', 'unclear']).describe('"job" if it is for one customer job (a customer name, site/delivery address or job number is given). "stock" if it looks like the business restocking its own warehouse/van (several of the same product, "stock" written on it, no customer, site or job reference, delivered to the business itself). Otherwise "unclear".'),
   notes: z.string().nullable().describe('Anything the business owner should notice, e.g. "Deposit only - balance to follow", or unreadable parts.'),
 });

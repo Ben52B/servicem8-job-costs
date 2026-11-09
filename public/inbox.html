@@ -65,6 +65,18 @@
 <div class="toast" id="toast"></div>
 <script>
 const BOOT = /*__BOOT__*/null;
+// Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
+function noteToken(res) {
+  const nt = res && res.headers && res.headers.get('X-Session-Token');
+  if (!nt || !BOOT || nt === BOOT.token) return;
+  const oldEnc = encodeURIComponent(BOOT.token), newEnc = encodeURIComponent(nt);
+  BOOT.token = nt;
+  try { T = newEnc; } catch (e) { /* this page keeps no copy */ }
+  document.querySelectorAll('a[href]').forEach((a) => { if (a.getAttribute('href').includes(oldEnc)) a.setAttribute('href', a.getAttribute('href').split(oldEnc).join(newEnc)); });
+  if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
+}
+try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
@@ -77,6 +89,7 @@ const changing = new Set(); // invoices whose "✎ Change" box is open
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2400); }
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  noteToken(res);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || 'Something went wrong');
   return body;
@@ -308,6 +321,7 @@ async function uploadToInbox(files) {
   toast(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}…`);
   try {
     const res = await fetch('/api/inbox/upload', { method: 'POST', body: fd, headers: { Authorization: 'Bearer ' + BOOT.token } });
+  noteToken(res);
     const b = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(b.error || 'Upload failed');
     toast(`Reading ${b.created.length} invoice${b.created.length === 1 ? '' : 's'}… each gets a suggested job`);

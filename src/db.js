@@ -192,6 +192,13 @@ function invoiceCategory(items) {
 
 /** Invoice total without GST (no GST shown = nothing to take off). */
 // "Fine Tuned Electrical Pty Ltd" and "Fine Tuned Electrical" are the same supplier
+// Words of a client's name that can identify them (not "Pty Ltd", "Garage Doors" and the like)
+const NAME_STOP = new Set(['pty', 'ltd', 'limited', 'the', 'and', 'garage', 'garages', 'door', 'doors', 'automation', 'services', 'service', 'group',
+  'trading', 'australia', 'aus', 'vic', 'victoria', 'melbourne', 'building', 'builders', 'build', 'construction', 'constructions', 'homes', 'home',
+  'property', 'properties', 'developments', 'development', 'mr', 'mrs', 'ms', 'dr', 'unit', 'street', 'road', 'st', 'rd', 'ave', 'job', 'site']);
+function nameTokens(name) {
+  return String(name || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !NAME_STOP.has(w) && !/^\d+$/.test(w));
+}
 function supplierKey(s) {
   return String(s || '').toLowerCase().replace(/&/g, ' and ').split(/[^a-z0-9]+/)
     .filter((w) => w && !['pty', 'ltd', 'limited', 'the', 'p', 'l', 'inc', 'co', 'trust', 'trading', 'as', 't', 'a'].includes(w)).join(' ');
@@ -340,7 +347,8 @@ function migrateColumns(db) {
   // Price check of the invoice against the supplier's / subcontractor's price list
   add('price_check', 'TEXT');          // JSON: the result
   add('price_check_status', 'TEXT');   // checking | done | error | none (no price list)
-  add('file_hash', 'TEXT');            // sha256 of the file: the same PDF twice is the same bill
+  add('file_hash', 'TEXT');
+  add('customer_name', 'TEXT');        // the end customer printed on the invoice (deliver to / attn)            // sha256 of the file: the same PDF twice is the same bill
   // Rules: "always", or "once" (optionally for one invoice number), switched off after the check that used it
   for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT']]) {
     if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
@@ -892,13 +900,13 @@ function createRepo(db, dataDir) {
       tx(() => {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
             document_type = ?, supplier = ?, supplier_abn = ?, invoice_number = ?, invoice_date = ?,
-            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?, purchase_kind = ?,
+            due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?, customer_name = ?, purchase_kind = ?,
             category = CASE WHEN category_manual = 1 THEN category ELSE ? END
           WHERE id = ?`).run(
           x.document_type || null, x.supplier_name || null, x.supplier_abn || null, x.invoice_number || null,
           x.invoice_date || null, x.due_date || null, x.currency || null,
           x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null,
-          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, x.purchase_kind || null, invoiceCategory(items), id,
+          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, x.customer_name || null, x.purchase_kind || null, invoiceCategory(items), id,
         );
         db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
@@ -1114,6 +1122,20 @@ function createRepo(db, dataDir) {
         ['the email', inv.email_text],
       ];
       const site = addressKey(inv.site_address);
+      // Customer name: a distinctive word of the job's client (e.g. a surname) printed on the invoice as the
+      // customer, site or reference. Words shared by several open jobs (e.g. your own business name) don't count.
+      const nameText = ' ' + [inv.customer_name, inv.site_address, parseJson(inv.refs, []).join(' '), inv.email_subject].filter(Boolean).join(' ').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+      const openJobs = activeJobs.filter((j) => isOpen(j) && !(j.stock_manual != null ? j.stock_manual : j.stock_auto));
+      const tokenJobs = new Map();
+      for (const j of openJobs) for (const t of new Set(nameTokens(j.client_name))) tokenJobs.set(t, (tokenJobs.get(t) || 0) + 1);
+      const nameMatch = (j) => {
+        const toks = nameTokens(j.client_name).filter((t) => (tokenJobs.get(t) || 0) <= 2);
+        if (!toks.length) return null;
+        const hit = toks.filter((t) => nameText.includes(' ' + t + ' '));
+        // all its words, or the last one (a surname, 4+ letters) – a first name alone isn't enough
+        const last = toks[toks.length - 1];
+        return hit.length && (hit.length === toks.length || (toks.length <= 3 && last.length >= 4 && hit.includes(last))) ? hit : null;
+      };
       const scored = [];
       for (const j of activeJobs) {
         const num = String(j.job_number).trim();
@@ -1125,6 +1147,10 @@ function createRepo(db, dataDir) {
         const jobAddr = addressKey(j.job_title);
         if (!best && isOpen(j) && site && jobAddr && site.number === jobAddr.number && site.street === jobAddr.street) {
           best = { score: 2, reason: `Site address matches ${String(j.job_title).split(',')[0]}` };
+        }
+        if (!best && isOpen(j) && openJobs.includes(j)) {
+          const hit = nameMatch(j);
+          if (hit) best = { score: 1, reason: `Customer “${hit.join(' ')}” matches the client ${j.client_name}` };
         }
         if (best) scored.push({ job: j, ...best });
       }
