@@ -28,8 +28,9 @@ function verifyEvent(body, appSecret) {
   if (!token) throw new Error('No ServiceM8 token in request');
   if (!appSecret) throw new Error('SERVICEM8_APP_SECRET is not set');
   const event = jwt.verify(token, appSecret, { algorithms: ['HS256'] });
-  const jobUUID = event?.eventArgs?.jobUUID;
-  if (!jobUUID) throw new Error('This add-on must be opened from a job');
+  // From a job's button: the job. From the Add-ons menu (or the app's More tab): no job, the whole business.
+  const jobUUID = event?.eventArgs?.jobUUID || null;
+  if (!jobUUID && !event?.auth?.accountUUID) throw new Error('This add-on must be opened from a job or the Add-ons menu');
   return {
     eventName: String(event.eventName || '').toLowerCase(),
     jobUUID,

@@ -17,7 +17,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -71,6 +71,8 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   }
 
   const sessionToken = (jobUUID) => jwt.sign({ jobUUID }, config.sessionSecret, { expiresIn: '12h' });
+  // Opened from the Add-ons menu / the app's More tab: the business, no job.
+  const accountToken = (accountUUID) => jwt.sign({ accountUUID: accountUUID ?? '', scope: 'account' }, config.sessionSecret, { expiresIn: '12h' });
   const inject = (html, boot) => html.replace('/*__BOOT__*/null', JSON.stringify(boot).replace(/</g, '\\u003c'));
 
   function renderCard(res, job, { embedded, select = null, back = null }) {
@@ -81,21 +83,36 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   }
 
   const jobFromToken = (token) => {
-    try { return repo.getJob(jwt.verify(String(token || ''), config.sessionSecret).jobUUID) || null; } catch { return null; }
+    try { const p = jwt.verify(String(token || ''), config.sessionSecret); return p.jobUUID ? repo.getJob(p.jobUUID) || null : null; } catch { return null; }
   };
+  /** Who a token is for: { job, account } from a job's button, { job: null, account } from the menu. */
+  const sessionFrom = (token) => {
+    let p;
+    try { p = jwt.verify(String(token || ''), config.sessionSecret); } catch { return null; }
+    if (p.jobUUID) { const job = repo.getJob(p.jobUUID); return job ? { job, account: job.account_uuid ?? null } : null; }
+    if (p.scope === 'account' && repo.db.prepare('SELECT 1 FROM accounts WHERE account_key = ?').get(p.accountUUID ?? '')) {
+      return { job: null, account: p.accountUUID === '' ? null : p.accountUUID };
+    }
+    return null;
+  };
+  // Things that only make sense on one job (the menu's business-wide pages don't use them).
+  const needsJob = (method, p) => p === '/job' || /^\/(unassigned|assign$|items\/|diary|suggestions\/|invoices\/manual|invoices\/?$)/.test(p)
+    || (/^\/invoices\/\d+$/.test(p) && method !== 'GET') || /^\/invoices\/\d+\/diary-keep/.test(p);
 
   // Card API auth: short-lived token handed to the card when ServiceM8 opened it.
   function requireSession(req, res, next) {
     const header = req.get('authorization') || '';
-    const job = jobFromToken(header.startsWith('Bearer ') ? header.slice(7) : req.query.t);
-    if (!job) return res.status(401).json({ error: 'Session expired. Close and reopen Job Costs from the job card.' });
+    const sess = sessionFrom(header.startsWith('Bearer ') ? header.slice(7) : req.query.t);
+    if (!sess) return res.status(401).json({ error: 'Session expired. Close and reopen Job Costs from ServiceM8.' });
+    if (!sess.job && needsJob(req.method, req.path)) return res.status(400).json({ error: 'Open Job Costs from a job to do this.' });
+    const job = sess.job;
     // Keep the window working while it's open: a fresh token once the one in use is over an hour old.
     try {
       const { iat } = jwt.decode(header.startsWith('Bearer ') ? header.slice(7) : String(req.query.t || '')) || {};
-      if (iat && Date.now() / 1000 - iat > 3600) res.set('X-Session-Token', sessionToken(job.job_uuid));
+      if (iat && Date.now() / 1000 - iat > 3600) res.set('X-Session-Token', job ? sessionToken(job.job_uuid) : accountToken(sess.account));
     } catch { /* keep the old one */ }
     req.job = job;
-    req.account = job.account_uuid ?? null;
+    req.account = sess.account;
     next(); // outside any try, so a bug in a route isn't reported as an expired session
   }
 
@@ -586,9 +603,37 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       version: '1.0',
       iconURL: `${config.publicUrl}/icon.png`,
       supportURL: config.publicUrl,
-      actions: [{ name: 'Job Costs', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' }],
+      ...(config.supportEmail ? { supportEmail: config.supportEmail } : {}),
+      actions: [
+        { name: 'Job Costs', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' },
+        { name: 'Job Costs', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' }, // the iPhone / iPad app
+      ],
+      menuItems: [
+        { name: 'Job Costs', type: 'addon', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the Add-ons menu
+        { name: 'Job Costs', type: 'app', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the app's More tab
+      ],
     });
   });
+
+  // The window ServiceM8 shows: our page in a frame, sized to fit (the app shows it full screen).
+  const windowHtml = (url) => `<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
+<script>
+var sm8 = null;
+try { sm8 = SMClient.init(); } catch (e) {}
+function fit(size) {
+  try {
+    // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
+    var aw = (screen.availWidth || 1320), ah = (screen.availHeight || 860);
+    if (size === 'full') sm8.resizeWindow(Math.max(700, Math.min(1320, aw - 100)), Math.max(480, Math.min(820, ah - 260)));
+    else sm8.resizeWindow(Math.min(500, aw - 40), Math.max(420, Math.min(680, ah - 260)));
+  } catch (e) {}
+}
+fit('compact');
+window.addEventListener('message', function (e) {
+  if (e.origin === ${JSON.stringify(new URL(config.publicUrl).origin)} && e.data && e.data.jobcosts === 'size') fit(e.data.size);
+});
+</script>
+<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`;
 
   // ServiceM8 calls this when someone clicks "Job Costs" on a job card.
   app.post('/servicem8/addon', express.text({ type: '*/*', limit: '1mb' }), async (req, res) => {
@@ -601,6 +646,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       console.error(`ServiceM8 click rejected: ${e.message} (body ${String(req.body || '').length} chars, type ${req.get('content-type') || '-'})`);
       return reply(`<div style="font-family:sans-serif;padding:16px"><b>Could not open Job Costs</b><p>${String(e.message).replace(/</g, '&lt;')}</p>
         <p>Check SERVICEM8_APP_SECRET in Render matches the add-on's App Secret.</p></div>`);
+    }
+    if (!event.jobUUID) {
+      // From the Add-ons menu / the app's More tab: the Job Costs home page for the whole business.
+      repo.ensureAccount(event.accountUUID);
+      if (event.accessToken) eventTokens.set(event.accountUUID ?? null, event.accessToken);
+      const claimed = repo.claimPendingTokens(event.accountUUID);
+      accessTokenFor(event.accountUUID, event.accessToken).then((token) => syncJobs(event.accountUUID, token, { force: claimed })).catch(() => {});
+      console.log('Job Costs opened from the menu');
+      return reply(windowHtml(`${config.publicUrl}/home?t=${encodeURIComponent(accountToken(event.accountUUID))}`));
     }
     // ServiceM8 only waits a few seconds for an answer. Get the job's details from ServiceM8 if that's
     // quick; otherwise open the window straight away and finish in the background.
@@ -626,24 +680,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     // and asks ServiceM8 to make the window big enough.
     // Opens on the compact summary; "Open full Job Costs" inside it asks for the big window.
     const url = `${config.publicUrl}/summary?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
-    reply(`<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
-<script>
-var sm8 = null;
-try { sm8 = SMClient.init(); } catch (e) {}
-function fit(size) {
-  try {
-    // Leave room for the browser's tabs, address bar and ServiceM8's top bar.
-    var aw = (screen.availWidth || 1320), ah = (screen.availHeight || 860);
-    if (size === 'full') sm8.resizeWindow(Math.max(700, Math.min(1320, aw - 100)), Math.max(480, Math.min(820, ah - 260)));
-    else sm8.resizeWindow(Math.min(500, aw - 40), Math.max(420, Math.min(680, ah - 260)));
-  } catch (e) {}
-}
-fit('compact');
-window.addEventListener('message', function (e) {
-  if (e.origin === ${JSON.stringify(new URL(config.publicUrl).origin)} && e.data && e.data.jobcosts === 'size') fit(e.data.size);
-});
-</script>
-<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`);
+    reply(windowHtml(url));
   });
 
   const LOADING = '__loading__'; // details still coming from ServiceM8 (the card checks again shortly)
@@ -701,12 +738,14 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home']) {
     app.get(`/${name}`, (req, res) => {
-      if (!jobFromToken(req.query.t)) {
-        return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');
+      const sess = sessionFrom(req.query.t);
+      if (!sess) {
+        return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from ServiceM8 and try again.</p>');
       }
-      const boot = { token: String(req.query.t), reasons: MISTAKE_REASONS, categories: CATEGORIES };
+      // home: opened from the menu, so "Back" goes to the Job Costs home page instead of a job
+      const boot = { token: String(req.query.t), reasons: MISTAKE_REASONS, categories: CATEGORIES, home: !sess.job };
       res.set('Cache-Control', 'no-store').type('html').send(inject(PAGES[name], boot));
     });
   }
@@ -739,7 +778,25 @@ window.addEventListener('message', function (e) {
     }
     return n;
   }
-  api.get('/ping', (req, res) => res.json({ ok: true })); // open windows check in, so their session stays fresh
+  api.get('/ping', (req, res) => res.json({ ok: true }));
+  // Job Costs home (from the menu / the app's More tab): what needs doing across the business.
+  api.get('/home', (req, res) => {
+    const bills = repo.listBills(req.account);
+    const unpaid = bills.filter((b) => b.payment_state !== 'paid');
+    const flags = repo.checkFlagsFor(req.account, unpaid.map((b) => b.id));
+    res.json({ inboxCount: repo.inboxCount(req.account), unpaidCount: unpaid.length,
+      toPay: Math.round(unpaid.reduce((a, b) => a + (Number(b.total) || 0), 0) * 100) / 100,
+      duplicates: unpaid.filter((b) => b.twin).length, flagged: flags.size, stockLeft: repo.listStock(req.account).leftTotal,
+      statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
+      jobs: repo.listJobs(req.account).slice(0, 300).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title })) });
+  });
+  api.get('/jobs/find', async (req, res) => {
+    const n = String(req.query.number || '').trim().replace(/^#/, '');
+    if (!n) return res.status(400).json({ error: 'Type a job number' });
+    const job = await jobByNumber(req.account, n).catch(() => null);
+    if (!job || (job.account_uuid ?? null) !== req.account) return res.status(404).json({ error: `Job #${n} wasn\u2019t found in ServiceM8` });
+    res.json({ token: sessionToken(job.job_uuid), job_number: job.job_number });
+  }); // open windows check in, so their session stays fresh
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
     if (checker) priceCheckUnchecked(req.account, summary.invoices || []);
@@ -1551,8 +1608,9 @@ window.addEventListener('message', function (e) {
 
   // "Connect Outlook" (opened from the card): sign in to Microsoft and allow reading mail.
   app.get('/outlook/connect', (req, res) => {
-    const job = jobFromToken(req.query.t);
-    if (!job) return res.status(401).type('html').send(htmlPage('Job Costs', '<h2>Session expired</h2><p>Open Job Costs from a job in ServiceM8 and try again.</p>'));
+    const sess = sessionFrom(req.query.t);
+    if (!sess) return res.status(401).type('html').send(htmlPage('Job Costs', '<h2>Session expired</h2><p>Open Job Costs from ServiceM8 and try again.</p>'));
+    const job = sess.job || { account_uuid: sess.account };
     if (!config.msClientId || !config.msClientSecret) {
       return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b> and <b>MS_TENANT_ID</b> in Render (see the README), then try again.</p>'));
     }

@@ -63,11 +63,26 @@
   .foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 -4px 16px rgba(16,40,34,.06); }
   .foot .spacer { flex: 1; }
   .lnk { background: none; border: 0; padding: 0 2px; color: var(--brand-dark); text-decoration: underline; cursor: pointer; font: inherit; box-shadow: none; }
+  .only-phone { display: none; }
+  @media (max-width: 640px) {
+    .only-phone { display: inline; }
+    .wrap { padding: 12px 10px; }
+    table.bills, table.bills tbody { display: block; }
+    table.bills thead { display: none; }
+    table.bills tr { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; grid-template-areas: "pick sup inc" "pick inv st" "pick job view"; column-gap: 8px; row-gap: 2px; padding: 10px 12px; border-bottom: 1px solid var(--line2); }
+    table.bills td { padding: 0; border: 0 !important; }
+    table.bills td:nth-child(1) { grid-area: pick; } table.bills td:nth-child(2) { grid-area: sup; }
+    table.bills td:nth-child(3) { grid-area: inv; color: var(--muted); font-size: 12.5px; }
+    table.bills td:nth-child(4) { display: none; } table.bills td:nth-child(6) { display: none; }
+    table.bills td:nth-child(5) { grid-area: job; font-size: 12.5px; } table.bills td:nth-child(7) { grid-area: inc; font-weight: 700; }
+    table.bills td:nth-child(8) { grid-area: st; text-align: right; } table.bills td:nth-child(9) { grid-area: view; text-align: right; }
+    .foot { font-size: 12.5px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>🧾 Bills</h1><span class="muted">Every supplier invoice – find them and mark them paid</span></header>
+  <header><a class="btn" data-back href="#" onclick="location.href=(BOOT.home?'/home?t=':'/card?t=')+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>🧾 Bills</h1><span class="muted">Every supplier invoice – find them and mark them paid</span></header>
   <div class="bar">
     <input type="search" id="q" placeholder="Search supplier, invoice number (e.g. S667) or job number…" autocomplete="off">
     <span class="seg" id="seg"><button data-show="all" class="on">All</button> <button data-show="unpaid">Unpaid</button> <button data-show="paid">Paid</button></span>
@@ -89,6 +104,7 @@ function noteToken(res) {
   if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
 }
 try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
 setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -127,7 +143,7 @@ function render() {
     $('#content').innerHTML = `<table class="bills"><thead><tr><th style="width:30px"><input type="checkbox" id="all" ${all ? 'checked' : ''} title="Select all shown"></th>
       <th>Supplier</th><th>Invoice</th><th>Date</th><th>Job</th><th class="num">Ex GST</th><th class="num">Inc GST</th><th>Status</th><th></th></tr></thead><tbody>
       ${list.map((b) => `<tr class="${selected.has(b.id) ? 'sel' : ''}"><td><input type="checkbox" data-pick="${b.id}" ${selected.has(b.id) ? 'checked' : ''}></td>
-        <td><b>${esc(b.supplier || 'Unknown supplier')}</b></td><td>${esc(b.invoice_number || '')}</td><td>${esc(fmtDate(b.invoice_date))}</td>
+        <td><b>${esc(b.supplier || 'Unknown supplier')}</b></td><td>${esc(b.invoice_number || '')}<span class="only-phone"> · ${esc(fmtDate(b.invoice_date))}</span></td><td>${esc(fmtDate(b.invoice_date))}</td>
         <td>${changing.has(b.id)
           ? `<span class="move"><input id="m-${b.id}" placeholder="Job #" autocomplete="off"><button class="primary" data-move-pick="${b.id}">Move</button>${b.jobs.length ? `<button data-move-stock="${b.id}" title="Not for one job">📦 Stock</button>` : ''}<button data-change="${b.id}">✕</button></span>`
           : `${b.jobs.length ? b.jobs.map((j) => `<button class="lnk" data-open-job="${esc(j.job_uuid)}">#${esc(j.job_number || '?')}</button>`).join(' ') : `<span class="muted">${b.in_stock ? '📦 Stock' : 'Not assigned'}</span>`}${b.movable && (b.jobs.length || b.in_stock) ? ` <button class="pen" data-change="${b.id}" title="Wrong job? Move it">✎</button>` : ''}`}</td>

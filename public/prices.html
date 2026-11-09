@@ -44,6 +44,7 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
   @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+  @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
 </style>
 <style>
   .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
@@ -88,7 +89,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>💲 Prices &amp; rules</h1><span class="muted">Your suppliers' and subcontractors' price lists, and the agreements to apply</span></header>
+  <header><a class="btn" data-back href="#" onclick="location.href=(BOOT.home?'/home?t=':'/card?t=')+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>💲 Prices &amp; rules</h1><span class="muted">Your suppliers' and subcontractors' price lists, and the agreements to apply</span></header>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -105,6 +106,7 @@ function noteToken(res) {
   if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
 }
 try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
 setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -41,6 +41,7 @@ const config = {
   // Stock orders are opened as their own ServiceM8 job. A job counts as a stock order job
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
+  supportEmail: process.env.SUPPORT_EMAIL || null,
   stockJobClients: list(process.env.STOCK_JOB_CLIENTS ?? 'Door Image'),
   stockJobCategories: list(process.env.STOCK_JOB_CATEGORIES ?? 'Internal'),
 };

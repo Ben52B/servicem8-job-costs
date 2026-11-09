@@ -190,8 +190,14 @@
     .preview { display: none; }
     .only-sm { display: inline-flex !important; }
   }
+  nav.links { display: contents; }
   @media (max-width: 780px) {
     .wrap { padding: 10px; }
+    header { gap: 8px; }
+    nav.links { display: flex; gap: 6px; overflow-x: auto; width: 100%; padding-bottom: 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    nav.links::-webkit-scrollbar { display: none; }
+    nav.links .btn { flex: none; padding: 6px 10px; font-size: 13px; }
+    .stock-switch { font-size: 12.5px; }
     .kpis { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     .cols { grid-template-columns: minmax(0, 1fr); }
     .srow { grid-template-columns: minmax(0, 1fr); }
@@ -213,12 +219,14 @@
   <header>
     <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><span class="sp"></span>
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
+    <nav class="links">
     <a class="btn" id="inboxLink">📥 Inbox <span class="badge" id="inboxBadge" hidden></span></a>
     <a class="btn" id="checkLink">🔎 Statement check</a>
     <a class="btn" id="pricesLink">💲 Prices</a>
     <a class="btn" id="billsLink">🧾 Bills</a>
     <a class="btn" id="stockLink">📦 Stock</a>
     <a class="btn" id="reportsLink">📊 Reports</a>
+    </nav>
   </header>
   <section id="stockBanner"></section>
   <section id="suggest"></section>
@@ -252,6 +260,7 @@ function noteToken(res) {
   if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
 }
 try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
 setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const state = { pcOpen: new Set(), data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null,
   mkOpen: null, forceDetail: false, modal: null, attachTo: null };
@@ -815,7 +824,12 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const ds = t.dataset;
   try {
-    if (ds.select) { state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; return render(); }
+    if (ds.select) {
+      state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; render();
+      // on a phone the details are below the list: take the user there
+      if (window.innerWidth <= 780 && !t.closest('#detail')) $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     if (ds.add !== undefined) return openAdd('pick');
     if (ds.close !== undefined) return closeModal();
     if (ds.tab) { state.modal.tab = ds.tab; renderModal(); if (ds.tab === 'pick' && !state.modal.list) loadUnassigned(); if (ds.tab === 'diary') loadDiary(); return; }

@@ -1616,8 +1616,48 @@ test('Export everything: one zip with every invoice (paid or not, which job), li
   assert.equal((await fetch(`${base}/api/export`)).status, 401);
 });
 
+test('the iPhone app and the Add-ons menu: a job button in the app, and Job Costs home from the menu', async () => {
+  const m = await fetch(`${base}/manifest.json`).then((r) => r.json());
+  assert.deepEqual(m.actions.map((a) => [a.type, a.entity, a.event]), [['online', 'job', 'job_costs_open'], ['app', 'job', 'job_costs_open']]);
+  assert.deepEqual(m.menuItems.map((x) => [x.type, x.event]), [['addon', 'job_costs_menu'], ['app', 'job_costs_menu']]);
+  await openCard('job-a', 'acc-1'); // the business is known
+  // from the menu: no job in the event
+  const ev = jwt.sign({ eventName: 'job_costs_menu', eventArgs: {}, auth: { accountUUID: 'acc-1', accessToken: 'x' } }, SECRET);
+  const { eventResponse } = await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev }).then((r) => r.json());
+  const src = eventResponse.match(/<iframe src="([^"]+)"/)[1];
+  assert.ok(src.startsWith('http://test/home?t='), src);
+  const t = decodeURIComponent(src.split('t=')[1]);
+  const page = await fetch(`${base}/home?t=${encodeURIComponent(t)}`);
+  assert.equal(page.status, 200);
+  assert.equal(JSON.parse((await page.text()).match(/const BOOT = (\{.*?\});\n/)[1]).home, true);
+  const h = await json(t, '/home');
+  for (const k of ['inboxCount', 'toPay', 'unpaidCount', 'stockLeft', 'flagged', 'duplicates']) assert.ok(k in h, k);
+  // business-wide pages work; things that need a job say so
+  assert.equal((await api(t, '/inbox')).status, 200);
+  assert.equal((await api(t, '/bills')).status, 200);
+  assert.equal((await api(t, '/stock')).status, 200);
+  const nojob = await api(t, '/job');
+  assert.equal(nojob.status, 400);
+  assert.match((await nojob.json()).error, /Open Job Costs from a job/);
+  assert.equal((await api(t, '/invoices/1', { method: 'DELETE' })).status, 400);
+  const inbox = await fetch(`${base}/inbox?t=${encodeURIComponent(t)}`);
+  assert.equal(JSON.parse((await inbox.text()).match(/const BOOT = (\{.*?\});\n/)[1]).home, true, '"Back" goes to the home page');
+  // open a job by its number
+  const r = await json(t, '/jobs/find?number=208101');
+  assert.equal(jwt.decode(r.token).jobUUID, 'job-a');
+  assert.equal((await api(t, '/jobs/find?number=999999')).status, 404);
+  assert.equal((await fetch(`${base}/card?t=${encodeURIComponent(r.token)}`)).status, 200);
+  // a business token from another business's menu sees only its own
+  const ev2 = jwt.sign({ eventName: 'job_costs_menu', eventArgs: {}, auth: { accountUUID: 'acc-other', accessToken: 'x' } }, SECRET);
+  const src2 = (await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev2 }).then((x) => x.json())).eventResponse.match(/<iframe src="([^"]+)"/)[1];
+  const t2 = decodeURIComponent(src2.split('t=')[1]);
+  const other = await json(t2, '/bills');
+  assert.deepEqual(other.bills, [], 'no bills of the first business');
+  assert.equal((await json(t2, '/home')).unpaidCount, 0);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);
