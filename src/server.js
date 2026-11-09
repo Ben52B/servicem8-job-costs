@@ -39,6 +39,9 @@ if (config.msClientId && config.msClientSecret) {
   setTimeout(maybeTick, 5000);
   setInterval(maybeTick, Math.max(60, config.outlookPollSeconds) * 1000);
 }
+// Mailboxes businesses connected themselves (Gmail / IMAP), each in its own checking hours.
+setInterval(() => app.locals.checkMailboxes({ scheduled: true }).then((n) => { if (n) console.log(`Mailboxes: ${n} new email${n === 1 ? '' : 's'}`); })
+  .catch((e) => console.error(`Mailbox check failed: ${e.message}`)), Math.max(60, config.imapPollSeconds || 120) * 1000);
 app.listen(config.port, () => {
   console.log(`Job Costs listening on :${config.port}`);
   console.log(`ServiceM8 callback URL: ${config.publicUrl}/servicem8/addon`);

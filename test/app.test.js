@@ -1759,8 +1759,65 @@ test('usage per business: each Claude request is counted, with tokens and an est
   assert.equal((await fetch(`${base}/admin/usage?key=wrong`)).status, 404);
 });
 
+test('connect Gmail (or any mailbox) in Settings: checked for invoices, password kept encrypted; the welcome page for new businesses', async () => {
+  // a pretend mail server with one invoice email
+  const raw = ['From: Supplier <acc@supplier.com>', 'To: me@gmail.com', 'Subject: Invoice 5512', 'Message-ID: <m5512@x>', 'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="b1"', '', '--b1', 'Content-Type: text/plain', '', 'Please find attached.', '--b1',
+    'Content-Type: application/pdf; name="mailbox-invoice.pdf"', 'Content-Disposition: attachment; filename="mailbox-invoice.pdf"', 'Content-Transfer-Encoding: base64', '',
+    Buffer.from('%PDF-1.4 mailbox invoice').toString('base64'), '--b1--', ''].join('\r\n');
+  const logins = [];
+  const fakeImap = (conn) => ({
+    mailbox: { uidValidity: 7 },
+    async connect() { logins.push(conn); if (conn.password !== 'abcdefghijklmnop') throw new Error('Invalid credentials (Failure)'); },
+    async logout() {}, async getMailboxLock() { return { release() {} }; },
+    async search() { return [41]; }, async fetchOne() { return { source: Buffer.from(raw) }; },
+  });
+  const appM = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, imapClient: fakeImap });
+  const srvM = await new Promise((r) => { const x = appM.listen(0, () => r(x)); });
+  const bM = `http://127.0.0.1:${srvM.address().port}`;
+  const call = (t, p, o = {}) => fetch(`${bM}/api${p}`, { ...o, headers: { Authorization: `Bearer ${t}`, ...(o.json ? { 'Content-Type': 'application/json' } : {}) }, body: o.json ? JSON.stringify(o.json) : o.body });
+  try {
+    JOBS['mb-job'] = { jobNumber: '208960', jobTitle: '6 Mail St' };
+    const t = await openCard('mb-job', 'acc-mb');
+    // a new business, nothing in it yet: the welcome page is offered
+    assert.equal((await call(t, '/home').then((x) => x.json())).welcome, true);
+    assert.equal((await fetch(`${bM}/welcome?t=${encodeURIComponent(t)}`)).status, 200);
+    let r = await call(t, '/imap', { method: 'POST', json: { email: 'me@gmail.com', password: 'wrong' } });
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error, /app password/);
+    r = await call(t, '/imap', { method: 'POST', json: { email: 'accounts@smithdoors.com.au', password: 'x' } });
+    assert.equal(r.status, 400, 'own domain: asks for the mail server');
+    assert.equal((await r.json()).needHost, true);
+    r = await call(t, '/imap', { method: 'POST', json: { email: 'me@gmail.com', password: 'abcd efgh ijkl mnop' } });
+    assert.equal(r.status, 200, 'spaces in the app password are fine');
+    assert.equal(logins[logins.length - 1].host, 'imap.gmail.com');
+    const stored = repo.getImap('acc-mb');
+    assert.ok(!stored.password_enc.includes('abcdefghijklmnop'), 'the password is stored encrypted');
+    await new Promise((res) => setTimeout(res, 50)); await processor.idle();
+    const mine = () => repo.db.prepare("SELECT * FROM invoices WHERE account_uuid = 'acc-mb' AND source = 'mailbox'").all();
+    assert.equal(mine().length, 1, 'the invoice email came in');
+    assert.equal(mine()[0].status, 'ready');
+    // Check now: nothing twice
+    const c = await call(t, '/imap/check', { method: 'POST' }).then((x) => x.json());
+    assert.equal(c.found, 0);
+    assert.equal(mine().length, 1);
+    const st = await call(t, '/settings').then((x) => x.json());
+    assert.equal(st.imap.email, 'me@gmail.com');
+    assert.ok(!JSON.stringify(st).includes('password_enc'));
+    // has an invoice now: no welcome page
+    assert.equal((await call(t, '/home').then((x) => x.json())).welcome, false);
+    assert.equal((await call(t, '/imap', { method: 'DELETE' })).status, 200);
+    assert.equal(repo.getImap('acc-mb'), null);
+    // finishing the welcome page
+    JOBS['mb-job2'] = { jobNumber: '208961', jobTitle: '7 Mail St' };
+    const t2 = await openCard('mb-job2', 'acc-mb2');
+    await call(t2, '/settings', { method: 'PUT', json: { onboarded: true } });
+    assert.equal((await call(t2, '/job').then((x) => x.json())).welcome, false);
+  } finally { srvM.close(); }
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

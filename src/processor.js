@@ -31,7 +31,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     const isNew = !inv.kept_as_stock && !(repo.jobsOnInvoice ? repo.jobsOnInvoice(id).length : 0);
     const blocked = (twin) => {
       if (!twin || !isNew) return false;
-      if (inv.source === 'outlook') { // the same invoice emailed again: dropped quietly
+      if (['outlook', 'mailbox'].includes(inv.source)) { // the same invoice emailed again: dropped quietly
         log.log?.(`Outlook: "${inv.file_name}" is already in Job Costs (invoice ${twin.id}), not kept`);
         repo.setImportOutcome?.(id, 'duplicate');
         repo.deleteInvoice(id);
@@ -62,7 +62,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
         return repo.deleteInvoice(id);
       }
       // From the Outlook inbox: keep only real bills (quotes and other PDFs are dropped quietly).
-      if (inv.source === 'outlook' && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
+      if (['outlook', 'mailbox'].includes(inv.source) && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
         log.log?.(`Outlook: "${inv.file_name}" is a ${result.document_type}, not kept`);
         repo.setImportOutcome?.(id, result.document_type);
         return repo.deleteInvoice(id);
@@ -83,7 +83,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       if (api.afterRead) Promise.resolve().then(() => api.afterRead(id)).catch((e) => log.error(`Price check ${id}: ${e.message}`));
     } catch (e) {
       if (e && e.usage && (onUsage || api.onUsage)) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', e.usage); // read, but not kept
-      if (inv.source === 'outlook' && /does not look like an invoice/i.test(e.message || '')) {
+      if (['outlook', 'mailbox'].includes(inv.source) && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
         repo.setImportOutcome?.(id, 'not_invoice');
         return repo.deleteInvoice(id);

@@ -30,23 +30,23 @@ async function parseRawEmail(raw) {
  * One pass over the mailbox: every email from the last two weeks that hasn't been
  * handled yet is passed to onMail, then remembered.
  */
-async function checkMailbox(client, { repo, onMail, log = console }) {
+async function checkMailbox(client, { repo, onMail, log = console, keyPrefix = '', since = null }) {
   await client.connect();
   const lock = await client.getMailboxLock('INBOX');
   let handled = 0;
   try {
-    const since = new Date(Date.now() - LOOK_BACK_DAYS * 86400000);
+    since = since || new Date(Date.now() - LOOK_BACK_DAYS * 86400000);
     const uids = (await client.search({ since }, { uid: true })) || [];
     const validity = String(client.mailbox?.uidValidity ?? '');
     for (const uid of uids) {
-      const key = `${validity}:${uid}`;
+      const key = `${keyPrefix}${validity}:${uid}`;
       if (repo.isMailProcessed(key)) continue;
       const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
       try {
         const mail = await parseRawEmail(msg.source);
-        if (mail.messageId && repo.isMailProcessed(`id:${mail.messageId}`)) { repo.markMailProcessed(key); continue; }
+        if (mail.messageId && repo.isMailProcessed(`${keyPrefix}id:${mail.messageId}`)) { repo.markMailProcessed(key); continue; }
         await onMail(mail);
-        if (mail.messageId) repo.markMailProcessed(`id:${mail.messageId}`);
+        if (mail.messageId) repo.markMailProcessed(`${keyPrefix}id:${mail.messageId}`);
         handled++;
       } catch (e) {
         log.error(`Couldn't handle email ${key}: ${e.message}`);
@@ -83,4 +83,26 @@ function startMailboxPoller({ config, repo, onMail, log = console, createClient 
   return { stop: () => clearInterval(timer), tick };
 }
 
-module.exports = { parseRawEmail, checkMailbox, startMailboxPoller };
+/** The incoming-mail server for an address, when it's a well-known provider. */
+function imapHostFor(email) {
+  const d = String(email || '').toLowerCase().split('@')[1] || '';
+  if (['gmail.com', 'googlemail.com'].includes(d)) return 'imap.gmail.com';
+  if (['yahoo.com', 'yahoo.com.au', 'ymail.com'].includes(d)) return 'imap.mail.yahoo.com';
+  if (['icloud.com', 'me.com', 'mac.com'].includes(d)) return 'imap.mail.me.com';
+  if (['zoho.com', 'zohomail.com'].includes(d)) return 'imap.zoho.com';
+  if (['bigpond.com', 'bigpond.net.au', 'telstra.com'].includes(d)) return 'imap.telstra.com';
+  return null;
+}
+const makeClient = ({ host, port = 993, user, password }) => new ImapFlow({ host, port, secure: Number(port) === 993, auth: { user, pass: password }, logger: false });
+/** Can we log in? Throws a plain-English reason if not. */
+async function testMailbox(conn, createClient = makeClient) {
+  const client = createClient(conn);
+  try { await client.connect(); await client.logout().catch(() => {}); } catch (e) {
+    const m = String((e && (e.responseText || e.message)) || e);
+    if (/auth|credential|password|login|invalid/i.test(m)) throw new Error('The email or password wasn\u2019t accepted. For Gmail use an app password (Google Account → Security → 2-Step Verification → App passwords), not your normal password.');
+    if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) throw new Error(`Couldn\u2019t find the mail server ${conn.host}. Check the incoming mail server name.`);
+    throw new Error(`Couldn\u2019t connect to ${conn.host}: ${m}`);
+  }
+}
+
+module.exports = { parseRawEmail, checkMailbox, startMailboxPoller, imapHostFor, testMailbox, makeClient };

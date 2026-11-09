@@ -369,6 +369,9 @@ function migrateColumns(db) {
       INSERT INTO summary_dirty SELECT DISTINCT a.job_uuid FROM allocations a WHERE a.item_id = NEW.id AND NOT EXISTS (SELECT 1 FROM summary_dirty d WHERE d.job_uuid = a.job_uuid); END;
     CREATE TRIGGER IF NOT EXISTS sd_job_quote2 AFTER UPDATE OF quote_amount ON jobs WHEN COALESCE(OLD.quote_amount, -1) != COALESCE(NEW.quote_amount, -1)
       BEGIN INSERT INTO summary_dirty SELECT NEW.job_uuid WHERE NEW.job_uuid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM summary_dirty WHERE job_uuid = NEW.job_uuid); END;`);
+  // A mailbox a business connected (Gmail or any IMAP mailbox); the password is stored encrypted.
+  db.exec(`CREATE TABLE IF NOT EXISTS imap_connections (account_key TEXT PRIMARY KEY, email TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 993,
+    password_enc TEXT NOT NULL, connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), last_check TEXT, error TEXT)`);
   // What each business used each month (Claude requests and their tokens), for limits and costs.
   db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -377,7 +380,7 @@ function migrateColumns(db) {
   const hadSettings = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_settings'").get();
   db.exec('CREATE TABLE IF NOT EXISTS account_settings (account_key TEXT PRIMARY KEY, data TEXT NOT NULL)');
   if (!hadSettings) {
-    const legacy = JSON.stringify({ business_type: 'garage door installation business', stock_clients: ['door image'], stock_categories: ['internal'],
+    const legacy = JSON.stringify({ onboarded: true, business_type: 'garage door installation business', stock_clients: ['door image'], stock_categories: ['internal'],
       timezone: 'Australia/Melbourne', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18 });
     for (const a of db.prepare('SELECT account_key FROM accounts').all()) db.prepare('INSERT OR IGNORE INTO account_settings (account_key, data) VALUES (?, ?)').run(a.account_key, legacy);
   }
@@ -1588,6 +1591,19 @@ function createRepo(db, dataDir) {
         WHERE jobs.account_uuid IS ? AND COALESCE(jobs.sm8_status, 'Work Order') IN ('Quote', 'Work Order')`).all(accountUUID).map((r) => r.job_uuid);
     },
 
+    // ---------- a connected mailbox (IMAP) ----------
+    saveImap(accountUUID, { email, host, port = 993, passwordEnc }) {
+      db.prepare(`INSERT INTO imap_connections (account_key, email, host, port, password_enc) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account_key) DO UPDATE SET email = excluded.email, host = excluded.host, port = excluded.port, password_enc = excluded.password_enc,
+          connected_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = NULL`).run(accountUUID ?? '', email, host, port, passwordEnc);
+    },
+    getImap(accountUUID) { return db.prepare('SELECT * FROM imap_connections WHERE account_key = ?').get(accountUUID ?? '') || null; },
+    listImap() { return db.prepare('SELECT * FROM imap_connections').all(); },
+    setImapStatus(accountUUID, { error = null } = {}) {
+      db.prepare("UPDATE imap_connections SET last_check = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = ? WHERE account_key = ?").run(error, accountUUID ?? '');
+    },
+    removeImap(accountUUID) { db.prepare('DELETE FROM imap_connections WHERE account_key = ?').run(accountUUID ?? ''); },
+
     // ---------- usage ----------
     /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */
     addUsage(accountUUID, kind, { input = 0, output = 0, cacheWrite = 0, cacheRead = 0, cost = 0 } = {}, month = new Date().toISOString().slice(0, 7)) {
@@ -1618,7 +1634,7 @@ function createRepo(db, dataDir) {
     // ---------- settings of a business ----------
     settingDefaults: {
       business_name: '', business_type: 'trades business', stock_clients: [], stock_categories: ['stock'],
-      timezone: 'Australia/Sydney', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18, diary_summary: false,
+      timezone: 'Australia/Sydney', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18, diary_summary: false, onboarded: false,
     },
     getSettings(accountUUID) {
       const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(accountUUID ?? '');

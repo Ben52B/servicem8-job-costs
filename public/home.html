@@ -79,6 +79,7 @@
   .tile.warn .v { color: var(--warn); } .tile.bad { border-color: #fecdd3; background: var(--bad-soft); } .tile.bad .v, .tile.bad .l { color: var(--bad); }
   .menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
   .menu a { justify-content: flex-start; padding: 12px 14px; border-radius: 14px; font-size: 14px; }
+  a.welcome { display: block; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: 14px; padding: 10px 14px; margin: 0 0 12px; text-decoration: none; font-size: 13.5px; }
   .find { display: flex; gap: 6px; margin: 4px 0 16px; } .find input { flex: 1; min-width: 0; font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 9px 12px; }
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
 </style>
@@ -124,7 +125,7 @@ async function load() {
     const d = await api('/home');
     $('#jobList').innerHTML = d.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc(j.job_title || '')}</option>`).join('');
     const alerts = d.duplicates + d.flagged;
-    $('#content').innerHTML = `<div class="tiles">
+    $('#content').innerHTML = `${d.welcome ? `<a class="welcome" href="/welcome?t=${encodeURIComponent(BOOT.token)}">👋 <b>Set up Job Costs</b> – connect your email and price lists (2 minutes) →</a>` : ''}<div class="tiles">
       <a class="tile ${d.inboxCount ? 'warn' : ''}" href="${link('inbox')}"><div class="l">📥 Inbox</div><div class="v">${d.inboxCount}</div><div class="s">${d.inboxCount ? 'waiting for a job' : 'nothing waiting'}</div></a>
       <a class="tile ${d.toPay > 0 ? 'warn' : ''}" href="${link('bills')}"><div class="l">🧾 To pay</div><div class="v">${money(d.toPay)}</div><div class="s">${d.unpaidCount} unpaid bill${d.unpaidCount === 1 ? '' : 's'} (inc GST)</div></a>
       ${alerts ? `<a class="tile bad" href="${link('bills')}"><div class="l">⚠ Before you pay</div><div class="v">${alerts}</div><div class="s">${[d.duplicates && d.duplicates + ' duplicate' + (d.duplicates === 1 ? '' : 's'), d.flagged && d.flagged + ' flagged by a statement check'].filter(Boolean).join(' · ')}</div></a>` : ''}

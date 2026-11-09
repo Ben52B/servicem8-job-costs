@@ -81,6 +81,9 @@
   .hours { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .hours select { width: auto; }
   .switch { display: flex; gap: 10px; align-items: flex-start; } .switch input { margin-top: 3px; width: 18px; height: 18px; }
   .save { position: sticky; bottom: 0; padding: 10px 0; background: var(--bg); }
+  .mb { margin: 6px 0; } .choices { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; } .imap { margin-top: 8px; border-top: 1px solid var(--line2); padding-top: 6px; }
+  input[type=password] { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 10px; width: 100%; max-width: 420px; background: #fff; }
+  code { background: var(--brand-soft); color: var(--brand-dark); padding: 3px 8px; border-radius: 8px; font-size: 12.5px; }
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
 </style>
 </head>
@@ -122,6 +125,49 @@ const ZONES = ['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 
 const DAY = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
 const hour = (n) => (n === 0 ? 'midnight' : n === 24 ? 'midnight' : n < 12 ? `${n}am` : n === 12 ? '12pm' : `${n - 12}pm`);
 let data = null;
+// ---- connecting a mailbox (Outlook, or Gmail / any IMAP mailbox) ----
+function mailboxHtml(d) {
+  const o = d.outlook, im = d.imap;
+  const ago = (t) => { if (!t) return ''; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+  let h = '';
+  if (o && o.connected) h += `<div class="mb">📥 Reading Outlook <b>${esc(o.email || '')}</b>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Change</a></div>`;
+  if (im) h += `<div class="mb">📧 Reading <b>${esc(im.email)}</b> <span class="muted">(${esc(im.host)}${im.last_check ? ' · checked ' + ago(im.last_check) : ''})</span>
+      ${im.error ? `<div style="color:var(--bad)">⚠ ${esc(im.error)}</div>` : ''}
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button data-imap-check>↻ Check now</button><button class="danger" data-imap-off>Disconnect</button></div></div>`;
+  if (!(o && o.connected) && !im) {
+    h += `<div class="choices">${o && o.available ? `<a class="btn" href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">📥 Connect Outlook / Microsoft 365</a>` : ''}
+      <button data-imap-open>📧 Connect Gmail or another mailbox</button></div>`;
+    h += `<div id="imapForm" hidden class="imap">
+      <label class="f" for="imEmail">Email address</label><input type="text" id="imEmail" autocomplete="off" placeholder="invoices@yourbusiness.com.au or you@gmail.com">
+      <label class="f" for="imPass">App password</label><input type="password" id="imPass" autocomplete="new-password" placeholder="16 letters from Google, or the mailbox password">
+      <div class="hint">Gmail: turn on 2-Step Verification, then make an app password at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>. Job Costs only reads – it never changes, moves or deletes your emails.</div>
+      <div id="imHostRow" hidden><label class="f" for="imHost">Incoming mail (IMAP) server</label><input type="text" id="imHost" placeholder="e.g. mail.yourdomain.com.au"></div>
+      <div style="margin-top:8px"><button class="primary" data-imap-connect>Connect</button></div></div>`;
+  }
+  if (d.inboxAddress) h += `<div class="hint" style="margin-top:8px">Or forward invoices to your Job Costs address: <code>${esc(d.inboxAddress)}</code></div>`;
+  return h;
+}
+async function mailboxClick(b, reload) {
+  const d = b.dataset;
+  if (d.imapOpen !== undefined) { const f = $('#imapForm'); f.hidden = !f.hidden; if (!f.hidden) $('#imEmail').focus(); return true; }
+  if (d.imapConnect !== undefined) {
+    b.disabled = true; b.textContent = 'Checking…';
+    try {
+      const r = await api('/imap', { method: 'POST', body: JSON.stringify({ email: $('#imEmail').value, password: $('#imPass').value, host: $('#imHost').value }) });
+      toast(`Connected ${r.email} – new invoices will show up in the Inbox`); await reload();
+    } catch (x) {
+      toast(x.message); b.disabled = false; b.textContent = 'Connect';
+      if (/IMAP\) server|mail server/.test(x.message)) $('#imHostRow').hidden = false;
+    }
+    return true;
+  }
+  if (d.imapCheck !== undefined) { b.disabled = true; try { const r = await api('/imap/check', { method: 'POST' }); toast(r.found ? `${r.found} new email${r.found === 1 ? '' : 's'} – see the Inbox` : 'Nothing new'); } catch (x) { toast(x.message); } await reload(); return true; }
+  if (d.imapOff !== undefined) {
+    if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Disconnect'; return true; }
+    await api('/imap', { method: 'DELETE' }); toast('Disconnected'); await reload(); return true;
+  }
+  return false;
+}
 function render() {
   const st = data.settings, o = data.outlook;
   const zones = ZONES.includes(st.timezone) ? ZONES : [st.timezone, ...ZONES];
@@ -136,8 +182,7 @@ function render() {
     <label class="f" for="sc">Client names (comma between)</label><input type="text" id="sc" value="${esc((st.stock_clients || []).join(', '))}" placeholder="e.g. Our Warehouse, Stock">
     <label class="f" for="sk">Job categories (comma between)</label><input type="text" id="sk" value="${esc((st.stock_categories || []).join(', '))}" placeholder="e.g. Stock, Internal"></div>
   <div class="panel"><h2>Email</h2>
-    ${o.connected ? `<div>📥 Reading <b>${esc(o.email || 'your Outlook')}</b>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Change</a></div>`
-      : o.available ? `<div><a class="btn" href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">📥 Connect Outlook</a> <span class="muted">to pick up invoices from your inbox automatically</span></div>` : '<div class="hint">Connecting a mailbox isn’t set up on this server.</div>'}
+    ${mailboxHtml(data)}
     <label class="f">Check for new invoices on</label><div class="days">${data.days.map((d) => `<label><input type="checkbox" data-day="${d}" ${st.check_days.includes(d) ? 'checked' : ''}> ${DAY[d]}</label>`).join('')}</div>
     <label class="f">Between</label><div class="hours"><select id="from">${hourOpts(st.check_from, 0, 23)}</select> and <select id="to">${hourOpts(st.check_to, 1, 24)}</select></div>
     <label class="f" for="tz">Time zone</label><select id="tz">${zones.map((z) => `<option ${z === st.timezone ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select>
@@ -154,6 +199,7 @@ async function load() {
   try { data = await api('/settings'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 document.addEventListener('click', async (e) => {
+  const mb = e.target.closest('button'); if (mb && await mailboxClick(mb, load)) return;
   if (e.target.id !== 'save') return;
   const b = e.target; b.disabled = true;
   try {

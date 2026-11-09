@@ -12,12 +12,13 @@ const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbou
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
 const { duplicateMessage } = require('./processor');
 const { exportEverything } = require('./export');
+const mailbox = require('./mailbox');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html'), welcome: page('welcome.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -41,7 +42,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null, imapClient = mailbox.makeClient }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -812,7 +813,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings', 'welcome']) {
     app.get(`/${name}`, (req, res) => {
       const sess = sessionFrom(req.query.t);
       if (!sess) {
@@ -853,13 +854,78 @@ window.addEventListener('message', function (e) {
     return n;
   }
   api.get('/ping', (req, res) => res.json({ ok: true }));
+  /** A business that hasn't set up yet (and has no invoices) gets the welcome page offered. */
+  const needsWelcome = (accountUUID) => !settingsFor(accountUUID).onboarded
+    && !repo.db.prepare('SELECT 1 FROM invoices WHERE account_uuid IS ? LIMIT 1').get(accountUUID);
+  // ---------- A business's own mailbox (Gmail or any IMAP mailbox) ----------
+  // The password is kept encrypted with a key made from SESSION_SECRET.
+  const imapKey = () => crypto.createHash('sha256').update(`${config.sessionSecret}:imap`).digest();
+  const seal = (text) => { const iv = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', imapKey(), iv);
+    const data = Buffer.concat([c.update(String(text), 'utf8'), c.final()]); return [iv, c.getAuthTag(), data].map((b) => b.toString('base64')).join('.'); };
+  const unseal = (sealed) => { const [iv, tag, data] = String(sealed).split('.').map((x) => Buffer.from(x, 'base64'));
+    const d = crypto.createDecipheriv('aes-256-gcm', imapKey(), iv); d.setAuthTag(tag); return Buffer.concat([d.update(data), d.final()]).toString('utf8'); };
+  const imapRunning = new Set();
+  async function checkOneMailbox(conn) {
+    const acc = conn.account_key === '' ? null : conn.account_key;
+    if (imapRunning.has(conn.account_key)) return 0;
+    imapRunning.add(conn.account_key);
+    try {
+      const client = imapClient({ host: conn.host, port: conn.port, user: conn.email, password: unseal(conn.password_enc) });
+      // the first look goes back 3 days before connecting; after that, two weeks of already-seen emails are skipped
+      const since = new Date(Math.max(Date.parse(conn.connected_at) - 3 * 86400000, Date.now() - 14 * 86400000));
+      const n = await mailbox.checkMailbox(client, { repo, keyPrefix: `imap:${conn.account_key}:`, since,
+        onMail: (mail) => processMail(mail, { accountUUID: acc, source: 'mailbox' }) });
+      repo.setImapStatus(acc, { error: null });
+      return n;
+    } catch (e) {
+      console.error(`Mailbox ${conn.email}: ${e.message}`);
+      repo.setImapStatus(acc, { error: /auth|password|credential|login/i.test(e.message) ? 'The mailbox password stopped working – connect it again in ⚙ Settings.' : e.message });
+      return 0;
+    } finally { imapRunning.delete(conn.account_key); }
+  }
+  /** Check every connected mailbox; { scheduled: true } only those in their business's checking hours. */
+  app.locals.checkMailboxes = async ({ scheduled = false } = {}) => {
+    let n = 0;
+    for (const conn of repo.listImap()) {
+      if (scheduled && !outlook.inCheckingHours(hoursOf(conn.account_key === '' ? null : conn.account_key))) continue;
+      n += await checkOneMailbox(conn);
+    }
+    return n;
+  };
+  api.post('/imap', async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '').replace(/\s+/g, ''); // app passwords are shown in groups of 4
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Type the mailbox\u2019s email address' });
+    if (!password) return res.status(400).json({ error: 'Type the mailbox\u2019s (app) password' });
+    const host = String(req.body?.host || '').trim().toLowerCase() || mailbox.imapHostFor(email);
+    if (!host) return res.status(400).json({ error: 'Type the incoming mail (IMAP) server, e.g. mail.yourdomain.com.au', needHost: true });
+    const port = Number(req.body?.port) || 993;
+    try { await mailbox.testMailbox({ host, port, user: email, password }, imapClient); } catch (e) { return res.status(400).json({ error: e.message }); }
+    repo.saveImap(req.account, { email, host, port, passwordEnc: seal(password) });
+    checkOneMailbox(repo.getImap(req.account)).catch(() => {});
+    res.json({ ok: true, email, host });
+  });
+  api.delete('/imap', (req, res) => { repo.removeImap(req.account); res.json({ ok: true }); });
+  api.post('/imap/check', async (req, res) => {
+    const conn = repo.getImap(req.account);
+    if (!conn) return res.status(400).json({ error: 'No mailbox connected' });
+    const found = await checkOneMailbox(conn);
+    const after = repo.getImap(req.account);
+    if (after && after.error) return res.status(502).json({ error: after.error });
+    res.json({ ok: true, found });
+  });
+
   // ---------- Settings of the business ----------
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   api.get('/settings', (req, res) => {
     const o = repo.getOutlook(req.account);
     const month = repo.listUsage(req.account, 1).find((m) => m.month === new Date().toISOString().slice(0, 7));
     const used = Object.fromEntries(Object.entries(month ? month.kinds : {}).map(([k, v]) => [k, v.count]));
-    res.json({ settings: settingsFor(req.account), days: DAYS, used,
+    const im = repo.getImap(req.account);
+    const accRow = repo.ensureAccount(req.account);
+    res.json({ settings: settingsFor(req.account), days: DAYS, used, inboxAddress: inboxAddress(accRow.inbox_code, config),
+      priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
+      imap: im ? { email: im.email, host: im.host, error: im.error, last_check: im.last_check } : null,
       outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null } });
   });
   api.put('/settings', (req, res) => {
@@ -881,6 +947,7 @@ window.addEventListener('message', function (e) {
     }
     if ((ch.check_from ?? settingsFor(req.account).check_from) >= (ch.check_to ?? settingsFor(req.account).check_to)) return res.status(400).json({ error: 'The checking hours end before they start' });
     if (b.diary_summary !== undefined) ch.diary_summary = !!b.diary_summary;
+    if (b.onboarded !== undefined) ch.onboarded = !!b.onboarded;
     const wasOn = settingsFor(req.account).diary_summary;
     const saved = repo.saveSettings(req.account, ch);
     if (saved.diary_summary && !wasOn) { repo.markSummaryDirty(repo.jobsWithCosts(req.account)); kickDiary(); }
@@ -899,7 +966,7 @@ window.addEventListener('message', function (e) {
     const bills = repo.listBills(req.account);
     const unpaid = bills.filter((b) => b.payment_state !== 'paid');
     const flags = repo.checkFlagsFor(req.account, unpaid.map((b) => b.id));
-    res.json({ inboxCount: repo.inboxCount(req.account), unpaidCount: unpaid.length,
+    res.json({ welcome: needsWelcome(req.account), inboxCount: repo.inboxCount(req.account), unpaidCount: unpaid.length,
       toPay: Math.round(unpaid.reduce((a, b) => a + (Number(b.total) || 0), 0) * 100) / 100,
       duplicates: unpaid.filter((b) => b.twin).length, flagged: flags.size, stockLeft: repo.listStock(req.account).leftTotal,
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
@@ -922,7 +989,7 @@ window.addEventListener('message', function (e) {
     for (const i of summary.invoices || []) if (i.price_check && i.price_check.suggested_rule) i.price_check.rule_saved = ruleTexts.has(i.price_check.suggested_rule);
     const acc = repo.ensureAccount(req.account);
     const note = sm8Notes.get(req.job.job_uuid) || null;
-    res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
+    res.json({ ...summary, welcome: needsWelcome(req.account), splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
       diaryNote: diaryErrors.get(req.account) || null,
       priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),

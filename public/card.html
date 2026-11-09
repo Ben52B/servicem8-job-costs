@@ -212,6 +212,7 @@
   .pc-choose { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
   .pc-choose select { max-width: 220px; font: inherit; font-size: 12.5px; } .pc-choose input { min-width: 160px; font: inherit; font-size: 12.5px; border: 1px solid #d6e2de; border-radius: 8px; padding: 3px 8px; }
   details.rnote { font-size: 12.5px; color: #64748b; margin: 10px 0 0; } details.rnote summary { cursor: pointer; font-weight: 600; } details.rnote div { margin-top: 4px; }
+  a.welcome { display: block; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: 14px; padding: 10px 14px; margin: 0 0 12px; text-decoration: none; font-size: 13.5px; }
 </style>
 </head>
 <body>
@@ -277,7 +278,7 @@ const qty = (n) => String(+(+n).toFixed(3));
 const CAT_LABEL = { materials: 'Materials', subcontractor: 'Subcontractor', labour: 'Labour', equipment_hire: 'Equipment hire', freight: 'Freight', fees: 'Fees', other: 'Other', mixed: 'Mixed' };
 const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14b8a6', equipment_hire: '#f97316', freight: '#06b6d4', fees: '#94a3b8', other: '#64748b' };
 const REASON = Object.fromEntries(BOOT.reasons.map((r) => [r.code, r.label]));
-const SOURCE_LABEL = { email: 'Emailed', outlook: 'From Outlook', upload: 'Uploaded', manual: 'Added by hand', diary: 'From the ServiceM8 diary' };
+const SOURCE_LABEL = { email: 'Emailed', outlook: 'From Outlook', mailbox: 'From your mailbox', upload: 'Uploaded', manual: 'Added by hand', diary: 'From the ServiceM8 diary' };
 const fileUrl = (id) => `/api/invoices/${id}/file?t=${encodeURIComponent(BOOT.token)}`;
 // PDFs open in our own viewer (Chrome won't show PDFs opened from ServiceM8's window); photos open as they are.
 const isText = (inv) => /^text\//.test(inv.mime_type || '');
@@ -328,7 +329,8 @@ function render() {
       <div class="why">Remove it from Job Costs too?</div></div>
       <div class="acts"><button class="solid-danger small" data-diary-remove="${i.id}">Remove from Job Costs</button><button class="small" data-diary-keep="${i.id}">Keep it here</button></div></div></div>`).join('')
     + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '')
-    + flagBanner();
+    + flagBanner()
+    + (state.data.welcome ? `<a class="welcome" href="/welcome?t=${encodeURIComponent(BOOT.token)}">👋 <b>Set up Job Costs</b> – connect your email and price lists (2 minutes) →</a>` : '');
   $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
   $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
   renderSuggestions();
