@@ -1535,6 +1535,30 @@ test('sessions stay alive while the window is in use: a fresh token once the old
   assert.equal((await api(expired, '/ping')).status, 401, 'an expired one still needs Job Costs opened again');
 });
 
+test('standing price changes are rules for one supplier; a pattern a check spots can be saved as one', async () => {
+  JOBS['rule-job'] = { jobNumber: '208600', jobTitle: '6 Rule St' };
+  const t = await openCard('rule-job', 'acc-rule');
+  // "Gliderol: price list + 3%" from the Price change form: only for Gliderol
+  const r = await post(t, '/rules', { text: 'Gliderol: expect the price list + 3% (2026 rise) – not confirmed by Gliderol yet', kind: 'always', supplier: 'Gliderol' });
+  assert.equal(r.status, 201);
+  await post(t, '/rules', { text: 'All suppliers: freight over $100 needs a look', kind: 'always' });
+  const texts = (sup) => repo.rulesFor('acc-rule', [], sup).map((x) => x.text);
+  assert.equal(texts('Gliderol International Pty Ltd').length, 2, 'Gliderol gets its rule and the general one');
+  assert.deepEqual(texts('Taurean Door Systems'), ['All suppliers: freight over $100 needs a look'], 'other suppliers only the general one');
+  assert.equal(texts(undefined).length, 2, 'no supplier given: everything (as before)');
+  assert.equal((await json(t, '/prices')).rules.find((x) => x.supplier === 'Gliderol').kind, 'always');
+  // a price check suggested a rule: the card knows once it's saved
+  const inv = repo.createInvoice({ accountUUID: 'acc-rule', source: 'upload' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Taurean Door Systems', invoice_number: 'T-1', total: 110, tax: 10, subtotal: 100, items: [{ description: 'Door', line_total: 100, category: 'materials' }] });
+  repo.assignWhole(inv.id, 'rule-job', {});
+  repo.setPriceCheck(inv.id, { status: 'done', result: { verdict: 'check', headline: 'About 5% above the list', lines: [], suggested_rule: 'Taurean: expect the price list + 5%' } });
+  const card = () => json(t, '/job').then((s) => s.invoices.find((i) => i.id === inv.id).price_check);
+  assert.equal((await card()).rule_saved, false);
+  await post(t, '/rules', { text: 'Taurean: expect the price list + 5%', kind: 'always', supplier: 'Taurean' });
+  assert.equal((await card()).rule_saved, true);
+  assert.deepEqual(texts('Taurean Door Systems'), ['All suppliers: freight over $100 needs a look', 'Taurean: expect the price list + 5%']);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

@@ -204,6 +204,13 @@ function restOfStatement(rc, c) {
   return `<div class="money" style="background:#f7faf9">${line}<div class="muted" style="font-size:12px;margin-top:4px">Payments you made after the statement date${c.statement_date ? ` (${esc(fmtDate(c.statement_date))})` : ''} won't show on it.</div></div>${panel}`;
 }
 
+// A standing pattern the check spotted (e.g. "list + 3%"): save it as a rule so later checks use it.
+function suggestRule(text, supplier) {
+  if (check && check.result && check.result.rule_saved) return `<div class="muted" style="margin-top:8px">✓ Saved as a rule: ${esc(text)}</div>`;
+  return `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">💡 <span>Pattern spotted: <b>${esc(text)}</b></span>
+    <button class="small" data-save-rule="${esc(text)}" data-supplier="${esc(supplier || '')}">Save as rule</button></div>`;
+}
+
 // ---------- a check's report ----------
 function renderCheck() {
   const c = check;
@@ -277,7 +284,8 @@ function renderCheck() {
       <div class="kpi"><span class="muted">✓ OK</span><b>${count('ok')}</b></div><div class="kpi"><span class="muted">Check</span><b>${count('check')}</b></div>
       <div class="kpi"><span class="muted">⚠ Problem</span><b>${count('problem')}</b></div><div class="kpi"><span class="muted">Not in Job Costs</span><b>${count('missing')}</b></div></div>
     ${r.actions && r.actions.length ? `<div class="panel"><h2>Before you pay</h2><ol class="actions">${r.actions.map((a) => `<li>${linkify(a)}</li>`).join('')}</ol></div>` : ''}
-    ${r.price_list_notes ? `<div class="panel"><h2>Price list</h2><div>${linkify(r.price_list_notes)}</div></div>` : ''}
+    ${r.price_list_notes ? `<div class="panel"><h2>Price list</h2><div>${linkify(r.price_list_notes)}</div>${r.suggested_rule ? suggestRule(r.suggested_rule, c.supplier) : ''}</div>`
+      : r.suggested_rule ? `<div class="panel">${suggestRule(r.suggested_rule, c.supplier)}</div>` : ''}
     <div class="panel"><h2>Each invoice <span class="muted" style="font-weight:600;font-size:12px">click a row for the details · invoice and job numbers open the job</span></h2>
       <table class="t"><thead><tr><th>Invoice</th><th>Date</th><th class="num">Inc GST</th><th>Job</th><th>Result</th><th>What we found</th></tr></thead><tbody>${table}</tbody></table>
       <div class="row" style="margin-top:12px">${okUnpaid.length ? `<button class="primary" data-pay="ok">✓ Mark the ${okUnpaid.length} OK invoice${okUnpaid.length === 1 ? '' : 's'} as paid</button>` : ''}
@@ -316,6 +324,13 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const d = t.dataset;
   try {
+    if (d.saveRule) {
+      e.stopPropagation();
+      const sup = (d.supplier || '').split(/\s+(pty|ltd|limited|international|australia)\b/i)[0].trim();
+      await api('/rules', { method: 'POST', body: JSON.stringify({ text: d.saveRule, kind: 'always', supplier: sup || null }) });
+      check.result.rule_saved = true;
+      toast('Saved as a rule – change it any time in 💲 Prices & rules'); return renderCheck();
+    }
     if (d.ref) { e.stopPropagation(); return openRef(d.ref); }
     if (d.invId) { e.stopPropagation(); return window.open(`/viewer.html?id=${d.invId}&t=${T}&name=${encodeURIComponent(d.name || '')}`, '_blank'); }
     if (d.job) { e.stopPropagation(); return openJob(d.job, Number(d.inv) || null); }

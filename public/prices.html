@@ -127,7 +127,7 @@ function render() {
       <td class="num">${p.checked ? `${p.checked}${p.flagged ? ` <span class="chip v-check" title="Flagged for a look">${p.flagged} flagged</span>` : ''}` : '<span class="muted">–</span>'}</td>
       <td><a class="lnk" href="${p.mime_type === 'application/pdf' ? `/viewer.html?pl=${p.id}&t=${T}&name=${encodeURIComponent(p.name || 'Price list')}` : `/api/price-lists/${p.id}/file?t=${T}`}" target="_blank" rel="noopener">View</a></td>
       <td><button class="danger" data-pl-del="${p.id}">Delete</button></td></tr>`).join('');
-  const kindChip = (r) => (r.kind !== 'once' ? '<span class="chip v-done" style="font-size:10.5px">Always</span>'
+  const kindChip = (r) => (r.supplier ? `<span class="chip v-waiting" style="font-size:10.5px" title="Only used for this supplier's invoices">${esc(r.supplier)} only</span> ` : '') + (r.kind !== 'once' ? '<span class="chip v-done" style="font-size:10.5px">Always</span>'
     : r.used_at ? `<span class="chip v-missing" style="font-size:10.5px" title="Switched off after it was used">One time · used ${esc(fmtDate(r.used_at))}${r.used_on ? ' on ' + esc(r.used_on) : ''}</span>`
     : `<span class="chip v-waiting" style="font-size:10.5px">One time · ${r.target ? 'for ' + esc(r.target) : 'next check'}</span>`);
   const rules = data.rules.map((r) => `<div class="rule ${r.active ? '' : 'off'}">
@@ -145,7 +145,14 @@ function render() {
   </div><div>
     <div class="panel"><h2>Rules</h2><div class="hint">Agreements and exceptions, applied first on every price check and statement check. Untick a rule to pause it.</div>
       ${rules || '<div class="hint">No rules yet.</div>'}
-      <div class="row" style="display:block;border-top:1px solid var(--line2);padding-top:10px"><textarea id="newRule" placeholder="e.g. Job 207932: Gliderol said they'll bill us for 1 door only
+      <div style="border-top:1px solid var(--line2);padding-top:10px;margin-top:6px"><b style="font-size:13px">Price change</b> <span class="hint">e.g. a supplier's yearly rise on top of the price list you have</span>
+        <div class="row"><input type="text" id="pcSup" list="supList" placeholder="Supplier, e.g. Gliderol" style="width:170px">
+          <input type="number" id="pcPct" step="0.1" placeholder="+3" style="width:80px"> <span class="muted">% on the price list</span>
+          <label title="Tick once the supplier has confirmed it"><input type="checkbox" id="pcConf"> confirmed</label>
+          <input type="text" id="pcWhy" placeholder="why (optional), e.g. 2026 rise" style="width:170px">
+          <button class="primary" data-pc-add>＋ Add</button></div>
+        <datalist id="supList">${[...new Set(data.priceLists.map((p) => p.supplier))].map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="row" style="display:block;border-top:1px solid var(--line2);padding-top:10px"><b style="font-size:13px">Other rule</b><textarea id="newRule" placeholder="e.g. Job 207932: Gliderol said they'll bill us for 1 door only
 e.g. Taurean: price list shows net prices; store delivery is now $25.68
 e.g. Joe's Installs: $50 extra per door for removal is agreed"></textarea></div>
       <div class="row"><label><input type="radio" name="ruleKind" value="always" checked> Always</label>
@@ -172,6 +179,14 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('button, [data-rule-edit]'); if (!t) return;
   const d = t.dataset;
   try {
+    if (d.pcAdd !== undefined) {
+      const sup = $('#pcSup').value.trim(), pct = Number($('#pcPct').value), why = $('#pcWhy').value.trim();
+      if (!sup) { $('#pcSup').focus(); return toast('Which supplier?'); }
+      if (!isFinite(pct) || !pct) { $('#pcPct').focus(); return toast('Type the % (e.g. 3, or -5 for a discount)'); }
+      const text = `${sup}: expect the price list ${pct > 0 ? '+' : '−'} ${Math.abs(pct)}%${why ? ' (' + why + ')' : ''}${$('#pcConf').checked ? '' : ` – not confirmed by ${sup} yet`}`;
+      await api('/rules', { method: 'POST', body: JSON.stringify({ text, kind: 'always', supplier: sup }) });
+      toast('Saved – checks of ' + sup + ' invoices now use it'); return load();
+    }
     if (d.ruleAdd !== undefined) {
       const text = $('#newRule').value.trim();
       if (!text) { $('#newRule').focus(); return toast('Write the rule first'); }

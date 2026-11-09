@@ -347,10 +347,10 @@ function migrateColumns(db) {
   // Price check of the invoice against the supplier's / subcontractor's price list
   add('price_check', 'TEXT');          // JSON: the result
   add('price_check_status', 'TEXT');   // checking | done | error | none (no price list)
-  add('file_hash', 'TEXT');
-  add('customer_name', 'TEXT');        // the end customer printed on the invoice (deliver to / attn)            // sha256 of the file: the same PDF twice is the same bill
+  add('file_hash', 'TEXT');            // sha256 of the file: the same PDF twice is the same bill
+  add('customer_name', 'TEXT');        // the end customer printed on the invoice (deliver to / attn)
   // Rules: "always", or "once" (optionally for one invoice number), switched off after the check that used it
-  for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT']]) {
+  for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT'], ['supplier', 'TEXT']]) { // supplier: the rule only applies to their invoices
     if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
   }
   // what a running check is doing right now, and when it last moved on
@@ -623,9 +623,10 @@ function createRepo(db, dataDir) {
     listRules(accountUUID) {
       return db.prepare('SELECT * FROM check_rules WHERE account_key = ? ORDER BY id').all(accountUUID ?? '');
     },
-    addRule(accountUUID, text, { kind = 'always', target = null } = {}) {
-      const r = db.prepare('INSERT INTO check_rules (account_key, text, kind, target) VALUES (?, ?, ?, ?)')
-        .run(accountUUID ?? '', text, kind === 'once' ? 'once' : 'always', kind === 'once' && target ? String(target).trim().slice(0, 60) : null);
+    addRule(accountUUID, text, { kind = 'always', target = null, supplier = null } = {}) {
+      const r = db.prepare('INSERT INTO check_rules (account_key, text, kind, target, supplier) VALUES (?, ?, ?, ?, ?)')
+        .run(accountUUID ?? '', text, kind === 'once' ? 'once' : 'always', kind === 'once' && target ? String(target).trim().slice(0, 60) : null,
+          supplier ? String(supplier).trim().slice(0, 120) : null);
       return db.prepare('SELECT * FROM check_rules WHERE id = ?').get(Number(r.lastInsertRowid));
     },
     updateRule(accountUUID, id, { text, active }) {
@@ -641,10 +642,14 @@ function createRepo(db, dataDir) {
      * The rules for a check that covers these invoice numbers: every "always" rule that's on, plus one-time
      * rules not used yet whose invoice number is in this check (or that are for no particular invoice).
      */
-    rulesFor(accountUUID, invoiceNumbers = []) {
+    rulesFor(accountUUID, invoiceNumbers = [], supplier = undefined) {
       const norm = (n) => String(n || '').replace(/\D/g, '').replace(/^0+/, '') || String(n || '').toLowerCase().replace(/[^0-9a-z]/g, '');
       const nums = new Set(invoiceNumbers.filter(Boolean).map(norm));
-      return repo.listRules(accountUUID).filter((r) => r.active && (r.kind !== 'once' || (!r.used_at && (!r.target || nums.has(norm(r.target))))));
+      // a supplier's rule only goes to checks of that supplier (a word of its name in the supplier's name)
+      const sup = String(supplier || '').toLowerCase();
+      const forSupplier = (r) => !r.supplier || supplier === undefined
+        || String(r.supplier).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !['pty', 'ltd', 'the', 'and', 'group'].includes(w)).some((w) => sup.includes(w));
+      return repo.listRules(accountUUID).filter((r) => r.active && forSupplier(r) && (r.kind !== 'once' || (!r.used_at && (!r.target || nums.has(norm(r.target))))));
     },
     /** One-time rules that were used: switch them off, noting where. */
     markRulesUsed(rules, usedOn) {

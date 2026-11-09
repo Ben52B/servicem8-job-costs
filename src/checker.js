@@ -34,6 +34,7 @@ const ReviewSchema = z.object({
     difference_ex_gst: z.number().nullable().describe('Invoiced minus expected, ex GST (positive = charged more than expected). null if unknown.'),
   })),
   actions: z.array(z.string()).describe('What to do before paying, most important first. Empty if nothing.'),
+  suggested_rule: z.string().nullable().describe('Only when the prices follow a standing pattern that no rule covers yet (e.g. every line about 3% above the list): one short rule the owner could save so later checks use it, e.g. "Gliderol: expect the price list + 3% (2026 price rise, not confirmed)". null otherwise.'),
 });
 
 const REVIEW_PROMPT = `You check a supplier's monthly statement for a garage door installation business before it's paid.
@@ -49,7 +50,8 @@ How to check:
   tables and discounts. Read invoice sizes as HEIGHT x WIDTH (e.g. 2100X4840 = 2100 high, 4840 wide). Compare ex GST.
 - If most items are higher than the list by about the same percentage, the price list is probably older than the invoices
   (a yearly price rise): say so once in price_list_notes, judge each item against the list plus that rise, and don't flag
-  each one as a problem.
+  each one as a problem. If no rule covers that rise yet, put it in suggested_rule. A rule like "price list + 3%" that says
+  "not confirmed" is still the business's working assumption: use it, and mention once that it isn't confirmed.
 - Job: check the invoice's order/reference number is the job, and that size, colour and type match the job notes and the
   quoted door price. Flag jobs that are Unsuccessful or point elsewhere (e.g. "invoiced through job 206594"),
   missing measurements, a different size, or costs not in the quote.
@@ -77,6 +79,7 @@ const InvoiceReviewSchema = z.object({
   })),
   difference_ex_gst: z.number().nullable().describe('Total invoiced minus total expected, ex GST, for the lines you could price. Positive = charged more.'),
   rules_applied: z.array(z.string()),
+  suggested_rule: z.string().nullable().describe('Only when the prices follow a standing pattern that no rule covers yet (e.g. every line about 3% above the list): one short rule the owner could save so later checks use it, e.g. "Gliderol: expect the price list + 3% (2026 price rise, not confirmed)". null otherwise.'),
 });
 
 const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against their price list, for a garage door installation business.
@@ -85,7 +88,9 @@ const INVOICE_PROMPT = `You check one supplier or subcontractor invoice against 
   (height × width) and range/colour; installers may price per door, per hour or per extra. Read the price list's own notes.
   Read invoice door sizes as HEIGHT x WIDTH. Compare ex GST.
 - Freight/delivery, packaging and extras count too, if the price list has them.
-- If most lines are higher by the same percentage, the price list is probably older than the invoice: say so in the headline.
+- If most lines are higher by the same percentage, the price list is probably older than the invoice: say so in the headline,
+  and if no rule covers that rise yet, put it in suggested_rule. A "price list + x%" rule (even "not confirmed") is the business's
+  working assumption: use it.
 - "money_checks" was worked out in code. Use its figures as given; never add amounts up yourself.
 - Be specific and short. Write job numbers as "job 207651".`;
 

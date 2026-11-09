@@ -616,6 +616,8 @@ function priceCheckBox(inv) {
     ${rows ? `<table style="margin-top:6px"><thead><tr><th>Line</th><th class="num">Invoiced</th><th class="num">Price list</th><th class="num">Diff</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
     ${pc.rules_applied && pc.rules_applied.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Rules used: ${pc.rules_applied.map(esc).join(' · ')}</div>` : ''}
     ${pc.note ? `<div class="muted" style="font-size:12px;margin-top:2px">Note for this check: ${esc(pc.note)}</div>` : ''}
+    ${pc.suggested_rule && !pc.rule_saved ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">💡 Pattern spotted: <b>${esc(pc.suggested_rule)}</b>
+      <button class="small" data-save-rule="${inv.id}">Save as rule</button></div>` : ''}
     <div class="muted" style="font-size:12px;margin-top:6px">Checked against ${esc(pc.price_list ? pc.price_list.supplier + (pc.price_list.name ? ' – ' + pc.price_list.name : '') : 'the price list')}${pc.checked_at ? ' · ' + new Date(pc.checked_at).toLocaleDateString('en-AU') : ''}. The app's own reading of the list – a question for the supplier, not a confirmed overcharge.</div>
     ${chooser('↻ Check again')}</div>`;
   return h;
@@ -882,6 +884,13 @@ document.addEventListener('click', async (e) => {
       const nt = $('#flagNote-' + ds.inv);
       await post(`/checks/${ds.resolveFlag}/resolve`, { reference: ds.ref, note: nt ? nt.value : '' });
       toast('Marked resolved'); return load();
+    }
+    if (ds.saveRule) {
+      const inv = state.data.invoices.find((i) => i.id === Number(ds.saveRule));
+      const sup = (inv.price_check.price_list && inv.price_check.price_list.supplier) || inv.supplier || null;
+      await post('/rules', { text: inv.price_check.suggested_rule, kind: 'always', supplier: sup });
+      inv.price_check.rule_saved = true;
+      toast('Saved as a rule – change it any time in 💲 Prices'); return renderDetail();
     }
     if (ds.pcToggle) { const id = Number(ds.pcToggle); state.pcOpen.has(id) ? state.pcOpen.delete(id) : state.pcOpen.add(id); return renderDetail(); }
     if (ds.priceCheck) {

@@ -292,7 +292,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
         const info = token ? await fetchJobImpl(jobUUID, token).catch(() => null) : null;
         job = { job_number: local.job_number, client: local.client_name, address: local.job_title, quoted_price_ex_gst: local.quote_amount ?? null, notes: (info && info.description) || null };
       }
-      const rulesUsed = repo.rulesFor(inv.account_uuid ?? null, [inv.invoice_number]);
+      const rulesUsed = repo.rulesFor(inv.account_uuid ?? null, [inv.invoice_number], inv.supplier || '');
       const result = await checker.reviewInvoice({
         invoice: { supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, subtotal_ex_gst: inv.subtotal, gst: inv.tax, total_inc_gst: inv.total,
           references: (() => { try { return JSON.parse(inv.refs || '[]'); } catch { return []; } })(), lines: repo.itemsOf(inv.id).map(({ paid, ...x }) => x) },
@@ -409,7 +409,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const word = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
       const fits = allLists.filter((p) => word(p.supplier).some((w) => sup.includes(w)));
       const priceLists = (fits.length ? fits : allLists).slice(0, 4);
-      const rulesUsed = repo.rulesFor(accountUUID, lines.map((l) => l.reference));
+      const rulesUsed = repo.rulesFor(accountUUID, lines.map((l) => l.reference), statement.supplier_name || '');
       progress(`Claude is checking ${lines.length} line${lines.length === 1 ? '' : 's'} against the price list, your rules and the jobs… (usually 1–4 minutes)`);
       const result = await checker.review({
         statement: { supplier: statement.supplier_name, account_number: statement.account_number, statement_date: statement.statement_date, total_due: statement.total_due,
@@ -745,6 +745,8 @@ window.addEventListener('message', function (e) {
     // what the statement checks found on this job's invoices (until marked resolved)
     const flags = repo.checkFlagsFor(req.account, (summary.invoices || []).map((i) => i.id));
     for (const i of summary.invoices || []) i.check_flag = flags.get(i.id) || null;
+    const ruleTexts = new Set(repo.listRules(req.account).map((r) => r.text));
+    for (const i of summary.invoices || []) if (i.price_check && i.price_check.suggested_rule) i.price_check.rule_saved = ruleTexts.has(i.price_check.suggested_rule);
     const acc = repo.ensureAccount(req.account);
     const note = sm8Notes.get(req.job.job_uuid) || null;
     res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
@@ -1334,7 +1336,8 @@ window.addEventListener('message', function (e) {
   api.post('/rules', (req, res) => {
     const text = String(req.body?.text || '').trim().slice(0, 2000);
     if (!text) return res.status(400).json({ error: 'Write the rule first' });
-    res.status(201).json(repo.addRule(req.account, text, { kind: req.body?.kind === 'once' ? 'once' : 'always', target: req.body?.target || null }));
+    res.status(201).json(repo.addRule(req.account, text, { kind: req.body?.kind === 'once' ? 'once' : 'always', target: req.body?.target || null,
+      supplier: req.body?.supplier || null }));
   });
   api.patch('/rules/:id', (req, res) => {
     const b = req.body || {};
@@ -1386,6 +1389,8 @@ window.addEventListener('message', function (e) {
     if (!c) return res.status(404).json({ error: 'Not found' });
     // Job numbers known to Job Costs, so any job mentioned in the report can be a link.
     const jobs = Object.fromEntries(repo.listJobs(req.account).map((j) => [String(j.job_number), j.job_uuid]));
+    // a pattern the check suggested as a rule: already saved?
+    if (c.result && c.result.suggested_rule) c.result.rule_saved = repo.listRules(req.account).some((r) => r.text === c.result.suggested_rule);
     // Paid can change after the check ran: show it as it is now.
     for (const m of c.matched || []) if (m.invoice) m.invoice.paid = repo.itemsOf(m.invoice.id).every((x) => x.paid) && repo.itemsOf(m.invoice.id).length > 0;
     res.json({ ...c, file_path: undefined, jobs, server_now: new Date().toISOString() });
