@@ -372,6 +372,15 @@ function migrateColumns(db) {
   // A mailbox a business connected (Gmail or any IMAP mailbox); the password is stored encrypted.
   db.exec(`CREATE TABLE IF NOT EXISTS imap_connections (account_key TEXT PRIMARY KEY, email TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 993,
     password_enc TEXT NOT NULL, connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), last_check TEXT, error TEXT)`);
+  // Each business's plan. Businesses already here when plans arrived are the owner's: never limited.
+  const hadBilling = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'billing'").get();
+  db.exec(`CREATE TABLE IF NOT EXISTS billing (account_key TEXT PRIMARY KEY, plan TEXT NOT NULL, status TEXT NOT NULL, trial_ends TEXT,
+    customer_id TEXT, subscription_id TEXT, period_end TEXT, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  if (!hadBilling) {
+    for (const a of db.prepare('SELECT account_key FROM accounts').all()) {
+      db.prepare("INSERT OR IGNORE INTO billing (account_key, plan, status) VALUES (?, 'premium', 'owner')").run(a.account_key);
+    }
+  }
   // What each business used each month (Claude requests and their tokens), for limits and costs.
   db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -1603,6 +1612,20 @@ function createRepo(db, dataDir) {
       db.prepare("UPDATE imap_connections SET last_check = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = ? WHERE account_key = ?").run(error, accountUUID ?? '');
     },
     removeImap(accountUUID) { db.prepare('DELETE FROM imap_connections WHERE account_key = ?').run(accountUUID ?? ''); },
+
+    // ---------- plans ----------
+    getBilling(accountUUID) { return db.prepare('SELECT * FROM billing WHERE account_key = ?').get(accountUUID ?? '') || null; },
+    saveBilling(accountUUID, fields) {
+      const cur = repo.getBilling(accountUUID) || { plan: 'free', status: 'free' };
+      const next = { ...cur, ...fields };
+      db.prepare(`INSERT INTO billing (account_key, plan, status, trial_ends, customer_id, subscription_id, period_end, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        ON CONFLICT(account_key) DO UPDATE SET plan = excluded.plan, status = excluded.status, trial_ends = excluded.trial_ends,
+          customer_id = excluded.customer_id, subscription_id = excluded.subscription_id, period_end = excluded.period_end, updated_at = excluded.updated_at`)
+        .run(accountUUID ?? '', next.plan, next.status, next.trial_ends || null, next.customer_id || null, next.subscription_id || null, next.period_end || null);
+      return repo.getBilling(accountUUID);
+    },
+    billingByCustomer(customerId) { return db.prepare('SELECT * FROM billing WHERE customer_id = ?').get(customerId) || null; },
 
     // ---------- usage ----------
     /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */

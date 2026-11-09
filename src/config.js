@@ -42,6 +42,15 @@ const config = {
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
   supportEmail: process.env.SUPPORT_EMAIL || null,
+  // Plans and payments (see src/plans.js): none (everything unlimited) | servicem8 (one fee billed by ServiceM8) | stripe (tiers)
+  billingMode: (process.env.BILLING_MODE || 'none').trim().toLowerCase(),
+  servicem8Plan: (process.env.SERVICEM8_PLAN || 'pro').trim().toLowerCase(),
+  trialDays: Number(process.env.TRIAL_DAYS ?? 14),
+  // ServiceM8 accounts that are never limited (comma separated account UUIDs), e.g. your own business
+  ownerAccounts: (process.env.OWNER_ACCOUNTS || '').split(',').map((x) => x.trim()).filter(Boolean),
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+  stripePrices: { basic: process.env.STRIPE_PRICE_BASIC || '', pro: process.env.STRIPE_PRICE_PRO || '', premium: process.env.STRIPE_PRICE_PREMIUM || '' },
   // Opens /admin/usage?key=... (for the add-on's owner); not set = the page is off.
   adminKey: process.env.ADMIN_KEY || '',
   // Claude prices in USD per million tokens (input, output, cache write, cache read), to estimate what each business costs.

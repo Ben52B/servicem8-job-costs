@@ -1816,8 +1816,86 @@ test('connect Gmail (or any mailbox) in Settings: checked for invoices, password
   } finally { srvM.close(); }
 });
 
+test('plans (BILLING_MODE=stripe): a Pro trial, then Free; limits; paying on Stripe’s page; upgrades, downgrades and cancelling', async () => {
+  const crypto = require('crypto');
+  const calls = [];
+  const fakeStripe = {
+    async checkout(a) { calls.push(['checkout', a]); return { url: 'https://checkout.stripe.test/s1' }; },
+    async portal(a) { calls.push(['portal', a]); return { url: 'https://billing.stripe.test/p1' }; },
+    async subscription(id) { return { id, items: { data: [{ price: { id: 'price_b' } }] }, current_period_end: 1800000000 }; },
+  };
+  const cfg = { ...config, billingMode: 'stripe', stripeSecretKey: 'sk_test', stripeWebhookSecret: 'whsec_test',
+    stripePrices: { basic: 'price_b', pro: 'price_p', premium: 'price_x' }, ownerAccounts: ['acc-owner'] };
+  const appT = createApp({ config: cfg, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, stripe: fakeStripe });
+  const srvT = await new Promise((r) => { const x = appT.listen(0, () => r(x)); });
+  const bT = `http://127.0.0.1:${srvT.address().port}`;
+  const call = (t, p, o = {}) => fetch(`${bT}/api${p}`, { ...o, headers: { Authorization: `Bearer ${t}`, ...(o.json ? { 'Content-Type': 'application/json' } : {}) }, body: o.json ? JSON.stringify(o.json) : o.body });
+  const hook = (ev, secret = 'whsec_test') => {
+    const payload = JSON.stringify(ev); const ts = Math.floor(Date.now() / 1000);
+    const sig = crypto.createHmac('sha256', secret).update(`${ts}.${payload}`).digest('hex');
+    return fetch(`${bT}/billing/stripe-webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Stripe-Signature': `t=${ts},v1=${sig}` }, body: payload });
+  };
+  try {
+    JOBS['tier-job'] = { jobNumber: '208970', jobTitle: '7 Tier St' };
+    const t = await openCard('tier-job', 'acc-tier');
+    // a new business: 14 days of Pro
+    let p = await call(t, '/plan').then((x) => x.json());
+    assert.deepEqual([p.mode, p.plan.key, p.plan.status], ['stripe', 'pro', 'trial']);
+    assert.ok(Date.parse(p.plan.trial_ends) - Date.now() > 13 * 86400000);
+    assert.deepEqual(p.plans.map((x) => [x.key, x.price]), [['free', 0], ['basic', 29], ['pro', 59], ['premium', 99]]);
+    assert.equal((await call(t, '/bills')).status, 200, 'Pro trial has Bills');
+    // the trial is over: Free
+    repo.saveBilling('acc-tier', { status: 'trial', trial_ends: new Date(Date.now() - 1000).toISOString() });
+    p = await call(t, '/plan').then((x) => x.json());
+    assert.deepEqual([p.plan.key, p.plan.status], ['free', 'trial_over']);
+    for (const [path, opts] of [['/bills', {}], ['/stock', {}], ['/export', {}], ['/report', {}], ['/imap', { method: 'POST', json: { email: 'a@gmail.com', password: 'x' } }]]) {
+      const r = await call(t, path, opts);
+      assert.equal(r.status, 402, path);
+      assert.match((await r.json()).error, /plan/);
+    }
+    const fd = new FormData(); fd.append('supplier', 'Gliderol'); fd.append('file', new Blob(['%PDF-1.4 pl' + uniq()], { type: 'application/pdf' }), 'pl.pdf');
+    assert.equal((await call(t, '/price-lists', { method: 'POST', body: fd })).status, 402);
+    // the card still works: upload, job costs, paid
+    assert.equal((await call(t, '/job')).status, 200);
+    // Free: 10 invoices a month, then they wait
+    for (let i = repo.usageCount('acc-tier', 'invoice_read'); i < 10; i++) repo.addUsage('acc-tier', 'invoice_read', {});
+    const fu = new FormData(); fu.append('files', new Blob(['%PDF-1.4 over' + uniq()], { type: 'application/pdf' }), 'over-limit.pdf');
+    await call(t, '/invoices', { method: 'POST', body: fu }); await processor.idle();
+    const over = repo.db.prepare("SELECT * FROM invoices WHERE account_uuid = 'acc-tier' AND file_name = 'over-limit.pdf'").get();
+    assert.equal(over.status, 'error');
+    assert.match(over.error, /10 invoices on the Free plan are used up/);
+    // choose Basic: Stripe's own page
+    const co = await call(t, '/billing/checkout', { method: 'POST', json: { plan: 'basic' } }).then((x) => x.json());
+    assert.equal(co.url, 'https://checkout.stripe.test/s1');
+    assert.deepEqual([calls[0][1].price, calls[0][1].accountKey], ['price_b', 'acc-tier']);
+    assert.equal((await call(t, '/billing/checkout', { method: 'POST', json: { plan: 'gold' } })).status, 400);
+    // Stripe says it's paid (a forged message is refused)
+    const paidEv = { type: 'checkout.session.completed', data: { object: { client_reference_id: 'acc-tier', customer: 'cus_1', subscription: 'sub_1' } } };
+    assert.equal((await hook(paidEv, 'wrong')).status, 400);
+    assert.equal((await hook(paidEv)).status, 200);
+    p = await call(t, '/plan').then((x) => x.json());
+    assert.deepEqual([p.plan.key, p.plan.status, p.manage], ['basic', 'active', true]);
+    assert.equal((await call(t, '/bills')).status, 200, 'Basic has Bills');
+    assert.equal((await call(t, '/checks', { method: 'POST', body: new FormData() })).status, 402, 'statement checks are Pro');
+    // upgraded to Pro in Stripe's portal, then cancelled
+    await hook({ type: 'customer.subscription.updated', data: { object: { id: 'sub_1', customer: 'cus_1', status: 'active', items: { data: [{ price: { id: 'price_p' } }] }, current_period_end: 1800000000 } } });
+    assert.equal(appT.locals.planFor('acc-tier').key, 'pro');
+    assert.equal((await call(t, '/billing/portal', { method: 'POST' }).then((x) => x.json())).url, 'https://billing.stripe.test/p1');
+    await hook({ type: 'customer.subscription.deleted', data: { object: { id: 'sub_1', customer: 'cus_1', status: 'canceled', items: { data: [] } } } });
+    assert.deepEqual([appT.locals.planFor('acc-tier').key, appT.locals.planFor('acc-tier').status], ['free', 'canceled']);
+    // the owner's business is never limited
+    assert.equal(appT.locals.planFor('acc-owner').key, 'unlimited');
+    assert.equal((await fetch(`${bT}/plan?t=${encodeURIComponent(t)}`)).status, 200);
+  } finally { srvT.close(); }
+  // billing by ServiceM8: one plan for everyone
+  const appS = createApp({ config: { ...config, billingMode: 'servicem8', servicem8Plan: 'pro' }, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary });
+  assert.deepEqual([appS.locals.planFor('acc-x').key, appS.locals.planFor('acc-x').status], ['pro', 'servicem8']);
+  // billing off (the default): no limits at all
+  assert.equal(app.locals.planFor('acc-tier').key, 'unlimited');
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html', 'plan.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);

@@ -13,12 +13,14 @@ const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer')
 const { duplicateMessage } = require('./processor');
 const { exportEverything } = require('./export');
 const mailbox = require('./mailbox');
+const { plans: planTable, FEATURES, UNLIMITED } = require('./plans');
+const billingLib = require('./billing');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html'), welcome: page('welcome.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html'), welcome: page('welcome.html'), plan: page('plan.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -42,7 +44,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null, imapClient = mailbox.makeClient }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null, imapClient = mailbox.makeClient, stripe = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -348,6 +350,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (!inv || inv.status !== 'ready' || !checker) return { started: false };
     const pl = priceListId ? repo.getPriceList(inv.account_uuid ?? null, priceListId) : repo.priceListFor(inv.account_uuid ?? null, inv.supplier);
     if (!pl) { if (!inv.price_check_status) repo.setPriceCheck(inv.id, { status: 'none' }); return { started: false }; }
+    if (!has(inv.account_uuid ?? null, 'price_lists') || left(inv.account_uuid ?? null, 'price_check') <= 0) return { started: false, limited: true };
     if (auto && inv.price_check_status === 'done') return { started: false }; // already checked; "Check again" redoes it
     repo.setPriceCheck(inv.id, { status: 'checking' });
     priceQueue = priceQueue.then(() => runPriceCheck(inv.id, pl, note)).catch(() => {});
@@ -390,6 +393,43 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     }
   }
   processor.afterRead = app.locals.priceCheck = (id, opts) => priceCheck(id, { auto: true, ...(opts || {}) });
+  // ---------- plans and limits ----------
+  const PLANS = planTable();
+  const stripeClient = stripe || billingLib.stripeApi(config.stripeSecretKey);
+  const billingMode = () => (['servicem8', 'stripe'].includes(config.billingMode) ? config.billingMode : 'none');
+  /** The plan a business is on now (and why): unlimited when billing is off or it's the owner's. */
+  function planFor(accountUUID) {
+    const mode = billingMode();
+    if (mode === 'none') return { ...UNLIMITED, status: 'unlimited' };
+    if ((config.ownerAccounts || []).includes(String(accountUUID ?? ''))) return { ...UNLIMITED, status: 'owner' };
+    let b = repo.getBilling(accountUUID);
+    if (b && b.status === 'owner') return { ...UNLIMITED, status: 'owner' };
+    if (mode === 'servicem8') return { ...(PLANS[config.servicem8Plan] || PLANS.pro), status: 'servicem8' };
+    // stripe: a new business starts with a free trial of Pro
+    if (!b) b = repo.saveBilling(accountUUID, { plan: 'pro', status: 'trial', trial_ends: new Date(Date.now() + (config.trialDays ?? 14) * 86400000).toISOString() });
+    if (b.status === 'trial') return Date.parse(b.trial_ends) > Date.now() ? { ...PLANS.pro, status: 'trial', trial_ends: b.trial_ends } : { ...PLANS.free, status: 'trial_over' };
+    if (['active', 'past_due'].includes(b.status)) return { ...(PLANS[b.plan] || PLANS.free), status: b.status, period_end: b.period_end };
+    return { ...PLANS.free, status: b.status || 'free' };
+  }
+  const has = (accountUUID, feature) => planFor(accountUUID).features.includes(feature);
+  const left = (accountUUID, kind) => planFor(accountUUID).limits[kind] - repo.usageCount(accountUUID, kind);
+  const needPlan = (feature) => { const p = Object.values(PLANS).find((x) => x.features.includes(feature)); return p ? p.name : 'a paid'; };
+  /** 402 with a plain reason, when the business's plan doesn't include this. */
+  const gate = (req, res, feature) => {
+    if (has(req.account, feature)) return false;
+    res.status(402).json({ error: `${FEATURES[feature] || 'This'} is part of the ${needPlan(feature)} plan – see ⭐ Plan in Job Costs.`, upgrade: true });
+    return true;
+  };
+  const gateCount = (req, res, kind, label) => {
+    if (left(req.account, kind) > 0) return false;
+    const p = planFor(req.account);
+    res.status(402).json({ error: p.limits[kind] ? `You\u2019ve used this month\u2019s ${p.limits[kind]} ${label} on the ${p.name} plan – see ⭐ Plan.` : `${label[0].toUpperCase() + label.slice(1)} are part of the Pro plan – see ⭐ Plan.`, upgrade: true });
+    return true;
+  };
+  processor.canRead = (inv) => (left(inv.account_uuid ?? null, 'invoice_read') > 0 ? null
+    : `This month\u2019s ${planFor(inv.account_uuid ?? null).limits.invoice_read} invoices on the ${planFor(inv.account_uuid ?? null).name} plan are used up. Upgrade in ⭐ Plan and click "Read again" – or it\u2019s read next month.`);
+  app.locals.planFor = planFor;
+
   // Count each Claude request per business, with an estimate of what it cost (USD).
   const recordUsage = app.locals.recordUsage = (accountUUID, kind, u) => {
     const pr = config.claudePrices || { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 };
@@ -813,7 +853,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings', 'welcome']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings', 'welcome', 'plan']) {
     app.get(`/${name}`, (req, res) => {
       const sess = sessionFrom(req.query.t);
       if (!sess) {
@@ -893,6 +933,7 @@ window.addEventListener('message', function (e) {
     return n;
   };
   api.post('/imap', async (req, res) => {
+    if (gate(req, res, 'auto_email')) return;
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '').replace(/\s+/g, ''); // app passwords are shown in groups of 4
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Type the mailbox\u2019s email address' });
@@ -913,6 +954,34 @@ window.addEventListener('message', function (e) {
     const after = repo.getImap(req.account);
     if (after && after.error) return res.status(502).json({ error: after.error });
     res.json({ ok: true, found });
+  });
+
+  // ---------- the business's plan ----------
+  api.get('/plan', (req, res) => {
+    const p = planFor(req.account);
+    const used = Object.fromEntries(['invoice_read', 'price_check', 'statement_check'].map((k) => [k, repo.usageCount(req.account, k)]));
+    const b = repo.getBilling(req.account);
+    res.json({ mode: billingMode(), plan: { key: p.key, name: p.name, price: p.price, status: p.status, trial_ends: p.trial_ends || null, period_end: p.period_end || null, limits: p.limits, features: p.features },
+      used, features: FEATURES, plans: billingMode() === 'stripe' ? Object.values(PLANS) : [],
+      canPay: billingMode() === 'stripe' && !!config.stripeSecretKey, manage: !!(b && b.customer_id) });
+  });
+  api.post('/billing/checkout', async (req, res) => {
+    if (billingMode() !== 'stripe') return res.status(400).json({ error: 'Plans aren\u2019t paid through Job Costs on this server' });
+    const plan = String(req.body?.plan || '');
+    const price = (config.stripePrices || {})[plan];
+    if (!PLANS[plan] || !price) return res.status(400).json({ error: 'Choose a plan' });
+    const b = repo.getBilling(req.account) || {};
+    try {
+      const sess = await stripeClient.checkout({ price, accountKey: req.account ?? '', customer: b.customer_id || null,
+        successUrl: `${config.publicUrl}/billing/done`, cancelUrl: `${config.publicUrl}/billing/done?cancelled=1` });
+      res.json({ url: sess.url });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  api.post('/billing/portal', async (req, res) => {
+    const b = repo.getBilling(req.account);
+    if (!b || !b.customer_id) return res.status(400).json({ error: 'No paid plan yet' });
+    try { res.json({ url: (await stripeClient.portal({ customer: b.customer_id, returnUrl: `${config.publicUrl}/billing/done` })).url }); }
+    catch (e) { res.status(502).json({ error: e.message }); }
   });
 
   // ---------- Settings of the business ----------
@@ -1240,6 +1309,7 @@ window.addEventListener('message', function (e) {
     if (!inv) return;
     if (!checker) return res.status(500).json({ error: 'Price checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    if (gate(req, res, 'price_lists') || gateCount(req, res, 'price_check', 'price checks')) return;
     const r = priceCheck(inv.id, { priceListId: req.body?.price_list_id ? Number(req.body.price_list_id) : null, note: String(req.body?.note || '').trim().slice(0, 2000) || null });
     if (!r.started) return res.status(400).json({ error: 'There\u2019s no price list for this supplier. Choose one, or upload it in 🔎 Statement check → Price lists.' });
     res.json({ ok: true, price_list: r.price_list });
@@ -1538,9 +1608,10 @@ window.addEventListener('message', function (e) {
   });
 
   // Bills: every invoice of the business, to find them and mark several paid at once.
-  api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
+  api.get('/bills', (req, res) => (gate(req, res, 'bills') ? null : res.json({ bills: repo.listBills(req.account) })));
   // "Export everything": one zip (spreadsheets + the original files) for the business's own records.
   api.get('/export', async (req, res) => {
+    if (gate(req, res, 'export')) return;
     const day = new Date().toLocaleDateString('en-CA', { timeZone: settingsFor(req.account).timezone || 'UTC' });
     res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="Job Costs export ${day}.zip"`, 'Cache-Control': 'no-store' });
     let closed = false;
@@ -1561,7 +1632,7 @@ window.addEventListener('message', function (e) {
       res.destroy();
     }
   });
-  api.get('/stock', (req, res) => res.json({ ...repo.listStock(req.account), jobs: repo.listJobs(req.account) }));
+  api.get('/stock', (req, res) => (gate(req, res, 'stock') ? null : res.json({ ...repo.listStock(req.account), jobs: repo.listJobs(req.account) })));
   api.post('/bills/paid', (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger).slice(0, 500) : [];
     if (!ids.length || typeof req.body?.paid !== 'boolean') return res.status(400).json({ error: 'Choose invoices first' });
@@ -1611,6 +1682,7 @@ window.addEventListener('message', function (e) {
   api.delete('/rules/:id', (req, res) => (repo.deleteRule(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
 
   api.post('/price-lists', upload.single('file'), (req, res) => {
+    if (gate(req, res, 'price_lists')) return;
     const supplier = String(req.body?.supplier || '').trim().slice(0, 120);
     if (!supplier) return res.status(400).json({ error: 'Which supplier is this price list for?' });
     if (!req.file || !pdfOrPhoto(req.file)) return res.status(400).json({ error: 'Choose the price list (PDF or photo)' });
@@ -1635,6 +1707,7 @@ window.addEventListener('message', function (e) {
 
   // Start a check: upload the statement (optionally only invoices dated from / to, and notes for this check).
   api.post('/checks', upload.single('statement'), (req, res) => {
+    if (gate(req, res, 'statement_check') || gateCount(req, res, 'statement_check', 'statement checks')) return;
     if (!checker) return res.status(500).json({ error: 'Statement checks aren\u2019t set up on the server (ANTHROPIC_API_KEY).' });
     if (!req.file || !pdfOrPhoto(req.file)) return res.status(400).json({ error: 'Choose the statement (PDF or photo)' });
     const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
@@ -1664,6 +1737,7 @@ window.addEventListener('message', function (e) {
   });
   // Run again (e.g. after adding a rule or a newer price list). The statement isn't read again.
   api.post('/checks/:id/rerun', (req, res) => {
+    if (gate(req, res, 'statement_check') || gateCount(req, res, 'statement_check', 'statement checks')) return;
     const c = repo.getCheck(req.account, req.params.id);
     if (!c) return res.status(404).json({ error: 'Not found' });
     const lastMove = Date.parse(c.progress_at || c.started_at || c.created_at) || 0;
@@ -1716,6 +1790,7 @@ window.addEventListener('message', function (e) {
 
   // Reports across all jobs of the business.
   api.get('/report', (req, res) => {
+    if (gate(req, res, 'reports')) return;
     const date = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
     res.json(repo.getReport(req.account, { from: date(req.query.from), to: date(req.query.to) }));
   });
@@ -1740,6 +1815,44 @@ window.addEventListener('message', function (e) {
       <p style="color:#6b8a82">Claude requests per month and the estimated cost in USD (from the token counts and CLAUDE_PRICE_* rates).</p>
       <table style="border-collapse:collapse;font-size:13px" cellpadding="6"><tr style="text-align:left"><th>Business</th><th>Month</th><th>Invoices read</th><th>Price checks</th><th>Statements read</th><th>Statement checks</th><th>Est. cost</th><th>Per invoice read</th></tr>
       ${rows.join('') || '<tr><td colspan="8">Nothing yet.</td></tr>'}</table>`).replace('max-width:460px', 'max-width:980px'));
+  });
+
+  // After paying (or cancelling) on Stripe's page: back to ServiceM8.
+  app.get('/billing/done', (req, res) => res.type('html').send(htmlPage('Job Costs', req.query.cancelled
+    ? '<h2>No change made</h2><p>You can close this page and carry on in ServiceM8.</p>'
+    : '<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Thank you!</h2><p>Your Job Costs plan is updated (it can take a minute). Close this page and carry on in ServiceM8.</p>')));
+  // Stripe tells us about payments here (signed with STRIPE_WEBHOOK_SECRET).
+  app.post('/billing/stripe-webhook', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+    const payload = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+    if (!billingLib.verifyStripeSignature(payload, req.get('stripe-signature'), config.stripeWebhookSecret)) return res.status(400).send('Bad signature');
+    let ev;
+    try { ev = JSON.parse(payload); } catch { return res.status(400).send('Bad JSON'); }
+    try {
+      const o = (ev.data && ev.data.object) || {};
+      const accountOf = () => (o.client_reference_id ?? (o.metadata && o.metadata.account_key) ?? (repo.billingByCustomer(o.customer) || {}).account_key);
+      if (ev.type === 'checkout.session.completed') {
+        const acc = accountOf();
+        if (acc !== undefined && acc !== null) {
+          const sub = o.subscription ? await stripeClient.subscription(o.subscription) : null;
+          const price = sub && sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].price && sub.items.data[0].price.id;
+          repo.saveBilling(acc === '' ? null : acc, { plan: billingLib.planOfPrice(price, config) || 'pro', status: 'active', customer_id: o.customer, subscription_id: o.subscription,
+            period_end: sub && sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null });
+        }
+      } else if (ev.type === 'customer.subscription.updated' || ev.type === 'customer.subscription.deleted') {
+        const b = repo.billingByCustomer(o.customer);
+        if (b) {
+          const price = o.items && o.items.data && o.items.data[0] && o.items.data[0].price && o.items.data[0].price.id;
+          const status = ev.type === 'customer.subscription.deleted' || ['canceled', 'unpaid', 'incomplete_expired'].includes(o.status) ? 'canceled'
+            : o.status === 'past_due' ? 'past_due' : 'active';
+          repo.saveBilling(b.account_key === '' ? null : b.account_key, { plan: billingLib.planOfPrice(price, config) || b.plan, status, subscription_id: o.id,
+            period_end: o.current_period_end ? new Date(o.current_period_end * 1000).toISOString() : b.period_end });
+        }
+      }
+      res.json({ received: true });
+    } catch (e) {
+      console.error(`Stripe webhook: ${e.message}`);
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Opened in a browser by mistake: explain instead of "Cannot GET".
@@ -1780,6 +1893,7 @@ window.addEventListener('message', function (e) {
 
     let created = 0;
     const ids = [];
+    if (source === 'email') accounts = accounts.filter((a) => has(a.accountUUID ?? null, 'email_in'));
     for (const acc of accounts) {
       for (const f of files) {
         const inv = addInvoiceFile({
@@ -1814,6 +1928,7 @@ window.addEventListener('message', function (e) {
     const sess = sessionFrom(req.query.t);
     if (!sess) return res.status(401).type('html').send(htmlPage('Job Costs', '<h2>Session expired</h2><p>Open Job Costs from ServiceM8 and try again.</p>'));
     const job = sess.job || { account_uuid: sess.account };
+    if (!has(sess.account, 'auto_email')) return res.status(402).type('html').send(htmlPage('Job Costs', `<h2>Part of the ${needPlan('auto_email')} plan</h2><p>Reading invoices straight from Outlook comes with the ${needPlan('auto_email')} plan. See ⭐ Plan in Job Costs.</p>`));
     if (!config.msClientId || !config.msClientSecret) {
       return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b> and <b>MS_TENANT_ID</b> in Render (see the README), then try again.</p>'));
     }

@@ -38,6 +38,9 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       } else repo.blockDuplicate(id, duplicateMessage(twin));
       return true;
     };
+    // over the plan's invoices for this month: wait (Read again after upgrading, or next month)
+    const limit = api.canRead ? api.canRead(inv) : null;
+    if (limit) return repo.setInvoiceError(id, limit);
     try {
       if (inv.file_path) {
         try {
@@ -98,6 +101,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     onStatement: null, // set by the app: (invoice, what was read) => file it under Statement check
     afterRead: null, // set by the app: (invoiceId) => price check against a matching price list
     onUsage: null, // set by the app: (account, kind, usage) => count what Claude was used for
+    canRead: null, // set by the app: (invoice) => null, or why it can't be read now (plan limit)
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);
