@@ -200,6 +200,12 @@
     .take { justify-content: flex-start; }
     .hide-sm { display: none; }
   }
+  .pc-line { font-size: 13px; margin: 10px 0 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .pc-line .mk-link { font-weight: 600; font-size: 13px; padding: 0; } .pc-line.ok .mk-link { color: var(--ok, #059669); } .pc-line.warn .mk-link { color: #b45309; } .pc-line.bad, .pc-line.bad .mk-link { color: var(--bad); }
+  .pc-detail { font-size: 13px; border-left: 3px solid #e3ece9; padding: 4px 0 4px 10px; margin: 6px 0 0; }
+  .pc-choose { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  .pc-choose select { max-width: 220px; font: inherit; font-size: 12.5px; } .pc-choose input { min-width: 160px; font: inherit; font-size: 12.5px; border: 1px solid #d6e2de; border-radius: 8px; padding: 3px 8px; }
+  details.rnote { font-size: 12.5px; color: #64748b; margin: 10px 0 0; } details.rnote summary { cursor: pointer; font-weight: 600; } details.rnote div { margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -211,6 +217,7 @@
     <a class="btn" id="checkLink">🔎 Statement check</a>
     <a class="btn" id="pricesLink">💲 Prices</a>
     <a class="btn" id="billsLink">🧾 Bills</a>
+    <a class="btn" id="stockLink">📦 Stock</a>
     <a class="btn" id="reportsLink">📊 Reports</a>
   </header>
   <section id="stockBanner"></section>
@@ -234,7 +241,7 @@
 
 <script>
 const BOOT = /*__BOOT__*/null;
-const state = { data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null,
+const state = { pcOpen: new Set(), data: null, selected: null, pollTimer: null, confirmDel: null, editing: null, draft: {}, editQuote: false, previewKey: null,
   mkOpen: null, forceDetail: false, modal: null, attachTo: null };
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -469,6 +476,7 @@ function renderStockDetail(inv, el) {
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${viewUrl(inv)}" target="_blank" rel="noopener">View invoice</a><button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
+      ${ready && (state.data.priceLists || []).length && !(inv.price_check_status === 'done' && inv.price_check && inv.price_check.verdict) && inv.price_check_status !== 'checking' ? `<button data-pc-toggle="${inv.id}" title="Check the prices against a price list">💲 Check price</button>` : ''}
       <span class="spacer"></span><button class="danger link" data-ask-delete="${inv.id}">Remove from this order</button></div>`;
   if (state.confirmDel === inv.id) {
     h += `<div class="confirm-bar">Take this invoice off this stock order? It stays in stock in the Inbox.<span class="spacer"></span>
@@ -502,7 +510,6 @@ function renderDetail() {
     </div>` : ''}</div>`;
   if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice… it goes on this job when it’s done.</div>';
   h += checkFlagBox(inv);
-  if (ready) h += priceCheckBox(inv);
   if (inv.duplicate_of) {
     const t = inv.twin;
     h += t
@@ -540,7 +547,8 @@ function renderDetail() {
     h += `<div class="others"><b>Other lines on this invoice</b>${inv.other_lines.map((o) => `<div class="o"><div>${esc(o.description)} <span class="muted">${money(o.line_cost)}</span>${traceChips(o.trace)}</div>
       ${o.trace.left > 1e-6 ? `<button class="small" data-add-rest="${o.id}" data-qty="${o.trace.quantity ? 1 : ''}" data-left="${o.trace.quantity ? o.trace.left_quantity : o.trace.left_amount}">＋ Add to this job</button>` : ''}</div>`).join('')}</div>`;
   }
-  if (inv.notes) h += `<div class="note">${esc(inv.notes)}</div>`;
+  if (inv.notes) h += `<details class="rnote"><summary>ℹ Note from reading the invoice</summary><div>${esc(inv.notes)}</div></details>`;
+  if (ready) h += priceCheckBox(inv);
   if (inv.email_from) h += `<div class="muted" style="margin-top:10px;font-size:12px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
       ${inv.file_path ? `<a class="btn only-sm" href="${viewUrl(inv)}" target="_blank" rel="noopener">View invoice</a>` : ''}
@@ -570,27 +578,34 @@ function renderDetail() {
 function priceCheckBox(inv) {
   const pc = inv.price_check, st = inv.price_check_status;
   const lists = state.data.priceLists || [];
-  const chooser = lists.length ? `<select id="pcList-${inv.id}" style="max-width:220px">${lists.map((p) => `<option value="${p.id}" ${pc && pc.price_list && pc.price_list.id === p.id ? 'selected' : ''}>${esc(p.supplier)}${p.name ? ' – ' + esc(p.name) : ''}</option>`).join('')}</select>
-    <input id="pcNote-${inv.id}" placeholder="Note for this check only (optional)" style="flex:1;min-width:180px;font:inherit;font-size:12.5px;border:1px solid #d6e2de;border-radius:8px;padding:4px 8px">
-    <button class="small" data-price-check="${inv.id}">💲 Check price</button>` : '';
-  if (st === 'checking') return `<div class="note info"><span class="spin"></span> Checking the prices against the price list…</div>`;
-  if (st === 'error') return `<div class="note bad">Price check failed: ${esc(pc && pc.error || 'try again')} ${chooser}</div>`;
-  if (st !== 'done' || !pc || !pc.verdict) {
-    return lists.length ? `<div class="note" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">💲 No price list matched “${esc(inv.supplier || 'this supplier')}”. Check against: ${chooser}</div>` : '';
+  const open = state.pcOpen.has(inv.id);
+  const chooser = (label) => lists.length ? `<div class="pc-choose"><select id="pcList-${inv.id}">${lists.map((p) => `<option value="${p.id}" ${pc && pc.price_list && pc.price_list.id === p.id ? 'selected' : ''}>${esc(p.supplier)}${p.name ? ' – ' + esc(p.name) : ''}</option>`).join('')}</select>
+    <input id="pcNote-${inv.id}" placeholder="Note for this check (optional)"><button class="small" data-price-check="${inv.id}">${label}</button></div>` : '';
+  if (st === 'checking') return `<div class="pc-line muted"><span class="spin"></span> Checking the prices against the price list…</div>`;
+  const done = st === 'done' && pc && pc.verdict;
+  if (!done) {
+    // nothing to show until asked ("💲 Check price" in the buttons below)
+    if (!open) return st === 'error' ? `<div class="pc-line bad">💲 Price check failed: ${esc(pc && pc.error || 'try again')} <button class="mk-link" data-pc-toggle="${inv.id}">Try again</button></div>` : '';
+    return `<div class="pc-line">💲 Check against ${chooser('Check price')}</div>`;
   }
-  const cls = { ok: 'info', check: '', problem: 'bad', no_match: '' }[pc.verdict] || '';
-  const label = { ok: '✓ Prices match the price list', check: 'Prices: worth a look', problem: '⚠ Charged more than the price list', no_match: 'Not on the price list' }[pc.verdict];
+  const tone = { ok: 'ok', check: 'warn', problem: 'bad', no_match: 'muted' }[pc.verdict] || 'muted';
+  const label = { ok: '✓ Prices match the price list', check: 'Prices worth a look', problem: '⚠ Charged more than the price list', no_match: 'Not on the price list' }[pc.verdict] || 'Price check';
+  const diff = pc.difference_ex_gst ? ` (${pc.difference_ex_gst > 0 ? '+' : ''}${money(pc.difference_ex_gst)} ex GST)` : '';
+  let h = `<div class="pc-line ${tone}"><button class="mk-link" data-pc-toggle="${inv.id}">💲 ${label}${diff} ${open ? '▴' : '▾'}</button></div>`;
+  if (!open) return h;
   const rows = (pc.lines || []).map((l) => {
-    const diff = l.invoiced_ex_gst != null && l.expected_ex_gst != null ? Math.round((l.invoiced_ex_gst - l.expected_ex_gst) * 100) / 100 : null;
+    const d = l.invoiced_ex_gst != null && l.expected_ex_gst != null ? Math.round((l.invoiced_ex_gst - l.expected_ex_gst) * 100) / 100 : null;
     return `<tr><td>${esc(l.description)}<div class="muted" style="font-size:11.5px">${esc(l.note || '')}</div></td><td class="num">${l.invoiced_ex_gst != null ? money(l.invoiced_ex_gst) : '–'}</td>
-      <td class="num">${l.expected_ex_gst != null ? money(l.expected_ex_gst) : '–'}</td><td class="num" style="color:${diff > 0.004 ? 'var(--bad)' : diff < -0.004 ? 'var(--ok)' : 'inherit'}">${diff == null ? '' : diff === 0 ? '✓' : (diff > 0 ? '+' : '') + money(diff)}</td></tr>`;
+      <td class="num">${l.expected_ex_gst != null ? money(l.expected_ex_gst) : '–'}</td><td class="num" style="color:${d > 0.004 ? 'var(--bad)' : d < -0.004 ? 'var(--ok)' : 'inherit'}">${d == null ? '' : d === 0 ? '✓' : (d > 0 ? '+' : '') + money(d)}</td></tr>`;
   }).join('');
   const mc = pc.money_checks && pc.money_checks.adds_up === false ? `<div style="color:var(--bad);margin-top:4px">⚠ The invoice doesn't add up: ${money(pc.money_checks.subtotal_ex_gst)} + GST ${money(pc.money_checks.gst)} ≠ ${money(pc.money_checks.total_inc_gst)}</div>` : '';
-  return `<div class="note ${cls}"><b>💲 ${label}</b> – ${esc(pc.headline || '')}${pc.difference_ex_gst ? ` <b>(${pc.difference_ex_gst > 0 ? '+' : ''}${money(pc.difference_ex_gst)} ex GST)</b>` : ''}${mc}
+  h += `<div class="pc-detail">${pc.headline ? `<div>${esc(pc.headline)}</div>` : ''}${mc}
     ${rows ? `<table style="margin-top:6px"><thead><tr><th>Line</th><th class="num">Invoiced</th><th class="num">Price list</th><th class="num">Diff</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
     ${pc.rules_applied && pc.rules_applied.length ? `<div class="muted" style="font-size:12px;margin-top:4px">Rules used: ${pc.rules_applied.map(esc).join(' · ')}</div>` : ''}
     ${pc.note ? `<div class="muted" style="font-size:12px;margin-top:2px">Note for this check: ${esc(pc.note)}</div>` : ''}
-    <div class="muted" style="font-size:12px;margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">Checked against ${esc(pc.price_list ? pc.price_list.supplier + (pc.price_list.name ? ' – ' + pc.price_list.name : '') : 'the price list')}${pc.checked_at ? ' · ' + new Date(pc.checked_at).toLocaleDateString('en-AU') : ''} · ${chooser.replace('💲 Check price', '↻ Check again')}</div></div>`;
+    <div class="muted" style="font-size:12px;margin-top:6px">Checked against ${esc(pc.price_list ? pc.price_list.supplier + (pc.price_list.name ? ' – ' + pc.price_list.name : '') : 'the price list')}${pc.checked_at ? ' · ' + new Date(pc.checked_at).toLocaleDateString('en-AU') : ''}. The app's own reading of the list – a question for the supplier, not a confirmed overcharge.</div>
+    ${chooser('↻ Check again')}</div>`;
+  return h;
 }
 
 // ---------- Original invoice (only reloads when a different file is selected) ----------
@@ -855,6 +870,7 @@ document.addEventListener('click', async (e) => {
       await post(`/checks/${ds.resolveFlag}/resolve`, { reference: ds.ref, note: nt ? nt.value : '' });
       toast('Marked resolved'); return load();
     }
+    if (ds.pcToggle) { const id = Number(ds.pcToggle); state.pcOpen.has(id) ? state.pcOpen.delete(id) : state.pcOpen.add(id); return renderDetail(); }
     if (ds.priceCheck) {
       const sel = $('#pcList-' + ds.priceCheck);
       const nt = $('#pcNote-' + ds.priceCheck);
@@ -983,6 +999,7 @@ wireDrop($('#aside'), uploadFiles);
 
 $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
+$('#stockLink').href = '/stock?t=' + encodeURIComponent(BOOT.token);
 $('#checkLink').href = '/checks?t=' + encodeURIComponent(BOOT.token);
 $('#pricesLink').href = '/prices?t=' + encodeURIComponent(BOOT.token);
 // The full view needs the big ServiceM8 window; "Compact view" goes back to the summary.

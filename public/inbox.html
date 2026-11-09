@@ -218,17 +218,11 @@ function render() {
     }
     h += '</div>';
   }
-  h += `<h2>Stock & leftovers</h2>`;
-  if (!stock.length) h += '<div class="empty">Nothing left over. When only part of an invoice is used, the rest shows here.</div>';
-  for (const i of stock) {
-    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
-      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total)].filter(Boolean).join(' · '))}</div>
-      ${i.kept_as_stock ? `<div class="sub">→ <b>📦 In stock${i.stock_job ? ' (stock order #' + esc(i.stock_job.job_number || '?') + ')' : ''}</b>${i.untouched ? ' – nothing taken from it yet' : ''}</div>` : ''}
-      ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
-      <div class="acts">${fileLink(i)}${i.untouched
-        ? (changing.has('s' + i.id) ? moveBox('s' + i.id, i.id, { stock: false, label: 'Move to job' }) + `<button data-change="s${i.id}">Cancel</button>`
-          : `<button data-change="s${i.id}" title="Put the whole invoice on a job as its cost">✎ Change</button>`)
-        : '<span class="muted" style="font-size:12px">Take items from a job\'s<br>＋ Add costs window</span>'}</div></div>`;
+  // Stock has its own page
+  if (stock.length) {
+    const left = stock.reduce((a, i) => a + (Number(i.left_amount) || 0), 0);
+    h += `<div class="item" style="margin-top:18px"><div>📦 <b>${stock.length} invoice${stock.length === 1 ? '' : 's'} in stock</b> <span class="muted">· ${money(left)} ex GST left</span></div>
+      <div class="acts"><a class="btn" href="/stock?t=${encodeURIComponent(BOOT.token)}">📦 Open Stock</a></div></div>`;
   }
   h += `<datalist id="jobList">${data.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : '', j.sm8_status && j.sm8_status !== 'Work Order' ? j.sm8_status : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>`;
   $('#content').innerHTML = h;

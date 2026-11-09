@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Costs Stock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+.move{display:inline-flex;gap:4px;align-items:center}.move input{width:90px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px}
+.pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
+.dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
+</style>
+<style>
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
+  .bar input[type=search] { flex: 1; min-width: 220px; font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 12px; background: #fff; }
+  .seg button { border-radius: 10px; }
+  .seg button.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+  table.bills { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  table.bills th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 700; padding: 9px 10px; border-bottom: 1px solid var(--line); background: #fbfdfc; }
+  table.bills td { padding: 9px 10px; border-bottom: 1px solid var(--line2); vertical-align: middle; }
+  table.bills tr:last-child td { border-bottom: 0; }
+  table.bills tr.sel td { background: var(--brand-soft); }
+  .num, table.bills th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .c-paid { background: var(--brand-soft); color: var(--brand-dark); } .c-unpaid { background: var(--bad-soft); color: var(--bad); } .c-part { background: var(--warn-soft); color: #92400e; }
+  .foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 -4px 16px rgba(16,40,34,.06); }
+  .foot .spacer { flex: 1; }
+  .lnk { background: none; border: 0; padding: 0 2px; color: var(--brand-dark); text-decoration: underline; cursor: pointer; font: inherit; box-shadow: none; }
+</style>
+<style>
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; min-width: 150px; }
+  .kpi .l { font-size: 11.5px; color: var(--muted); font-weight: 700; } .kpi .v { font-size: 20px; font-weight: 800; }
+  .lines { margin-top: 6px; } .lines .ln { margin-top: 5px; font-size: 12.5px; }
+  details.used summary { cursor: pointer; font-weight: 700; font-size: 15px; margin: 20px 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a class="btn" href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Back to job</a><h1>📦 Stock</h1><span class="muted">Invoices kept in stock, what's left, and which jobs used it</span></header>
+  <div class="bar"><input type="search" id="q" placeholder="Search supplier, invoice number, item or job number…" autocomplete="off"></div>
+  <div id="content"><div class="empty"><span class="spin"></span></div></div>
+</div>
+<datalist id="jobList"></datalist>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const fmtDate = (d) => d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+const qty = (n) => Number(n).toLocaleString('en-AU', { maximumFractionDigits: 3 });
+const fileUrl = (b) => (b.mime_type === 'application/pdf'
+  ? `/viewer.html?id=${b.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(b.supplier || 'Invoice')}`
+  : `/api/invoices/${b.id}/file?t=${encodeURIComponent(BOOT.token)}${/^text\//.test(b.mime_type || '') ? '&view=html' : ''}`);
+let data = null;
+const changing = new Set();
+const openJob = (uuid, num) => `<button class="lnk" data-open-job="${esc(uuid)}">#${esc(num || '?')}</button>`;
+const matches = (i, q) => !q || [i.supplier, i.invoice_number, ...(i.lines || []).map((l) => l.description), ...(i.lines || []).flatMap((l) => l.trace.jobs.map((j) => j.job_number)), ...(i.jobs || []).map((j) => j.job_number)]
+  .some((v) => String(v || '').toLowerCase().includes(q));
+
+function render() {
+  const q = $('#q').value.trim().toLowerCase();
+  const stock = data.stock.filter((i) => matches(i, q));
+  const used = data.usedUp.filter((i) => matches(i, q));
+  const whole = data.stock.filter((i) => i.untouched).length;
+  let h = `<div class="kpis"><div class="kpi"><div class="l">Value left in stock</div><div class="v">${money(data.leftTotal)}</div><div class="sub muted" style="font-size:11.5px">ex GST</div></div>
+    <div class="kpi"><div class="l">Invoices with stock left</div><div class="v">${data.stock.length}</div><div class="muted" style="font-size:11.5px">${whole} untouched · ${data.stock.length - whole} part used</div></div></div>
+    <div class="muted" style="font-size:12.5px;margin:6px 0 0">To use stock on a job: open the job and press <b>＋ Add costs</b> – stock invoices are listed there.</div>`;
+  h += `<h2>In stock</h2>`;
+  if (!stock.length) h += `<div class="empty">${data.stock.length ? 'Nothing matches.' : 'Nothing in stock. Invoices you send to stock (from the Inbox, or on a stock order job) show up here.'}</div>`;
+  for (const i of stock) {
+    const key = 's' + i.id;
+    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice ' + money(i.total_ex ?? i.total) + ' ex GST'].filter(Boolean).join(' · '))}${i.stock_job ? ' · stock order ' + openJob(i.stock_job.job_uuid, i.stock_job.job_number) : ''}</div>
+      <div class="lines">${i.lines.map((l) => `<div class="ln"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div></div>
+      <div class="acts">${i.file_path ? `<a class="lnk" href="${fileUrl(i)}" target="_blank" rel="noopener">View</a>` : ''}${i.untouched
+        ? (changing.has(key)
+          ? `<span class="move"><input id="m-${key}" list="jobList" placeholder="Job #" autocomplete="off"><button class="primary" data-move-pick="${i.id}" data-key="${key}">Move to job</button><button data-change="${key}">Cancel</button></span>`
+          : `<button data-change="${key}" title="Not stock after all: put the whole invoice on a job as its cost">✎ Move to a job</button>`)
+        : ''}</div></div>`;
+  }
+  h += `<details class="used" ${q && used.length ? 'open' : ''}><summary>Used up – last 120 days <span class="muted" style="font-weight:600;font-size:12px">(${data.usedUp.length})</span></summary>`;
+  h += used.length ? used.map((i) => `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')}</div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice ' + money(i.total_ex ?? i.total) + ' ex GST'].filter(Boolean).join(' · '))}</div>
+      <div class="trace">${i.jobs.length ? i.jobs.map((j) => `<span>#${esc(j.job_number || '?')}</span>`).join('') : '<span class="left">no jobs</span>'}</div></div>
+      <div class="acts">${i.file_path ? `<a class="lnk" href="${fileUrl(i)}" target="_blank" rel="noopener">View</a>` : ''}${i.jobs.map((j) => openJob(j.job_uuid, j.job_number)).join('')}</div></div>`).join('')
+    : '<div class="empty">Nothing used up recently.</div>';
+  h += '</details>';
+  $('#content').innerHTML = h;
+}
+
+async function load() {
+  try {
+    data = await api('/stock');
+    $('#jobList').innerHTML = data.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : ''].filter(Boolean).join(' · '))}</option>`).join('');
+    render();
+  } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+$('#q').addEventListener('input', () => render());
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const d = b.dataset;
+  try {
+    if (d.change) { changing.has(d.change) ? changing.delete(d.change) : changing.add(d.change); render(); const el = $('#m-' + d.change); if (el) el.focus(); return; }
+    if (d.movePick) {
+      const n = $('#m-' + d.key).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
+      if (!n) { $('#m-' + d.key).focus(); return toast('Type a job number'); }
+      b.disabled = true;
+      const r = await api(`/inbox/${d.movePick}/move`, { method: 'POST', body: JSON.stringify({ job_number: n }) });
+      changing.delete(d.key);
+      toast(r.unchanged ? 'It’s already there' : r.to_stock ? 'That job is a stock order job – it stays in stock' : 'Moved to #' + r.job_number);
+      return load();
+    }
+    if (d.openJob) { const r = await api(`/jobs/${encodeURIComponent(d.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); }
+  } catch (x) { toast(x.message); b.disabled = false; }
+});
+load();
+</script>
+</body>
+</html>

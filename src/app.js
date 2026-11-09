@@ -16,7 +16,7 @@ const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -695,7 +695,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock']) {
     app.get(`/${name}`, (req, res) => {
       if (!jobFromToken(req.query.t)) {
         return res.status(401).type('html').send('<p style="font-family:sans-serif">Session expired. Open Job Costs from a job in ServiceM8 and try again.</p>');
@@ -1287,6 +1287,7 @@ window.addEventListener('message', function (e) {
 
   // Bills: every invoice of the business, to find them and mark several paid at once.
   api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
+  api.get('/stock', (req, res) => res.json({ ...repo.listStock(req.account), jobs: repo.listJobs(req.account) }));
   api.post('/bills/paid', (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger).slice(0, 500) : [];
     if (!ids.length || typeof req.body?.paid !== 'boolean') return res.status(400).json({ error: 'Choose invoices first' });

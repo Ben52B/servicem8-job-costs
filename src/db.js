@@ -1500,6 +1500,23 @@ function createRepo(db, dataDir) {
       return { invoices: out, pending };
     },
 
+    /**
+     * The Stock page: invoices in stock with something left (whole, or part used), and stock that's all
+     * been used in the last 120 days, with where it went.
+     */
+    listStock(accountUUID) {
+      const all = repo.getUnassigned(accountUUID).invoices.filter((i) => !i.duplicate_of);
+      const inStock = all.filter((i) => i.kept_as_stock || !i.untouched);
+      const ids = new Set(inStock.map((i) => i.id));
+      const usedUp = db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND status = 'ready' AND kept_as_stock = 1
+          AND COALESCE(invoice_date, created_at) >= date('now', '-120 days') ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(accountUUID)
+        .filter((i) => !ids.has(i.id))
+        .map((i) => ({ id: i.id, supplier: i.supplier, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, total_ex: exGst(i.total, i.tax),
+          file_path: i.file_path, mime_type: i.mime_type, jobs: repo.jobsOnInvoice(i.id).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number })) }));
+      const leftTotal = round2(inStock.reduce((s, i) => s + i.left_amount, 0));
+      return { stock: inStock, usedUp, leftTotal };
+    },
+
     /** Count for the Inbox badge: invoices waiting for a decision. */
     inboxCount(accountUUID) {
       const u = repo.getUnassigned(accountUUID);

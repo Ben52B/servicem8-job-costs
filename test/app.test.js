@@ -1464,8 +1464,31 @@ test('wrong job: ✎ Change moves a whole invoice to another job or to stock (In
   assert.match((await shared.json()).error, /shared between jobs/);
 });
 
+test('Stock page: what is in stock, what is left, and stock used up recently', async () => {
+  JOBS['st-job'] = { jobNumber: '208420', jobTitle: '4 Stock St' };
+  const t = await openCard('st-job', 'acc-st');
+  const mk = (num, qty) => { const inv = repo.createInvoice({ accountUUID: 'acc-st', source: 'upload' });
+    repo.saveExtraction(inv.id, { supplier_name: 'Merlin', invoice_number: num, invoice_date: new Date().toISOString().slice(0, 10), total: 1100, tax: 100, subtotal: 1000, items: [{ description: 'Merlin opener', quantity: qty, line_total: 1000, category: 'materials' }] });
+    return inv.id; };
+  const whole = mk('M-500', 10); await post(t, `/inbox/${whole}/stock`);
+  const part = mk('M-501', 10); await post(t, `/inbox/${part}/stock`);
+  const gone = mk('M-502', 2); await post(t, `/inbox/${gone}/stock`);
+  const item = (id) => repo.db.prepare('SELECT id FROM items WHERE invoice_id = ?').get(id).id;
+  assert.equal((await api(t, `/items/${item(part)}/share`, { method: 'PUT', json: { quantity: 4 } })).status, 200);
+  assert.equal((await api(t, `/items/${item(gone)}/share`, { method: 'PUT', json: { quantity: 2 } })).status, 200);
+  const s = await json(t, '/stock');
+  assert.deepEqual(s.stock.map((i) => i.id).sort(), [whole, part].sort(), 'in stock: the untouched one and the part-used one');
+  assert.equal(s.stock.find((i) => i.id === part).lines[0].trace.left_quantity, 6, '4 of 10 used');
+  assert.equal(s.leftTotal, 1600, '$1,000 + $600 left (ex GST)');
+  assert.deepEqual(s.usedUp.map((i) => [i.id, i.jobs.map((j) => j.job_number)]), [[gone, ['208420']]], 'used up, and where it went');
+  assert.equal((await fetch(`${base}/stock?t=${encodeURIComponent(t)}`)).status, 200);
+  // ✎ Move to a job (on the Stock page): the untouched one becomes the job's cost
+  assert.equal((await post(t, `/inbox/${whole}/move`, { job_number: '208420' })).status, 200);
+  assert.ok(!(await json(t, '/stock')).stock.some((i) => i.id === whole));
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);
