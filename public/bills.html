@@ -44,6 +44,7 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
   @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+.dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
 </style>
 <style>
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
@@ -113,7 +114,7 @@ function render() {
         <td><b>${esc(b.supplier || 'Unknown supplier')}</b></td><td>${esc(b.invoice_number || '')}</td><td>${esc(fmtDate(b.invoice_date))}</td>
         <td>${b.jobs.length ? b.jobs.map((j) => `<button class="lnk" data-open-job="${esc(j.job_uuid)}">#${esc(j.job_number || '?')}</button>`).join(' ') : `<span class="muted">${b.in_stock ? 'Stock' : 'Not assigned'}</span>`}</td>
         <td class="num">${money(b.total_ex)}</td><td class="num">${money(b.total)}</td>
-        <td><span class="chip c-${b.payment_state}">${b.payment_state === 'paid' ? 'Paid' + (b.paid_at ? ' ' + esc(fmtDate(b.paid_at)) : '') : b.payment_state === 'part' ? 'Part paid' : 'Unpaid'}</span></td>
+        <td><span class="chip c-${b.payment_state}">${b.payment_state === 'paid' ? 'Paid' + (b.paid_at ? ' ' + esc(fmtDate(b.paid_at)) : '') : b.payment_state === 'part' ? 'Part paid' : 'Unpaid'}</span>${b.twin ? `<div class="dupwarn" title="${esc(b.twin.reason)}">⚠ Duplicate – already paid${b.twin.paid_at ? ' ' + esc(fmtDate(String(b.twin.paid_at).slice(0, 10))) : ''} as another copy${b.twin.jobs.length ? ' on #' + b.twin.jobs.map((j) => esc(j.job_number || '?')).join(', #') : ''}. Don't pay it again.</div>` : ''}</td>
         <td>${b.file_path ? `<a class="lnk" href="${fileUrl(b)}" target="_blank" rel="noopener">View</a>` : ''}</td></tr>`).join('')}
       </tbody></table>`;
   }
@@ -140,7 +141,7 @@ document.addEventListener('click', async (e) => {
     if (b.dataset.mark) {
       const ids = [...selected];
       const r = await api('/bills/paid', { method: 'POST', body: JSON.stringify({ ids, paid: b.dataset.mark === 'paid' }) });
-      toast(`${r.updated} invoice${r.updated === 1 ? '' : 's'} marked as ${b.dataset.mark}`);
+      toast(`${r.updated} invoice${r.updated === 1 ? '' : 's'} marked as ${b.dataset.mark}${r.skipped && r.skipped.length ? ` · ${r.skipped.length} not marked: already paid as another copy (${r.skipped.map((x) => x.invoice_number || '#' + x.id).join(', ')})` : ''}`);
       selected.clear(); return load();
     }
     if (b.dataset.openJob) { const r = await api(`/jobs/${encodeURIComponent(b.dataset.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); }

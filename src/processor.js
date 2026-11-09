@@ -1,4 +1,6 @@
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 /**
  * Small in-process queue: reads invoices with Claude one or two at a time so a
@@ -24,7 +26,26 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
   async function run(id) {
     const inv = repo.getInvoice(id);
     if (!inv) return;
+    // The same bill already in Job Costs isn't added twice (and a second copy could get paid twice).
+    // Only a copy that's new: "Read again" on an invoice already on a job or in stock leaves it where it is.
+    const isNew = !inv.kept_as_stock && !(repo.jobsOnInvoice ? repo.jobsOnInvoice(id).length : 0);
+    const blocked = (twin) => {
+      if (!twin || !isNew) return false;
+      if (inv.source === 'outlook') { // the same invoice emailed again: dropped quietly
+        log.log?.(`Outlook: "${inv.file_name}" is already in Job Costs (invoice ${twin.id}), not kept`);
+        repo.setImportOutcome?.(id, 'duplicate');
+        repo.deleteInvoice(id);
+      } else repo.blockDuplicate(id, duplicateMessage(twin));
+      return true;
+    };
     try {
+      if (inv.file_path) {
+        try {
+          const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(repo.filesDir, inv.file_path))).digest('hex');
+          repo.setFileHash(id, hash);
+          if (blocked(repo.twinOf({ ...inv, file_hash: hash, supplier: null }))) return; // identical file: no need to read it
+        } catch { /* file missing: the read below reports it */ }
+      }
       const result = await analyzer.analyzeFile({
         filePath: path.join(repo.filesDir, inv.file_path),
         fileName: inv.file_name,
@@ -49,6 +70,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
         return repo.setInvoiceError(id, 'This is a remittance (a payment advice), not a bill, so it isn\u2019t added as a cost. Delete it.');
       }
       repo.saveExtraction(id, result);
+      if (blocked(repo.twinOf(repo.getInvoice(id)))) return;
       // Uploaded on a job: it goes on that job. Emailed: suggest a job for it.
       if (inv.origin_job_uuid) repo.assignToOrigin(id);
       else if (!repo.suggestJob(id) && api.lookupJobs) {
@@ -88,6 +110,13 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console }) {
   return api;
 }
 
+function duplicateMessage(t) {
+  const money = (n) => '$' + Number(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const where = t.jobs.length ? `on job ${t.jobs.map((j) => '#' + (j.job_number || '?')).join(', ')}` : t.in_stock ? 'in stock' : 'in the Inbox';
+  const paid = t.paid ? `, already PAID${t.paid_at ? ' ' + new Date(t.paid_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Melbourne' }) : ''}` : '';
+  return `Duplicate – not added. ${t.supplier || 'This'} invoice ${t.invoice_number || ''}${t.total != null ? ' (' + money(t.total) + ')' : ''} is already in Job Costs ${where}${paid} (${t.reason}). Delete this copy.`.replace(/\s+/g, ' ');
+}
+
 function friendlyError(e) {
   const status = e && e.status;
   if (status === 401) return 'Invoice reading is not set up (check ANTHROPIC_API_KEY).';
@@ -96,4 +125,4 @@ function friendlyError(e) {
   return e.message || 'Could not read this invoice.';
 }
 
-module.exports = { createProcessor };
+module.exports = { createProcessor, duplicateMessage };

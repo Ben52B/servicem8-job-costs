@@ -297,7 +297,8 @@ function render() {
     + state.data.invoices.filter((i) => i.diary_missing).map((i) => `<div class="suggest"><div class="srow"><div><b>🗑 ${esc(i.supplier || i.file_name || 'An invoice')}${i.invoice_number ? ' #' + esc(i.invoice_number) : ''}</b> was deleted from the ServiceM8 job diary.
       <div class="why">Remove it from Job Costs too?</div></div>
       <div class="acts"><button class="solid-danger small" data-diary-remove="${i.id}">Remove from Job Costs</button><button class="small" data-diary-keep="${i.id}">Keep it here</button></div></div></div>`).join('')
-    + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '');
+    + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '')
+    + flagBanner();
   $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
   $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
   renderSuggestions();
@@ -371,6 +372,29 @@ function renderStockKpis() {
     <div class="kpi card"><div class="l">Paid</div><div class="v good">${money0(t.paid)}</div><div class="s">${t.outstanding > 0.004 ? `<b style="color:var(--warn)">${money(t.outstanding)}</b> still to pay` : 'Nothing to pay'}</div></div>`;
 }
 
+// ---------- What the statement checks found on this job's invoices ----------
+const reportUrl = (f) => `/checks?t=${encodeURIComponent(BOOT.token)}&id=${f.check_id}`;
+function flagBanner() {
+  const flagged = state.data.invoices.filter((i) => i.check_flag);
+  if (!flagged.length) return '';
+  return `<div class="note bad" style="margin-bottom:12px"><b>🔎 The statement check flagged ${flagged.length === 1 ? 'an invoice' : flagged.length + ' invoices'} on this job</b> – sort ${flagged.length === 1 ? 'it' : 'them'} out before paying:
+    ${flagged.map((i) => `<div style="margin-top:4px"><button class="mk-link" data-select="${i.id}">${esc(i.check_flag.reference)}</button> (${esc(i.supplier || '')}): ${i.check_flag.verdict === 'problem' ? '⚠ ' : ''}${esc(flagText(i.check_flag))}</div>`).join('')}</div>`;
+}
+function flagText(f) {
+  if (f.amount_mismatch) return `the statement says ${money(f.amount_mismatch.on_statement)}, the invoice says ${money(f.amount_mismatch.in_job_costs)}`;
+  return (f.headline || 'worth a look') + (f.difference_ex_gst ? ` (${f.difference_ex_gst > 0 ? '+' : ''}${money(f.difference_ex_gst)} ex GST)` : '');
+}
+function checkFlagBox(inv) {
+  const f = inv.check_flag;
+  if (!f) return '';
+  return `<div class="note ${f.verdict === 'problem' ? 'bad' : ''}"><b>🔎 Statement check${f.supplier ? ' – ' + esc(f.supplier) : ''}${f.statement_date ? ', statement ' + esc(fmtDate(f.statement_date)) : ''}: ${f.verdict === 'problem' ? '⚠ Problem' : 'Worth a look'}</b>
+    <div>${esc(flagText(f))}</div>${f.price ? `<div class="muted" style="font-size:12.5px;margin-top:3px">Price: ${esc(f.price)}</div>` : ''}${f.job ? `<div class="muted" style="font-size:12.5px">Job: ${esc(f.job)}</div>` : ''}
+    <div class="muted" style="font-size:12px;margin-top:4px">This is the check's own reading of the price list – raise it with the supplier as a question, not a confirmed overcharge.</div>
+    <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><a class="btn small" href="${reportUrl(f)}">Open the report</a>
+      <input id="flagNote-${inv.id}" placeholder="What was agreed (optional), e.g. credit note coming" style="flex:1;min-width:180px;font:inherit;font-size:12.5px;border:1px solid #d6e2de;border-radius:8px;padding:4px 8px">
+      <button class="small" data-resolve-flag="${f.check_id}" data-ref="${esc(f.reference)}" data-inv="${inv.id}">✓ Mark resolved</button></div></div>`;
+}
+
 // ---------- List ----------
 function statusChip(inv) {
   if (inv.status === 'processing') return '<span class="chip c-proc"><span class="spin"></span> Reading</span>';
@@ -387,7 +411,7 @@ function renderList() {
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
-      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${statusChip(inv)}</span></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${statusChip(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   const o = state.outlook;
@@ -477,8 +501,15 @@ function renderDetail() {
       <label class="paid-toggle ${allPaid ? 'on' : ''}"><input type="checkbox" data-inv-paid="${inv.id}" ${allPaid ? 'checked' : ''}> ${allPaid ? 'Paid' : 'Mark as paid'}</label>
     </div>` : ''}</div>`;
   if (inv.status === 'processing') h += '<div class="note info"><span class="spin"></span> Reading this invoice… it goes on this job when it’s done.</div>';
+  h += checkFlagBox(inv);
   if (ready) h += priceCheckBox(inv);
-  if (inv.duplicate_of) h += '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
+  if (inv.duplicate_of) {
+    const t = inv.twin;
+    h += t
+      ? `<div class="note ${t.paid && inv.payment_state !== 'paid' ? 'bad' : ''}"><b>⚠ Duplicate</b> – the same bill as ${esc(t.supplier || '')} invoice ${esc(t.invoice_number || '')} ${t.jobs.length ? 'on ' + t.jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ') : t.in_stock ? 'in stock' : 'in the Inbox'} (${esc(t.reason)}).
+         ${t.paid ? `That copy is <b>paid${t.paid_at ? ' ' + esc(fmtDate(String(t.paid_at).slice(0, 10))) : ''}</b>${inv.payment_state !== 'paid' ? ' – don’t pay this one again.' : '.'}` : ''} This copy isn’t counted in the totals.<div style="margin-top:6px"><button class="small danger" data-ask-delete="${inv.id}">🗑 Delete this copy</button></div></div>`
+      : '<div class="note">This looks like a duplicate of another invoice on this job (same supplier and invoice number). It is not counted in the totals.</div>';
+  }
   if (inv.status === 'error') h += `<div class="note bad">${esc(inv.error)}</div>`;
   else if (ready && inv.error) h += `<div class="note bad">Couldn't read the file: ${esc(inv.error)} The details below are from before.</div>`;
   if (inv.other_jobs.length) h += `<div class="note info">Shared invoice: also on ${inv.other_jobs.map((j) => '#' + esc(j.job_number || '?')).join(', ')}. This job: <b>${money(inv.job_total)}</b> of ${money(inv.total_ex ?? inv.total)} (ex GST). Paid is for the whole invoice.</div>`;
@@ -818,6 +849,11 @@ document.addEventListener('click', async (e) => {
       const p = sPaid(ds.moveBtn);
       const r = await post(`/inbox/${ds.moveBtn}/assign`, { job_number: n, paid: p });
       toast('Moved to #' + (r.job_number || n) + (p ? ' and marked paid' : '')); return load();
+    }
+    if (ds.resolveFlag) {
+      const nt = $('#flagNote-' + ds.inv);
+      await post(`/checks/${ds.resolveFlag}/resolve`, { reference: ds.ref, note: nt ? nt.value : '' });
+      toast('Marked resolved'); return load();
     }
     if (ds.priceCheck) {
       const sel = $('#pcList-' + ds.priceCheck);

@@ -74,6 +74,8 @@
   .sugg { background: #fff8ee; border-color: #fde4c8; }
   .acts { display: flex; gap: 8px; margin-top: 12px; }
   .acts .btn, .acts button { flex: 1; justify-content: center; }
+  .box.alert { background: var(--bad-soft); border-color: #fecdd3; color: var(--bad); } .box.alert h3 { color: var(--bad); }
+  .aline { font-size: 12.5px; margin-top: 3px; }
   .note { font-size: 12px; color: var(--warn); margin-top: 6px; }
 </style>
 </head>
@@ -124,8 +126,18 @@ function render() {
     <div class="tile"><div class="l">To pay</div><div class="v ${t.outstanding > 0.004 ? 'warn' : 'good'}">${t.outstanding > 0.004 ? money0(t.outstanding) : '✓ $0'}</div><div class="s">${unpaid.length ? `${unpaid.length} unpaid bill${unpaid.length === 1 ? '' : 's'}` : 'all paid'}</div></div>
     <div class="tile"><div class="l">⚠ Screw-ups</div><div class="v ${t.mistakes > 0 ? 'bad' : ''}">${money0(t.mistakes)}</div><div class="s">${t.mistakes > 0 ? t.mistakePct + '% of costs' : 'none 🎉'}</div></div></div>`;
   const ready = d.invoices.filter((i) => i.status === 'ready' && !i.duplicate_of);
-  const lines = ready.slice(0, 5).map((i) => `<div class="line"><span class="nm"><b>${esc(i.supplier || 'Unknown supplier')}</b>${i.invoice_number ? ' <span class="muted">#' + esc(i.invoice_number) + '</span>' : ''}${i.mistake_state && i.mistake_state !== 'none' ? ' <span class="bad" title="Screw-up">⚠</span>' : ''}${i.price_check && ['problem', 'check'].includes(i.price_check.verdict) && i.price_check_status === 'done' ? ` <span class="${i.price_check.verdict === 'problem' ? 'bad' : 'warn'}" title="${esc(i.price_check.headline || '')}">💲</span>` : ''}</span>
+  const lines = ready.slice(0, 5).map((i) => `<div class="line"><span class="nm"><b>${esc(i.supplier || 'Unknown supplier')}</b>${i.invoice_number ? ' <span class="muted">#' + esc(i.invoice_number) + '</span>' : ''}${i.mistake_state && i.mistake_state !== 'none' ? ' <span class="bad" title="Screw-up">⚠</span>' : ''}${i.check_flag ? ` <span class="bad" title="Statement check: ${esc(i.check_flag.headline || '')}">🔎</span>` : ''}${i.price_check && ['problem', 'check'].includes(i.price_check.verdict) && i.price_check_status === 'done' ? ` <span class="${i.price_check.verdict === 'problem' ? 'bad' : 'warn'}" title="${esc(i.price_check.headline || '')}">💲</span>` : ''}</span>
       <span>${money0(i.job_total)}</span><span class="chip ${i.payment_state === 'paid' ? 'p' : i.payment_state === 'part' ? 'pt' : 'u'}">${i.payment_state === 'paid' ? 'Paid' : i.payment_state === 'part' ? 'Part' : 'Unpaid'}</span></div>`).join('');
+  // statement-check flags and unpaid copies of a bill that's already paid: shown up front
+  const flagged = d.invoices.filter((i) => i.check_flag);
+  const dupPaid = d.invoices.filter((i) => i.duplicate_of && i.twin && i.twin.paid && i.payment_state !== 'paid');
+  const flagLine = (f) => f.amount_mismatch
+    ? `statement says ${money0(f.amount_mismatch.on_statement)}, invoice says ${money0(f.amount_mismatch.in_job_costs)}`
+    : (f.headline || 'flagged by the statement check') + (f.difference_ex_gst ? ` (${f.difference_ex_gst > 0 ? '+' : '-'}$${Math.abs(Number(f.difference_ex_gst)).toFixed(2)} ex GST)` : '');
+  const alerts = flagged.length || dupPaid.length ? `<div class="box alert"><h3>⚠ Before you pay</h3>
+    ${flagged.map((i) => `<div class="aline"><b>${esc(i.check_flag.reference)}</b> ${esc(i.supplier || '')} – ${esc(flagLine(i.check_flag))}</div>`).join('')}
+    ${dupPaid.map((i) => `<div class="aline"><b>${esc(i.supplier || '')} #${esc(i.invoice_number || '')}</b> is in twice – the other copy is already paid. Don't pay it again.</div>`).join('')}
+    <div class="muted" style="font-size:11.5px;margin-top:3px">Open the full view for the details.</div></div>` : '';
   const reading = d.invoices.filter((i) => i.status === 'processing').length;
   const costs = `<div class="box"><h3>Costs on this job${ready.length > 5 ? ` · showing 5 of ${ready.length}` : ''}</h3>${lines || '<div class="muted" style="font-size:13px">No costs yet.</div>'}
     ${reading ? `<div class="muted" style="font-size:12px;margin-top:4px"><span class="spin"></span> ${reading} invoice${reading === 1 ? '' : 's'} being read…</div>` : ''}</div>`;
@@ -134,7 +146,7 @@ function render() {
       <label style="display:inline-flex;gap:4px;align-items:center;font-size:12px;font-weight:600"><input type="checkbox" id="pd-${x.id}"> Paid</label>
       <button class="primary small" data-accept="${x.id}">✓ Add</button></div>`).join('')}</div>` : '';
   $('#sum').innerHTML = `<div class="top"><div><h1>Job Costs</h1><div class="who">${esc(label)}${j.job_title ? ' · ' + esc(String(j.job_title).split(',')[0]) : ''}</div></div><span class="sp"></span></div>
-    ${hero}${d.sm8Note ? `<div class="note">⚠ ${esc(d.sm8Note)}</div>` : ''}${tiles}${sugg}${costs}
+    ${hero}${d.sm8Note ? `<div class="note">⚠ ${esc(d.sm8Note)}</div>` : ''}${alerts}${tiles}${sugg}${costs}
     <div class="acts"><button data-full="add">＋ Add costs</button><button class="primary" data-full>Open full Job Costs ↗</button></div>`;
 }
 

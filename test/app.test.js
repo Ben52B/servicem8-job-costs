@@ -1,4 +1,5 @@
 const { test, before, after } = require('node:test');
+let uniqN = 0; const uniq = () => ' #' + (++uniqN); // every test file is different (the same file twice is a duplicate)
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -60,6 +61,18 @@ const fakeAnalyzer = {
     return DOOR;
   },
 };
+// Each file read is its own bill (its own invoice number); "copy-of-X" is the same bill as X again.
+const firstRead = fakeAnalyzer.analyzeFile.bind(fakeAnalyzer);
+const numberOf = new Map(); let readN = 0;
+fakeAnalyzer.analyzeFile = async (f) => {
+  // "amended-copy-of-X": same number as X, different amount (not the same bill)
+  const [, amended, copyOf] = f.fileName.match(/^(amended-)?copy-of-(.+)/) || [];
+  const r = await firstRead({ ...f, fileName: copyOf || f.fileName });
+  if (!r || !r.invoice_number || /^S\d/.test(r.invoice_number)) return r;
+  const n = copyOf ? numberOf.get(copyOf) : r.invoice_number + (++readN > 1 ? '-' + readN : '');
+  numberOf.set(f.fileName, n);
+  return { ...r, invoice_number: n, ...(amended ? { total: r.total + 110, subtotal: (r.subtotal || 0) + 100, tax: (r.tax || 0) + 10 } : {}) };
+};
 
 // ServiceM8 stand-ins: every job opened gets its own job number.
 const JOBS = {
@@ -87,7 +100,7 @@ const diary = { files: [], notes: [], calls: [] };
 let diaryN = 0;
 const fakeDiary = {
   async listJobFiles(jobUUIDs) { diary.calls.push('list'); return diary.files.filter((f) => jobUUIDs.includes(f.job_uuid)); },
-  async downloadJobFile(uuid) { diary.calls.push('download:' + uuid); return { buffer: Buffer.from('%PDF-1.4 diary'), contentType: 'application/pdf' }; },
+  async downloadJobFile(uuid) { diary.calls.push('download:' + uuid); return { buffer: Buffer.from('%PDF-1.4 diary ' + uuid), contentType: 'application/pdf' }; },
   async addJobFile({ jobUUID, name }) { const uuid = 'att-' + ++diaryN; diary.files.push({ uuid, job_uuid: jobUUID, name, file_type: '.pdf', active: true }); return uuid; },
   async addJobNote({ jobUUID, text }) { const uuid = 'note-' + ++diaryN; diary.notes.push({ uuid, job_uuid: jobUUID, text }); return uuid; },
   async removeJobFile(uuid) { diary.calls.push('rmfile:' + uuid); diary.files = diary.files.filter((f) => f.uuid !== uuid); },
@@ -131,7 +144,7 @@ const summary = (token) => json(token, '/job');
 const post = (token, p, body) => api(token, p, { method: 'POST', json: body || {} });
 async function upload(token, ...names) {
   const fd = new FormData();
-  for (const n of names) fd.append('files', new Blob(['%PDF-1.4 fake'], { type: 'application/pdf' }), n);
+  for (const n of names) fd.append('files', new Blob(['%PDF-1.4 fake' + uniq()], { type: 'application/pdf' }), n);
   const r = await api(token, '/invoices', { method: 'POST', body: fd });
   await processor.idle();
   return (await r.json()).created;
@@ -141,7 +154,7 @@ async function email(token, { subject = 'Invoice', file = 'invoice.pdf', text = 
   const r = await fetch(`${base}/inbound/email?key=mailkey`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ From: 'accounts@supplier.com.au', To: addr, ToFull: [{ Email: addr }], Subject: subject, TextBody: text,
-      Attachments: [{ Name: file, ContentType: 'application/pdf', Content: Buffer.from('%PDF-1.4').toString('base64') }] }),
+      Attachments: [{ Name: file, ContentType: 'application/pdf', Content: Buffer.from('%PDF-1.4' + uniq()).toString('base64') }] }),
   }).then((x) => x.json());
   await processor.idle();
   return r;
@@ -347,7 +360,7 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
   assert.equal(inv.source, 'manual');
 
   const fd = new FormData();
-  fd.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'door.pdf');
+  fd.append('file', new Blob(['%PDF-1.4' + uniq()], { type: 'application/pdf' }), 'door.pdf');
   assert.equal((await api(t, `/invoices/${id}/file`, { method: 'POST', body: fd })).status, 200);
   await processor.idle();
   inv = (await summary(t)).invoices.find((i) => i.id === id);
@@ -361,7 +374,7 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
   // A file that can't be read keeps the typed details counted
   const r2 = await (await post(t, '/invoices/manual', { supplier: 'Gate Co', total: 500 })).json();
   const fd2 = new FormData();
-  fd2.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'notinvoice.pdf');
+  fd2.append('file', new Blob(['%PDF-1.4' + uniq()], { type: 'application/pdf' }), 'notinvoice.pdf');
   await api(t, `/invoices/${r2.id}/file`, { method: 'POST', body: fd2 });
   await processor.idle();
   const inv2 = (await summary(t)).invoices.find((i) => i.id === r2.id);
@@ -689,7 +702,7 @@ test('ServiceM8 job diary: whole invoices are copied with a note, shared ones ar
   assert.equal(inv.sm8_job_uuid, 'diary-a');
   assert.ok(diary.files.some((f) => f.uuid === inv.sm8_attachment_uuid && f.job_uuid === 'diary-a'));
   const note = diary.notes.find((n) => n.uuid === inv.sm8_note_uuid);
-  assert.match(note.text, /Door Supplies Pty Ltd invoice #INV-100 added – \$3,000\.00 ex GST/);
+  assert.match(note.text, /Door Supplies Pty Ltd invoice #INV-100[-0-9]* added – \$3,000\.00 ex GST/);
   assert.equal((await summary(tA)).invoices.find((i) => i.id === up).in_diary, true);
   // Nothing more happens on the next run (no copies twice)
   const before = diary.files.length + diary.notes.length;
@@ -714,7 +727,7 @@ test('ServiceM8 job diary: whole invoices are copied with a note, shared ones ar
   assert.equal(inv.sm8_attachment_uuid, null);
   assert.match(diary.notes.find((n) => n.uuid === inv.sm8_note_uuid).text, /typed in, no file/);
   const fd = new FormData();
-  fd.append('file', new Blob(['%PDF-1.4'], { type: 'application/pdf' }), 'receipt.pdf');
+  fd.append('file', new Blob(['%PDF-1.4' + uniq()], { type: 'application/pdf' }), 'receipt.pdf');
   await api(tB, `/invoices/${man.id}/file`, { method: 'POST', body: fd });
   await processor.idle();
   await app.locals.syncDiary();
@@ -844,12 +857,19 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     assert.equal((await post(t, `/suggestions/${door.id}/accept`)).status, 200);
     assert.equal((await summary(t)).invoices.length, 1);
 
-    // The same bill again (number written differently): flagged, with the job the first one is on
-    inbox.push({ id: 'm6', internetMessageId: '<m6@x>', subject: 'Copy of invoice 208777', from: { emailAddress: { address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('invoice.pdf')] });
+    // The same bill emailed again (same supplier, number and amount): not kept, so it can't be paid twice
+    inbox.push({ id: 'm6', internetMessageId: '<m6@x>', subject: 'Copy of invoice 208777', from: { emailAddress: { address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('copy-of-invoice.pdf')] });
     let r6 = await fetch(`${b3}/api/outlook/check`, { method: 'POST', headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     assert.equal(r6.found, 1, 'Check now works');
     await processor.idle();
     let ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
+    assert.ok(!ib.invoices.some((i) => i.supplier === 'Door Supplies Pty Ltd'), 'the exact copy is dropped');
+    assert.ok(repo.db.prepare("SELECT 1 FROM mail_imports WHERE outcome = 'duplicate'").get(), 'the email shows as "already in Job Costs" in the Outlook list');
+    // Same number but a different amount (e.g. an amended invoice): kept, flagged, with the job the first one is on
+    inbox.push({ id: 'm6b', internetMessageId: '<m6b@x>', subject: 'Amended invoice 208777', from: { emailAddress: { address: 'acc@door.com' } }, receivedDateTime: new Date().toISOString(), hasAttachments: true, body: { content: '' }, files: [pdf('amended-copy-of-invoice.pdf')] });
+    await app3.locals.checkOutlook();
+    await processor.idle();
+    ib = await fetch(`${b3}/api/inbox`, { headers: { Authorization: `Bearer ${t}` } }).then((r) => r.json());
     const copy = ib.invoices.find((i) => i.supplier === 'Door Supplies Pty Ltd');
     assert.equal(copy.possible_duplicate.reason, 'same supplier and invoice number');
     assert.deepEqual(copy.possible_duplicate.jobs.map((j) => j.job_number), ['208777']);
@@ -967,8 +987,8 @@ test('upload supplier invoices to the Inbox: the job number on each is found in 
   const t = await openCard('gl-home', 'acc-gl');
   processor.lookupJobs = app.locals.lookupJobs; // other test apps share this processor
   const fd = new FormData();
-  fd.append('files', new Blob(['%PDF-1.4 a'], { type: 'application/pdf' }), 'Tax_Invoice_S667778_ref207835.pdf');
-  fd.append('files', new Blob(['%PDF-1.4 b'], { type: 'application/pdf' }), 'Tax_Invoice_S668018_ref999999.pdf');
+  fd.append('files', new Blob(['%PDF-1.4 a' + uniq()], { type: 'application/pdf' }), 'Tax_Invoice_S667778_ref207835.pdf');
+  fd.append('files', new Blob(['%PDF-1.4 b' + uniq()], { type: 'application/pdf' }), 'Tax_Invoice_S668018_ref999999.pdf');
   const up = await api(t, '/inbox/upload', { method: 'POST', body: fd });
   assert.equal(up.status, 201);
   await processor.idle();
@@ -1072,7 +1092,7 @@ test('statement check: price lists and rules are kept per business; each stateme
     // the invoice, uploaded on the job
     await upload(t, 'Tax_Invoice_S700001_ref209500.pdf');
     // a price list and a rule
-    const fd = new FormData(); fd.append('supplier', 'Gliderol'); fd.append('file', new Blob(['%PDF-1.4 list'], { type: 'application/pdf' }), 'Gliderol 2026.pdf');
+    const fd = new FormData(); fd.append('supplier', 'Gliderol'); fd.append('file', new Blob(['%PDF-1.4 list' + uniq()], { type: 'application/pdf' }), 'Gliderol 2026.pdf');
     assert.equal((await call(t, '/price-lists', { method: 'POST', body: fd })).status, 201);
     assert.equal((await call(t, '/rules', { method: 'POST', json: { text: 'Job 209500: Gliderol bills 1 door only' } })).status, 201);
     const off = await call(t, '/rules', { method: 'POST', json: { text: 'old rule' } }).then((x) => x.json());
@@ -1083,7 +1103,7 @@ test('statement check: price lists and rules are kept per business; each stateme
     assert.equal(theirs.priceLists.length, 0);
     assert.equal(theirs.rules.length, 0);
 
-    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st'], { type: 'application/pdf' }), 'Statement.pdf'); sf.append('date_from', '2026-09-01');
+    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st' + uniq()], { type: 'application/pdf' }), 'Statement.pdf'); sf.append('date_from', '2026-09-01');
     const { id } = await call(t, '/checks', { method: 'POST', body: sf }).then((x) => x.json());
     let c;
     for (let i = 0; i < 50; i++) { c = await call(t, `/checks/${id}`).then((x) => x.json()); if (c.status === 'done' || c.status === 'error') break; await new Promise((r) => setTimeout(r, 20)); }
@@ -1137,7 +1157,7 @@ test('statement check: price lists and rules are kept per business; each stateme
     // one-time rules: one for this invoice, one for another
     const once1 = await call(t, '/rules', { method: 'POST', json: { text: 'S700777: agreed $41 extra for a rush order', kind: 'once', target: 'S700777' } }).then((x) => x.json());
     const once2 = await call(t, '/rules', { method: 'POST', json: { text: 'S999999: free delivery', kind: 'once', target: 'S999999' } }).then((x) => x.json());
-    const ifd = new FormData(); ifd.append('files', new Blob(['%PDF-1.4 inv'], { type: 'application/pdf' }), 'Tax_Invoice_S700777_ref209500.pdf');
+    const ifd = new FormData(); ifd.append('files', new Blob(['%PDF-1.4 inv' + uniq()], { type: 'application/pdf' }), 'Tax_Invoice_S700777_ref209500.pdf');
     await call(t, '/inbox/upload', { method: 'POST', body: ifd });
     await processor.idle();
     let pcInv;
@@ -1168,11 +1188,13 @@ test('statement check: price lists and rules are kept per business; each stateme
     for (let i = 0; i < 50 && repo.getInvoice(joe.id).price_check_status !== 'done'; i++) await new Promise((r) => setTimeout(r, 20));
     assert.equal(repo.getInvoice(joe.id).price_check_status, 'done');
     const prices = await call(t, '/prices').then((x) => x.json());
-    assert.deepEqual([prices.priceLists[0].checked, prices.priceLists[0].flagged], [2, 2], 'the Prices page counts the invoices checked against each list');
+    const s700001 = repo.db.prepare("SELECT price_check_status FROM invoices WHERE invoice_number = 'S700001'").get();
+    assert.equal(s700001.price_check_status, 'done', 'uploaded before its price list: checked once the list was there (when the card opened)');
+    assert.deepEqual([prices.priceLists[0].checked, prices.priceLists[0].flagged], [3, 3], 'the Prices page counts the invoices checked against each list');
 
     // A statement dropped into the Inbox goes to Statement check, "not run yet", instead of disappearing
     processor.onStatement = app5.locals.onStatement; // joe test apps share this processor
-    const sfd = new FormData(); sfd.append('files', new Blob(['%PDF-1.4 statement'], { type: 'application/pdf' }), 'Gliderol Statement October.pdf');
+    const sfd = new FormData(); sfd.append('files', new Blob(['%PDF-1.4 statement' + uniq()], { type: 'application/pdf' }), 'Gliderol Statement October.pdf');
     assert.equal((await call(t, '/inbox/upload', { method: 'POST', body: sfd })).status, 201);
     await processor.idle();
     const home = await call(t, '/checks').then((x) => x.json());
@@ -1237,7 +1259,7 @@ test('statement check: an invoice that isn\u2019t in Job Costs yet is found in O
   try {
     const t = await openCard('chk-job', 'acc-chk');
     repo.saveOutlook('acc-chk', { email: 'accounts@x', accessToken: 'a', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), connectedAt: new Date().toISOString() });
-    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st'], { type: 'application/pdf' }), 'Statement.pdf');
+    const sf = new FormData(); sf.append('statement', new Blob(['%PDF-1.4 st' + uniq()], { type: 'application/pdf' }), 'Statement.pdf');
     const { id } = await fetch(`${b6}/api/checks`, { method: 'POST', headers: { Authorization: `Bearer ${t}` }, body: sf }).then((x) => x.json());
     let c;
     for (let i = 0; i < 200; i++) {
@@ -1277,6 +1299,122 @@ test('a statement check cut short by restarts carries on, but stops after the th
   assert.equal(a2.attempts, 1, 'the other one carries on, counted');
   assert.equal(a2.status, 'error', 'it ran again (and here failed reading)');
   assert.match(a2.error, /boom/);
+});
+
+test('the same bill twice: a new copy is blocked; an unpaid copy of a paid bill is flagged and can’t be paid again', async () => {
+  JOBS['dup-job'] = { jobNumber: '208118', jobTitle: '5 Dup St' };
+  JOBS['dup-job2'] = { jobNumber: '208119', jobTitle: '6 Dup St' };
+  const t = await openCard('dup-job', 'acc-dup');
+  const t2 = await openCard('dup-job2', 'acc-dup');
+
+  // The first copy goes on the job and is paid
+  await upload(t, 'fine-tuned.pdf');
+  const first = (await summary(t)).invoices[0];
+  assert.equal(first.status, 'ready');
+  assert.equal((await api(t, `/invoices/${first.id}`, { method: 'PATCH', json: { paid: true } })).status, 200);
+  // The same bill uploaded again on another job: kept out of the costs, with where the first one is
+  await upload(t2, 'copy-of-fine-tuned.pdf');
+  let s2 = await summary(t2);
+  assert.equal(s2.invoices.length, 1, 'shown on the card it was uploaded on, so it can be deleted');
+  assert.equal(s2.invoices[0].status, 'error');
+  assert.match(s2.invoices[0].error, /^Duplicate – not added\. .*already in Job Costs on job #208118, already PAID .*same supplier, invoice number and amount/);
+  assert.equal(s2.totals.total, 0, 'not counted');
+  // The identical file again: blocked before it's even read
+  const same = () => { const fd = new FormData(); fd.append('files', new Blob(['%PDF-1.4 the very same file'], { type: 'application/pdf' }), 'scan.pdf'); return fd; };
+  await api(t, '/invoices', { method: 'POST', body: same() }); await processor.idle();
+  await api(t2, '/invoices', { method: 'POST', body: same() }); await processor.idle();
+  s2 = await summary(t2);
+  const blocked = s2.invoices.find((i) => i.file_name === 'scan.pdf');
+  assert.match(blocked.error, /on job #208118.*\(the same file\)/);
+  assert.equal(repo.db.prepare('SELECT COUNT(*) AS n FROM items WHERE invoice_id = ?').get(blocked.id).n, 0, 'not read: no lines');
+
+  // Copies that got in before this check: the paid one counts, the unpaid one is flagged
+  const add = (supplier, number, paid) => {
+    const inv = repo.createInvoice({ accountUUID: 'acc-dup', source: 'upload' });
+    repo.saveExtraction(inv.id, { supplier_name: supplier, invoice_number: number, total: 3500, tax: 318.18, subtotal: 3181.82, items: [{ description: 'Electrical work', category: 'subcontractor', line_total: 3181.82 }] });
+    repo.assignWhole(inv.id, 'dup-job', { category: 'subcontractor' });
+    if (paid) repo.setInvoicePaid(inv.id, true);
+    return inv.id;
+  };
+  const unpaidId = add('Fine Tuned Electrical', '4650', false);
+  const paidId = add('Fine Tuned Electrical Pty Ltd', 'INV-004650', true); // name and number written differently
+  const s = await summary(t);
+  const unpaid = s.invoices.find((i) => i.id === unpaidId);
+  const paidCopy = s.invoices.find((i) => i.id === paidId);
+  assert.equal(unpaid.duplicate_of, paidId, 'the unpaid copy is the duplicate');
+  assert.equal(unpaid.twin.paid, true);
+  assert.equal(paidCopy.duplicate_of, null, 'the paid copy counts');
+  assert.equal(Math.round(s.invoices.filter((i) => !i.duplicate_of && i.status === 'ready').reduce((a, i) => a + i.job_total, 0) * 100),
+    Math.round((s.totals.total) * 100), 'the bill is counted once');
+  // It can't be marked paid again, by itself or in bulk
+  const r = await api(t, `/invoices/${unpaidId}`, { method: 'PATCH', json: { paid: true } });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).error, /already PAID/);
+  const bills = await json(t, '/bills');
+  assert.equal((bills.bills || bills).find((b) => b.id === unpaidId).twin.id, paidId, 'the Bills page warns');
+  const bulk = await post(t, '/bills/paid', { ids: [unpaidId], paid: true }).then((x) => x.json());
+  assert.deepEqual([bulk.updated, bulk.skipped.length], [0, 1]);
+  assert.equal(repo.twinOf(repo.getInvoice(unpaidId)).paid, true);
+  assert.equal(repo.getInvoice(unpaidId) && repo.db.prepare('SELECT SUM(paid) AS p FROM items WHERE invoice_id = ?').get(unpaidId).p, 0, 'still unpaid');
+  // a different amount is a different bill
+  const other = add('Fine Tuned Electrical', '4651', false);
+  assert.equal(repo.twinOf(repo.getInvoice(other)), null);
+});
+
+test('statement check flags show on the job card until marked resolved', async () => {
+  JOBS['flag-job'] = { jobNumber: '208264', jobTitle: '8 Flag St' };
+  const t = await openCard('flag-job', 'acc-flag');
+  const inv = repo.createInvoice({ accountUUID: 'acc-flag', source: 'upload' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Gliderol International Pty Ltd', invoice_number: 'S678034', total: 294, tax: 26.73, subtotal: 267.27, items: [{ description: 'Super Closer', category: 'materials', line_total: 267.27 }] });
+  repo.assignWhole(inv.id, 'flag-job', { category: 'materials' });
+  const done = (verdict, extra = {}) => {
+    const c = repo.createCheck('acc-flag', { fileName: 's.pdf', filePath: 's.pdf' });
+    repo.updateCheck(c.id, { status: 'done', supplier: 'Gliderol International Pty Ltd', statement_date: '2026-10-31', finished_at: new Date().toISOString(),
+      matched: [{ reference: 'S678034', type: 'invoice', amount: 294, invoice: { id: inv.id, paid: false }, jobs: [] }],
+      result: { invoices: [{ reference: 'S678034', verdict, headline: 'Super Closer $84 above the list', difference_ex_gst: 84 }] }, reconcile: { amount_mismatches: [] }, ...extra });
+    return c.id;
+  };
+  const checkId = done('problem');
+  let s = await summary(t);
+  let f = s.invoices.find((i) => i.id === inv.id).check_flag;
+  assert.equal(f.verdict, 'problem');
+  assert.equal(f.check_id, checkId);
+  assert.match(f.headline, /Super Closer/);
+  assert.equal(f.difference_ex_gst, 84);
+  // another business never sees it
+  const other = await openCard('job-a', 'acc-1');
+  assert.equal((await post(other, `/checks/${checkId}/resolve`, { reference: 'S678034' })).status, 404);
+  // sorted out with the supplier: gone from the card, kept on the check
+  assert.equal((await post(t, `/checks/${checkId}/resolve`, { reference: 'S678034', note: 'credit note coming' })).status, 200);
+  s = await summary(t);
+  assert.equal(s.invoices.find((i) => i.id === inv.id).check_flag, null);
+  assert.equal(repo.getCheck('acc-flag', checkId).resolved.S678034.note, 'credit note coming');
+  // a later check decides: OK clears, a new problem shows again
+  done('problem');
+  assert.ok((await summary(t)).invoices.find((i) => i.id === inv.id).check_flag);
+  done('ok');
+  assert.equal((await summary(t)).invoices.find((i) => i.id === inv.id).check_flag, null);
+  // the amounts not matching is always a problem
+  done('ok', { reconcile: { amount_mismatches: [{ reference: 'S678034', on_statement: 300, in_job_costs: 294, difference: 6 }] } });
+  f = (await summary(t)).invoices.find((i) => i.id === inv.id).check_flag;
+  assert.deepEqual([f.verdict, f.amount_mismatch.on_statement], ['problem', 300]);
+});
+
+test('sent to stock by mistake: move the whole invoice onto its job from the Inbox', async () => {
+  JOBS['mv-job'] = { jobNumber: '208400', jobTitle: '3 Move St' };
+  const t = await openCard('mv-job', 'acc-mv');
+  const inv = repo.createInvoice({ accountUUID: 'acc-mv', source: 'upload' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Merlin', invoice_number: 'M-400', total: 1100, tax: 100, subtotal: 1000, items: [{ description: 'Motor', quantity: 5, line_total: 1000, category: 'materials' }] });
+  assert.equal((await post(t, `/inbox/${inv.id}/stock`)).status, 200);
+  let ib = await json(t, '/inbox');
+  assert.ok(ib.invoices.find((i) => i.id === inv.id).kept_as_stock, 'in Stock & leftovers');
+  const r = await post(t, `/inbox/${inv.id}/assign`, { job_number: '208400' });
+  assert.equal(r.status, 200);
+  const s = await summary(t);
+  assert.ok(s.invoices.some((i) => i.id === inv.id && i.whole), 'a cost on the job');
+  assert.equal(repo.getInvoice(inv.id).kept_as_stock, 0, 'not stock any more');
+  ib = await json(t, '/inbox');
+  assert.ok(!ib.invoices.some((i) => i.id === inv.id), 'gone from Stock & leftovers');
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

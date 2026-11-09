@@ -191,6 +191,19 @@ function invoiceCategory(items) {
 }
 
 /** Invoice total without GST (no GST shown = nothing to take off). */
+// "Fine Tuned Electrical Pty Ltd" and "Fine Tuned Electrical" are the same supplier
+function supplierKey(s) {
+  return String(s || '').toLowerCase().replace(/&/g, ' and ').split(/[^a-z0-9]+/)
+    .filter((w) => w && !['pty', 'ltd', 'limited', 'the', 'p', 'l', 'inc', 'co', 'trust', 'trading', 'as', 't', 'a'].includes(w)).join(' ');
+}
+function sameSupplier(a, b) {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(b + ' ') || b.startsWith(a + ' ');
+}
+// "INV-0004650" and "4650" are the same invoice number
+function invoiceNumberKey(n) {
+  return String(n).replace(/\D/g, '').replace(/^0+/, '') || String(n).toLowerCase().replace(/[^0-9a-z]/g, '');
+}
 function exGst(total, tax) {
   if (total == null || !isFinite(total)) return total;
   return round2(Number(total) - (Number(tax) || 0));
@@ -327,6 +340,7 @@ function migrateColumns(db) {
   // Price check of the invoice against the supplier's / subcontractor's price list
   add('price_check', 'TEXT');          // JSON: the result
   add('price_check_status', 'TEXT');   // checking | done | error | none (no price list)
+  add('file_hash', 'TEXT');            // sha256 of the file: the same PDF twice is the same bill
   // Rules: "always", or "once" (optionally for one invoice number), switched off after the check that used it
   for (const [c, t] of [['kind', "TEXT NOT NULL DEFAULT 'always'"], ['target', 'TEXT'], ['used_at', 'TEXT'], ['used_on', 'TEXT']]) {
     if (!cols(db, 'check_rules').includes(c)) db.exec(`ALTER TABLE check_rules ADD COLUMN ${c} ${t}`);
@@ -336,6 +350,7 @@ function migrateColumns(db) {
   for (const c of ['progress', 'progress_at', 'started_at']) if (!cols(db, 'statement_checks').includes(c)) db.exec(`ALTER TABLE statement_checks ADD COLUMN ${c} TEXT`);
   if (!cols(db, 'mail_imports').includes('check_id')) db.exec('ALTER TABLE mail_imports ADD COLUMN check_id INTEGER'); // a statement: which check it went to
   if (!cols(db, 'statement_checks').includes('reconcile')) db.exec('ALTER TABLE statement_checks ADD COLUMN reconcile TEXT'); // money cross-checks
+  if (!cols(db, 'statement_checks').includes('resolved')) db.exec('ALTER TABLE statement_checks ADD COLUMN resolved TEXT'); // JSON: flags sorted out, by invoice reference
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
   for (const c of ['sm8_access_token', 'sm8_refresh_token', 'sm8_expires_at']) {
@@ -637,7 +652,8 @@ function createRepo(db, dataDir) {
     getCheck(accountUUID, id) {
       const c = db.prepare('SELECT * FROM statement_checks WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '');
       if (!c) return null;
-      return { ...c, statement: parseJson(c.statement, null), matched: parseJson(c.matched, null), result: parseJson(c.result, null), reconcile: parseJson(c.reconcile, null) };
+      return { ...c, statement: parseJson(c.statement, null), matched: parseJson(c.matched, null), result: parseJson(c.result, null), reconcile: parseJson(c.reconcile, null),
+        resolved: parseJson(c.resolved, null) || {} };
     },
     listChecks(accountUUID) {
       return db.prepare(`SELECT id, status, file_name, supplier, statement_date, date_from, date_to, error, created_at, finished_at,
@@ -646,9 +662,49 @@ function createRepo(db, dataDir) {
     },
     updateCheck(id, fields) {
       const cols = { ...fields };
-      for (const k of ['statement', 'matched', 'result', 'reconcile']) if (cols[k] !== undefined && cols[k] !== null && typeof cols[k] !== 'string') cols[k] = JSON.stringify(cols[k]);
+      for (const k of ['statement', 'matched', 'result', 'reconcile', 'resolved']) if (cols[k] !== undefined && cols[k] !== null && typeof cols[k] !== 'string') cols[k] = JSON.stringify(cols[k]);
       const keys = Object.keys(cols);
       if (keys.length) db.prepare(`UPDATE statement_checks SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => cols[k]), id);
+    },
+    /** Mark a statement-check flag as sorted out (or not), e.g. "Gliderol credited the $84". */
+    resolveCheckFlag(accountUUID, id, reference, { resolved = true, note = null } = {}) {
+      const c = repo.getCheck(accountUUID, id);
+      if (!c || !(c.matched || []).some((m) => m.reference === reference)) return false;
+      const r = { ...c.resolved };
+      if (resolved) r[reference] = { at: new Date().toISOString(), note: note || null }; else delete r[reference];
+      repo.updateCheck(c.id, { resolved: r });
+      return true;
+    },
+    /**
+     * Problems the statement checks found on these invoices, not yet marked resolved.
+     * The latest check that looked at an invoice decides (an OK on a later run clears an earlier flag).
+     */
+    checkFlagsFor(accountUUID, invoiceIds) {
+      const want = new Set(invoiceIds.map(Number));
+      const out = new Map();
+      if (!want.size) return out;
+      const decided = new Set();
+      const checks = db.prepare(`SELECT id, supplier, statement_date, created_at, finished_at, matched, result, reconcile, resolved FROM statement_checks
+        WHERE account_key = ? AND status = 'done' ORDER BY id DESC LIMIT 200`).all(accountUUID ?? '');
+      for (const c of checks) {
+        const matched = parseJson(c.matched, null) || [];
+        const result = parseJson(c.result, null) || {};
+        const rc = parseJson(c.reconcile, null) || {};
+        const resolved = parseJson(c.resolved, null) || {};
+        const byRef = new Map((result.invoices || []).map((x) => [String(x.reference).toLowerCase(), x]));
+        for (const m of matched) {
+          const id = m.invoice && m.invoice.id;
+          if (!id || !want.has(id) || decided.has(id) || m.type === 'credit') continue;
+          decided.add(id);
+          const v = byRef.get(String(m.reference).toLowerCase()) || {};
+          const mismatch = (rc.amount_mismatches || []).find((x) => x.reference === m.reference) || null;
+          const verdict = mismatch ? 'problem' : v.verdict;
+          if (!['problem', 'check'].includes(verdict) || resolved[m.reference]) continue;
+          out.set(id, { check_id: c.id, supplier: c.supplier, statement_date: c.statement_date, checked_at: c.finished_at || c.created_at, reference: m.reference,
+            verdict, headline: v.headline || '', price: v.price || '', job: v.job || '', difference_ex_gst: v.difference_ex_gst ?? null, amount_mismatch: mismatch });
+        }
+      }
+      return out;
     },
     deleteCheck(accountUUID, id) {
       const c = repo.getCheck(accountUUID, id);
@@ -910,6 +966,7 @@ function createRepo(db, dataDir) {
           total: i.total, total_ex: exGst(i.total, i.tax), file_path: i.file_path, mime_type: i.mime_type, source: i.source,
           jobs: jobs.get(i.id) || [], in_stock: !!i.kept_as_stock, paid_at: p.at || null,
           payment_state: !p.n ? 'unpaid' : p.p >= p.n ? 'paid' : p.p > 0 ? 'part' : 'unpaid',
+          twin: p.p >= p.n && p.n ? null : (() => { const t = repo.twinOf(i, invs); return t && t.paid ? t : null; })(),
         };
       });
     },
@@ -987,6 +1044,8 @@ function createRepo(db, dataDir) {
     assignWhole(invoiceId, jobUUID, fields = {}) {
       if (repo.isStockJob(jobUUID)) { repo.linkToStock(invoiceId, jobUUID); return; }
       tx(() => {
+        // a whole invoice moved out of stock onto a job is that job's cost, not stock any more
+        if (!repo.jobsOnInvoice(invoiceId).length) db.prepare('UPDATE invoices SET kept_as_stock = 0, stock_job_uuid = NULL WHERE id = ?').run(invoiceId);
         for (const it of db.prepare('SELECT id FROM items WHERE invoice_id = ?').all(invoiceId)) {
           const left = repo.leftOf(it.id);
           if (left > EPS) repo.addShare(it.id, jobUUID, left, fields);
@@ -1135,6 +1194,36 @@ function createRepo(db, dataDir) {
       return { id: match.id, invoice_number: match.invoice_number, reason, jobs, in_stock: !!match.kept_as_stock, in_inbox: !jobs.length && !match.kept_as_stock };
     },
 
+    /**
+     * The same bill already in Job Costs: the identical file, or the same supplier, invoice number and amount.
+     * Says whether that copy is paid and where it is. Used to stop a second copy coming in, and to flag old ones.
+     */
+    twinOf(inv, pool = null) {
+      if (!inv) return null;
+      const others = pool ? pool.filter((o) => o.id !== inv.id && o.status === 'ready')
+        : db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND id != ? AND status = 'ready'`).all(inv.account_uuid, inv.id);
+      let match = inv.file_hash ? others.find((o) => o.file_hash === inv.file_hash) : null;
+      let reason = match ? 'the same file' : null;
+      if (!match && inv.supplier && inv.invoice_number && inv.total != null) {
+        const sup = supplierKey(inv.supplier); const num = invoiceNumberKey(inv.invoice_number);
+        match = others.find((o) => o.invoice_number && o.total != null && invoiceNumberKey(o.invoice_number) === num
+          && Math.abs(Math.round(o.total * 100) - Math.round(inv.total * 100)) <= 1 && sameSupplier(supplierKey(o.supplier), sup));
+        if (match) reason = 'same supplier, invoice number and amount';
+      }
+      if (!match) return null;
+      const p = db.prepare('SELECT COUNT(*) AS n, SUM(paid) AS p, MAX(paid_at) AS at FROM items WHERE invoice_id = ?').get(match.id);
+      const jobs = repo.jobsOnInvoice(match.id).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number }));
+      return { id: match.id, supplier: match.supplier, invoice_number: match.invoice_number, total: match.total, reason,
+        paid: p.n > 0 && p.p >= p.n, paid_at: p.n > 0 && p.p >= p.n ? p.at : null, jobs, in_stock: !!match.kept_as_stock };
+    },
+    /** A second copy that came in: kept out of the costs, with the reason shown (Delete removes it). */
+    blockDuplicate(id, message) {
+      db.prepare("UPDATE invoices SET status = 'error', error = ? WHERE id = ?").run(String(message).slice(0, 500), id);
+    },
+    setFileHash(id, hash) {
+      db.prepare('UPDATE invoices SET file_hash = ? WHERE id = ?').run(hash, id);
+    },
+
     keepAsStock(invoiceId) {
       db.prepare('UPDATE invoices SET kept_as_stock = 1, suggested_job_uuid = NULL, suggestion_reason = NULL WHERE id = ?').run(invoiceId);
     },
@@ -1175,7 +1264,7 @@ function createRepo(db, dataDir) {
       // Invoices with a share on this job, plus uploads from this job still being read.
       const invoices = db.prepare(`SELECT * FROM invoices
           WHERE id IN (SELECT items.invoice_id FROM allocations JOIN items ON items.id = allocations.item_id WHERE allocations.job_uuid = ?)
-             OR (origin_job_uuid = ? AND NOT EXISTS (SELECT 1 FROM items WHERE items.invoice_id = invoices.id))
+             OR (origin_job_uuid = ? AND (status = 'error' OR NOT EXISTS (SELECT 1 FROM items WHERE items.invoice_id = invoices.id)))
           ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC`).all(jobUUID, jobUUID);
       const ids = invoices.map((i) => i.id);
       const items = ids.length ? db.prepare(`SELECT * FROM items WHERE invoice_id IN (${ids.join(',')}) ORDER BY position, id`).all() : [];
@@ -1208,10 +1297,19 @@ function createRepo(db, dataDir) {
         }
         const total = round2(lines.reduce((s, l) => s + l.cost, 0));
         const paid = round2(lines.filter((l) => l.paid).reduce((s, l) => s + l.cost, 0));
-        let duplicateOf = null;
-        if (inv.status === 'ready' && inv.invoice_number) {
-          const key = `${(inv.supplier || '').toLowerCase()}|${inv.invoice_number.toLowerCase()}`;
-          if (seen.has(key)) duplicateOf = seen.get(key); else seen.set(key, inv.id);
+        let duplicateOf = null; let twin = null;
+        if (inv.status === 'ready') {
+          // the same bill twice: the paid copy counts (or the first one); the other is flagged and not counted
+          const t = repo.twinOf(inv);
+          if (t) {
+            const mePaid = all.length > 0 && all.every((it) => it.paid);
+            const keepOther = t.paid !== mePaid ? t.paid : t.id < inv.id;
+            if (keepOther) { duplicateOf = t.id; twin = t; }
+          }
+          if (!duplicateOf && inv.invoice_number) {
+            const key = `${supplierKey(inv.supplier)}|${invoiceNumberKey(inv.invoice_number)}`;
+            if (seen.has(key)) duplicateOf = seen.get(key); else seen.set(key, inv.id);
+          }
         }
         if (inv.status === 'processing') totals.processing++;
         if (inv.status === 'error') totals.errors++;
@@ -1260,7 +1358,7 @@ function createRepo(db, dataDir) {
           mistake_state: !lines.length || !lines.some((l) => l.mistake_reason) ? 'none' : lines.every((l) => l.mistake_reason) ? 'all' : 'part',
           // Paid is about the supplier's bill, so it looks at every line of the invoice.
           payment_state: !all.length ? 'unpaid' : all.every((l) => l.paid) ? 'paid' : all.some((l) => l.paid) ? 'part' : 'unpaid',
-          duplicate_of: duplicateOf,
+          duplicate_of: duplicateOf, twin,
         };
       });
 

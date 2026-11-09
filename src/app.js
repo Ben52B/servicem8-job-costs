@@ -10,6 +10,7 @@ const outlook = require('./outlook');
 const { verifyEvent, fetchJob, fetchActiveJobs, looksLikeStockJob } = sm8;
 const { inboxAddress, codesFromAddresses, parseInboundEmail } = require('./inbound');
 const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer');
+const { duplicateMessage } = require('./processor');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
@@ -720,8 +721,24 @@ window.addEventListener('message', function (e) {
   // After any change, the diary copier takes a look (it only acts on invoices flagged for it).
   api.use((req, res, next) => { if (req.method !== 'GET') res.on('finish', kickDiary); next(); });
 
+  // Invoices that came in before their supplier's price list (or before price checks existed) get checked now.
+  const PRICE_CHECK_BATCH = 30;
+  function priceCheckUnchecked(account, invoices) {
+    let n = 0;
+    for (const inv of invoices) {
+      if (n >= PRICE_CHECK_BATCH) break;
+      if (inv.status !== 'ready' || inv.duplicate_of || (inv.price_check_status && inv.price_check_status !== 'none')) continue;
+      if (!repo.priceListFor(account, inv.supplier)) continue;
+      if (priceCheck(inv.id, { auto: true }).started) { inv.price_check_status = 'checking'; n++; } // the card shows "Checking…" and polls
+    }
+    return n;
+  }
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
+    if (checker) priceCheckUnchecked(req.account, summary.invoices || []);
+    // what the statement checks found on this job's invoices (until marked resolved)
+    const flags = repo.checkFlagsFor(req.account, (summary.invoices || []).map((i) => i.id));
+    for (const i of summary.invoices || []) i.check_flag = flags.get(i.id) || null;
     const acc = repo.ensureAccount(req.account);
     const note = sm8Notes.get(req.job.job_uuid) || null;
     res.json({ ...summary, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
@@ -758,6 +775,14 @@ window.addEventListener('message', function (e) {
    *   { invoice_id, category?, mistake_reason? }              -> everything still left on that invoice
    *   { item_id, quantity | amount, category?, mistake_reason? } -> part of one line, added to what this job has
    */
+  // A new copy of a bill that's already in Job Costs can't go on a job (it could get paid twice).
+  const twinBlocks = (res, inv) => {
+    if (inv.kept_as_stock || repo.jobsOnInvoice(inv.id).length) return false;
+    const t = repo.twinOf(inv);
+    if (!t) return false;
+    res.status(409).json({ error: duplicateMessage(t), duplicate: t });
+    return true;
+  };
   api.post('/assign', (req, res) => {
     const b = req.body || {};
     const c = parseCategory(b.category);
@@ -768,6 +793,7 @@ window.addEventListener('message', function (e) {
       const inv = accountInvoice(req, res, b.invoice_id);
       if (!inv) return;
       if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+      if (twinBlocks(res, inv)) return;
       const untouched = !repo.jobsOnInvoice(inv.id).length && !inv.kept_as_stock;
       repo.assignWhole(inv.id, req.job.job_uuid, fields);
       if (untouched) repo.markApproved(inv.id, repo.isStockJob(req.job.job_uuid) ? null : req.job.job_uuid);
@@ -829,6 +855,10 @@ window.addEventListener('message', function (e) {
     if (m.error || c.error) return res.status(400).json({ error: m.error || c.error });
     const t = total === undefined || total === '' ? undefined : Number(total);
     if (t !== undefined && !isFinite(t)) return res.status(400).json({ error: 'Total must be a number' });
+    if (paid === true && !req.body.force) {
+      const t = repo.twinOf(inv);
+      if (t && t.paid) return res.status(409).json({ error: `Not marked paid: ${duplicateMessage(t).replace(/^Duplicate – not added\. /, '')}`.replace(/ Delete this copy\.$/, ' Delete this copy instead of paying it again.'), duplicate: t });
+    }
     if (typeof paid === 'boolean') repo.setInvoicePaid(inv.id, paid);
     // Type and screw-up apply to this job's share of the invoice.
     if (!m.skip) repo.setInvoiceShareFields(inv.id, req.job.job_uuid, { mistake_reason: m.reason });
@@ -1067,6 +1097,7 @@ window.addEventListener('message', function (e) {
   api.post('/suggestions/:id/accept', (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
+    if (twinBlocks(res, inv)) return;
     repo.assignWhole(inv.id, req.job.job_uuid, { category: inv.category });
     repo.markApproved(inv.id, repo.isStockJob(req.job.job_uuid) ? null : req.job.job_uuid);
     if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
@@ -1100,6 +1131,7 @@ window.addEventListener('message', function (e) {
     const c = parseCategory(req.body?.category);
     if (c.error) return res.status(400).json({ error: c.error });
     if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    if (twinBlocks(res, inv)) return;
     repo.assignWhole(inv.id, job.job_uuid, { category: c.category || inv.category });
     repo.markApproved(inv.id, job.is_stock ? null : job.job_uuid);
     if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
@@ -1237,14 +1269,15 @@ window.addEventListener('message', function (e) {
   api.post('/bills/paid', (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter(Number.isInteger).slice(0, 500) : [];
     if (!ids.length || typeof req.body?.paid !== 'boolean') return res.status(400).json({ error: 'Choose invoices first' });
-    let n = 0;
+    let n = 0; const skipped = []; // copies of a bill that's already paid
     for (const id of ids) {
       const inv = repo.getInvoice(id);
       if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
+      if (req.body.paid) { const t = repo.twinOf(inv); if (t && t.paid) { skipped.push({ id, invoice_number: inv.invoice_number, twin: t }); continue; } }
       repo.setInvoicePaid(id, req.body.paid);
       n++;
     }
-    res.json({ ok: true, updated: n });
+    res.json({ ok: true, updated: n, skipped });
   });
 
   // ---------- Statement check: price lists, rules, checks ----------
@@ -1286,7 +1319,15 @@ window.addEventListener('message', function (e) {
     if (!req.file || !pdfOrPhoto(req.file)) return res.status(400).json({ error: 'Choose the price list (PDF or photo)' });
     const p = repo.addPriceList(req.account, { supplier, name: req.file.originalname, mimeType: guessMime(req.file.originalname, req.file.mimetype),
       filePath: saveFile(path.join(folderFor(req.account), 'price-lists'), req.file.originalname, req.file.buffer) });
-    res.status(201).json({ id: p.id });
+    // check this supplier's unpaid invoices that haven't been checked yet (newest first)
+    let queued = 0;
+    if (checker) {
+      const unchecked = repo.db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND status = 'ready' AND (price_check_status IS NULL OR price_check_status = 'none')
+          AND EXISTS (SELECT 1 FROM items WHERE items.invoice_id = invoices.id AND items.paid = 0) ORDER BY COALESCE(invoice_date, created_at) DESC LIMIT 200`).all(req.account)
+        .filter((i) => { const pl = repo.priceListFor(req.account, i.supplier); return pl && pl.id === p.id; });
+      queued = priceCheckUnchecked(req.account, unchecked);
+    }
+    res.status(201).json({ id: p.id, queued });
   });
   api.get('/price-lists/:id/file', (req, res) => {
     const p = repo.getPriceList(req.account, req.params.id);
@@ -1351,6 +1392,11 @@ window.addEventListener('message', function (e) {
   });
   api.delete('/checks/:id', (req, res) => (repo.deleteCheck(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
   // Mark the invoices of a check paid: { references: [...] } (or all the ones found in Job Costs).
+  api.post('/checks/:id/resolve', (req, res) => {
+    const ref = String(req.body?.reference || '');
+    const ok = repo.resolveCheckFlag(req.account, req.params.id, ref, { resolved: req.body?.resolved !== false, note: String(req.body?.note || '').trim().slice(0, 500) || null });
+    return ok ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' });
+  });
   api.post('/checks/:id/mark-paid', (req, res) => {
     const c = repo.getCheck(req.account, req.params.id);
     if (!c || !c.matched) return res.status(404).json({ error: 'Not found' });
@@ -1362,6 +1408,7 @@ window.addEventListener('message', function (e) {
       done.add(m.invoice.id);
       const inv = repo.getInvoice(m.invoice.id);
       if (!inv || (inv.account_uuid ?? null) !== req.account) continue;
+      const t = repo.twinOf(inv); if (t && t.paid) continue; // a copy of a bill that's already paid
       repo.setInvoicePaid(inv.id, true);
       n++;
     }

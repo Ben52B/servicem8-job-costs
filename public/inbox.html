@@ -142,7 +142,7 @@ function renderImport() {
       <button class="small" data-open-folder="${esc(f.id)}" data-name="${esc(f.name)}">Open ›</button></div>`).join('');
   const pickable = imp.messages.filter((m) => !m.status || m.status === 'new');
   // What became of each email: only ones really in Job Costs are greyed out
-  const WHY = { quote: 'a quote', statement: 'a statement', remittance: 'a remittance', not_invoice: 'not an invoice', nothing: 'no PDF or invoice in it', not_kept: 'nothing kept from it' };
+  const WHY = { quote: 'a quote', statement: 'a statement', remittance: 'a remittance', not_invoice: 'not an invoice', nothing: 'no PDF or invoice in it', not_kept: 'nothing kept from it', duplicate: 'already in Job Costs' };
   const badge = (m) => ({
     imported: '<span class="chip c-proc">✓ in Job Costs</span>',
     statement: '<span class="chip" style="background:#eef2ff;color:#3730a3">📄 in Statement check</span>',
@@ -218,7 +218,9 @@ function render() {
     h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.left_amount)} left</span></div>
       <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), 'invoice total ' + money(i.total), i.stock_job && 'stock order #' + i.stock_job.job_number].filter(Boolean).join(' · '))}</div>
       ${i.lines.map((l) => `<div style="margin-top:6px"><b>${esc(l.description)}</b><div class="trace">${l.trace.jobs.map((j) => `<span title="${esc(j.job_title || '')}">#${esc(j.job_number || '?')} ${l.trace.quantity ? '×' + qty(j.quantity) : money(j.amount)}</span>`).join('')}<span class="left">${l.trace.quantity ? `${qty(l.trace.left_quantity)} of ${qty(l.trace.quantity)} left` : `${money(l.trace.left_amount)} left`}</span></div></div>`).join('')}</div>
-      <div class="acts">${fileLink(i)}<span class="muted" style="font-size:12px">Take items from a job's<br>＋ Add costs window</span></div></div>`;
+      <div class="acts">${fileLink(i)}${i.untouched
+        ? `${jobBox(i.id, false).replace(/(data-assign-pick="[^"]*"[^>]*>)[^<]*/, '$1Move to job')}<span class="muted" style="font-size:12px">Nothing used yet: move it onto a job as its cost,<br>or take items from a job's ＋ Add costs window</span>`
+        : '<span class="muted" style="font-size:12px">Take items from a job\'s<br>＋ Add costs window</span>'}</div></div>`;
   }
   h += `<datalist id="jobList">${data.jobs.map((j) => `<option value="${esc(j.job_number)}">${esc([j.job_title, j.is_stock ? 'stock order' : '', j.sm8_status && j.sm8_status !== 'Work Order' ? j.sm8_status : ''].filter(Boolean).join(' · '))}</option>`).join('')}</datalist>`;
   $('#content').innerHTML = h;
