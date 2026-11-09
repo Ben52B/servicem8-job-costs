@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{NAME}} Help</title>
+<style>
+  :root { --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --bg: #f4f7f6; --brand: #059669; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 60px; background: #fff; }
+  h1 { font-size: 28px; margin: 0 0 4px; } h2 { font-size: 20px; margin: 30px 0 6px; padding-top: 10px; border-top: 1px solid var(--line); } h3 { font-size: 16px; margin: 16px 0 4px; }
+  .muted { color: var(--muted); } nav a { color: var(--brand); } nav { columns: 2; font-size: 14px; margin: 10px 0; } nav a { display: block; }
+  .tip { background: #f0fdf7; border: 1px solid #c8eedd; border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+  @media (max-width: 600px) { nav { columns: 1; } }
+</style>
+</head>
+<body><main>
+<h1>{{NAME}} Help</h1>
+<p class="muted">Supplier and subcontractor bills, paid or not, and what each ServiceM8 job really cost. Works in the ServiceM8 online dashboard and in the ServiceM8 iPhone and iPad app. Questions: {{EMAIL}}.</p>
+<nav>
+  <a href="#start">Getting started</a><a href="#where">Where to find it</a><a href="#compact">The compact window</a><a href="#card">A job's costs</a>
+  <a href="#inbox">The Inbox</a><a href="#email">Getting invoices in by email</a><a href="#bills">Bills</a><a href="#stock">Stock</a>
+  <a href="#prices">Price lists and rules</a><a href="#statement">Statement check</a><a href="#reports">Reports</a><a href="#diary">The job diary</a>
+  <a href="#settings">Settings</a><a href="#plan">Plans</a><a href="#data">Your data and disconnecting</a><a href="#faq">Common questions</a>
+</nav>
+
+<h2 id="start">Getting started</h2>
+<ol>
+<li>Install {{NAME}} from the ServiceM8 Add-on Store and click <b>Connect</b>. ServiceM8 asks you to approve what the add-on can see (jobs, clients, job lines and the job diary). Approve it.</li>
+<li>Open any job and click <b>{{NAME}}</b>. The first time, a banner offers <b>Set up {{NAME}}</b>: three short steps.
+  <ol><li><b>Your business</b>: its name and what it does (e.g. "garage door installation business") – this helps when reading invoices and checking prices.</li>
+  <li><b>Where your invoices arrive</b>: connect Outlook / Microsoft 365, or Gmail or another mailbox, or use your {{NAME}} email address (see <a href="#email">email</a>).</li>
+  <li><b>Price lists</b> (optional): upload a supplier's price list so their invoices are checked against it.</li></ol></li>
+<li>That's it. New invoices are read automatically and wait in the <b>📥 Inbox</b> with a suggested job.</li>
+</ol>
+<p class="tip">You can skip any step and come back to it in ⚙ Settings.</p>
+
+<h2 id="where">Where to find it</h2>
+<ul>
+<li><b>On a job</b> (online dashboard and the iPhone/iPad app): the <b>{{NAME}}</b> button on the job card opens that job's costs.</li>
+<li><b>The Add-ons menu</b> (online) and the <b>More</b> tab (app): opens the {{NAME}} home page for your whole business – what's waiting in the Inbox, what's left to pay, warnings before you pay, stock, and a box to open any job by its number.</li>
+</ul>
+
+<h2 id="compact">The compact window</h2>
+<p>Clicking {{NAME}} on a job first shows a small summary: profit so far (job price minus costs), costs ex GST, what's still to pay, screw-ups, the bills on the job, and any warnings (a bill flagged by a statement check, or a bill that's in twice). Invoices suggested for this job can be added with one click (tick <b>Paid</b> first if it's already paid). <b>Open full {{NAME}}</b> opens everything below.</p>
+
+<h2 id="card">A job's costs</h2>
+<h3>Adding costs</h3>
+<ul>
+<li><b>＋ Add costs</b>: pick an invoice waiting in the Inbox or in stock, upload a file, or type one in by hand. Take the whole invoice, or only some lines or quantities (e.g. 3 of 10 openers) – the rest stays for other jobs.</li>
+<li>Drop a PDF or photo onto the list, or attach one to a typed-in invoice.</li>
+</ul>
+<h3>Each invoice</h3>
+<ul>
+<li><b>Paid</b>: tick when it's paid (it's paid for the whole bill, even when shared between jobs).</li>
+<li><b>Type</b> (materials, subcontractor, freight…) and <b>⚠ Screw-up</b>: tag a cost caused by a mistake, with a reason, to see what mistakes cost.</li>
+<li><b>💲 Price check</b>: a one-line result under the invoice ("✓ Prices match", or "⚠ +$84 ex GST"); click it for the details. No price list matched? Use <b>💲 Check price</b> and choose one.</li>
+<li><b>🔎 Statement check</b> warnings show on the card until you mark them <b>resolved</b> (note what was agreed, e.g. "credit note coming").</li>
+<li><b>Duplicate</b>: the same bill twice (same file, or same supplier, number and amount). The paid copy counts; the other is flagged so it isn't paid twice – delete it.</li>
+<li><b>Remove from job</b> puts it back in the Inbox; <b>Delete invoice</b> removes it.</li>
+</ul>
+<h3>Profit</h3>
+<p>The job's price comes from its billing lines in ServiceM8 (ex GST, not counting "Partial invoice" lines). You can type a different price on the card. Profit so far = price − the costs on the job. Labour is only counted when you add it as a cost.</p>
+<h3>Stock order jobs</h3>
+<p>If you open a job for each stock order, tick <b>📦 Stock order job</b>: its invoices go into stock instead of being that job's cost. Jobs whose client or category match the words in ⚙ Settings are recognised automatically.</p>
+
+<h2 id="inbox">The Inbox</h2>
+<ul>
+<li><b>Needs a job</b>: each invoice with what was found – a job number on it, the site address, or the customer's name – and a suggested job. Click <b>✓ Add to #job</b>, type another job number, or <b>📦 Send to stock</b>. Tick <b>Paid</b> first to mark it paid at the same time.</li>
+<li><b>Delete</b> anything that isn't a cost (a remittance, a duplicate).</li>
+<li><b>Recently approved</b> (14 days): where each one went. <b>✎ Change</b> moves it to another job or to stock; <b>↶ Undo</b> puts it back.</li>
+<li>Statements that arrive by email go to Statement check, ready to run.</li>
+</ul>
+
+<h2 id="email">Getting invoices in by email</h2>
+<ul>
+<li><b>Outlook / Microsoft 365</b>: ⚙ Settings → Connect Outlook, sign in with the mailbox that receives invoices. Read-only.</li>
+<li><b>Gmail or another mailbox</b>: ⚙ Settings → Connect Gmail or another mailbox. For Gmail turn on 2-Step Verification and make an <b>app password</b> at myaccount.google.com/apppasswords; for your own domain you may need your incoming (IMAP) mail server. Read-only.</li>
+<li><b>Your {{NAME}} email address</b> (shown in Settings): forward or send invoices to it.</li>
+<li>Mailboxes are checked every couple of minutes in the days and hours you choose in Settings; <b>↻ Check now</b> works any time. Only bills are kept: quotes, statements (sent to Statement check), remittances and other emails are left alone. The same bill twice is only kept once.</li>
+</ul>
+
+<h2 id="bills">Bills</h2>
+<p>Every supplier invoice: search by supplier, invoice number or job, filter paid / unpaid, tick several and mark them paid at once. ✎ next to a job moves an invoice. Copies of a bill that's already paid are flagged and can't be marked paid again. <b>⬇ Export everything</b> downloads a zip with spreadsheets (every invoice, paid or not, which job; every line; every job's costs and profit) and all the original files.</p>
+
+<h2 id="stock">Stock</h2>
+<p>Invoices kept in stock, what's left of each (e.g. "7 of 10 left"), which jobs used it, and stock used up in the last 120 days. To use stock on a job, open the job and press ＋ Add costs. <b>✎ Move to a job</b> turns an untouched stock invoice into a job's cost.</p>
+
+<h2 id="prices">Price lists and rules</h2>
+<ul>
+<li><b>Price lists</b> (PDF or photo): the supplier name you give just needs to appear in the name on their invoices. Every invoice from them is checked as it arrives. Got a newer list? Upload it and delete the old one.</li>
+<li><b>Price change</b>: a supplier's rise or discount on top of the list you have (e.g. "Gliderol +3%, not confirmed yet") – used for that supplier's checks only.</li>
+<li><b>Rules</b>: agreements and exceptions, applied first (e.g. "Job 207932: bill 1 door only"). <b>One time</b> rules apply once, to one invoice number or the next check. When a check spots a pattern (e.g. every line 3% above the list) it offers <b>Save as rule</b>.</li>
+</ul>
+
+<h2 id="statement">Statement check</h2>
+<p>Upload a supplier's monthly statement (or let it arrive by email) and choose the dates to check (e.g. October). Each invoice on it is matched to the invoice and job in {{NAME}}, checked against the price list, your rules and the job notes, and the money is added up and cross-checked. The report leads with the chosen period, explains the rest of the statement in one line, and warns about earlier invoices you've marked paid that the supplier still lists. Every invoice and job number is a link. Invoices not in {{NAME}} yet are looked for in your connected mailbox. <b>Mark paid</b> from the report. Checks are questions for your supplier, not confirmed overcharges.</p>
+
+<h2 id="reports">Reports</h2>
+<p>Across all jobs for a period: total costs, profit, screw-ups by reason and by supplier, and every job's figures. Download the screw-ups as CSV.</p>
+
+<h2 id="diary">The job diary</h2>
+<ul>
+<li>When an invoice is wholly for one job, its PDF and a short note are added to that job's ServiceM8 diary. Shared and stock invoices aren't.</li>
+<li>Add costs → <b>From the job diary</b> brings in a file that's already in the diary.</li>
+<li>If a copied file is deleted in ServiceM8, the card asks whether to remove it from {{NAME}} too.</li>
+<li><b>Diary summary</b> (⚙ Settings, off until you switch it on): one note per job, kept up to date – costs, paid, still to pay, price and profit – so everyone sees it in the diary, online and in the app.</li>
+</ul>
+
+<h2 id="settings">Settings</h2>
+<p>Business name and type; stock order job words; which mailbox is read and on which days and hours (and your time zone); the diary summary; this month's usage; help, privacy, terms; disconnect.</p>
+
+<h2 id="plan">Plans</h2>
+<p>⭐ Plan shows your plan, what's left this month and the plans side by side. When a monthly allowance is used up, new invoices wait with a clear message – upgrade and click <b>Read again</b>, or they're read next month. Plans are changed on a computer (not in the iPhone app).</p>
+
+<h2 id="data">Your data and disconnecting</h2>
+<p>⚙ Settings → <b>Disconnect {{NAME}}</b> stops it using your ServiceM8 account and mailboxes. Your invoices stay unless you ask us to delete them ({{EMAIL}}). See the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms</a>.</p>
+
+<h2 id="faq">Common questions</h2>
+<h3>An invoice didn't go onto a job</h3>
+<p>It's waiting in the Inbox for your OK, it's a duplicate, it isn't a bill (quote, statement, remittance), or the month's invoices on your plan are used up. The Inbox shows which.</p>
+<h3>The suggested job is wrong</h3>
+<p>Type the right job number, or click "Not this job". Already approved? Recently approved → ✎ Change.</p>
+<h3>"Session expired"</h3>
+<p>Close the window and click {{NAME}} again in ServiceM8. Windows that stay open renew themselves.</p>
+<h3>The mailbox stopped working</h3>
+<p>The password or app password changed: connect it again in ⚙ Settings.</p>
+<h3>Getting help</h3>
+<p>Email {{EMAIL}} with the job number and what you expected to see.</p>
+</main></body>
+</html>

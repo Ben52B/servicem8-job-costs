@@ -713,19 +713,31 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   });
 
   app.get('/manifest.json', (req, res) => {
+    const name = config.addonName || 'Job Costs';
+    const icon = `${config.publicUrl}/icon.png`;
+    const support = config.supportEmail || 'your support email';
     res.json({
-      name: 'Job Costs',
-      version: '1.0',
-      iconURL: `${config.publicUrl}/icon.png`,
-      supportURL: config.publicUrl,
+      $schema: 'https://api.servicem8.com/api_1.0/addonsdk/manifest-schema/v1.json',
+      name,
+      version: '1.1',
+      iconURL: icon,
+      supportURL: `${config.publicUrl}/help`,
       ...(config.supportEmail ? { supportEmail: config.supportEmail } : {}),
+      ...(config.targetAudience ? { addonTargetAudience: config.targetAudience } : {}),
+      supportFAQ: [
+        { question: `How do supplier invoices get into ${name}?`, answer: `Connect Outlook or Gmail in Settings and ${name} picks up invoices from your inbox (read-only), or forward them to your ${name} email address, or drop the PDF or photo on a job. Each invoice is read automatically and waits in the Inbox with a suggested job until you approve it.` },
+        { question: 'Why was an invoice not added to a job?', answer: 'It is waiting in the Inbox (approve the suggested job or type a job number), it is a duplicate of a bill already in the add-on, it is a quote, statement or remittance rather than a bill, or this month\u2019s invoices on your plan are used up. The Inbox shows the reason.' },
+        { question: 'How is profit worked out?', answer: 'Profit so far is the job price from the job\u2019s billing lines in ServiceM8 (ex GST, not counting partial invoices) minus the supplier and subcontractor costs on the job. Labour is only counted when it is added as a cost.' },
+        { question: 'Does it change my emails or ServiceM8 data?', answer: `It only reads your mailbox. In ServiceM8 it reads jobs, clients and job lines, and adds invoice PDFs and a short note to the job diary when an invoice is wholly for one job. The diary summary note is optional and off until you switch it on in Settings.` },
+        { question: 'How do I get help?', answer: `Email ${support} with the job number and what you expected to see.` },
+      ],
       actions: [
-        { name: 'Job Costs', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' },
-        { name: 'Job Costs', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' }, // the iPhone / iPad app
+        { name, type: 'online', entity: 'job', iconURL: icon, event: 'job_costs_open' },
+        { name, type: 'app', entity: 'job', iconURL: icon, event: 'job_costs_open' }, // the iPhone / iPad app
       ],
       menuItems: [
-        { name: 'Job Costs', type: 'addon', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the Add-ons menu
-        { name: 'Job Costs', type: 'app', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the app's More tab
+        { name, type: 'addon', iconURL: icon, event: 'job_costs_menu' }, // the Add-ons menu
+        { name, type: 'app', iconURL: icon, event: 'job_costs_menu' }, // the app's More tab
       ],
     });
   });
@@ -954,6 +966,16 @@ window.addEventListener('message', function (e) {
     const after = repo.getImap(req.account);
     if (after && after.error) return res.status(502).json({ error: after.error });
     res.json({ ok: true, found });
+  });
+
+  // "Disconnect" (ServiceM8 requires a way to log out): forget the ServiceM8 access and the mailboxes.
+  // The business's data stays until they ask for it to be deleted (see the privacy policy).
+  api.post('/disconnect', (req, res) => {
+    repo.db.prepare('UPDATE accounts SET sm8_access_token = NULL, sm8_refresh_token = NULL, sm8_expires_at = NULL WHERE account_key = ?').run(req.account ?? '');
+    if (repo.removeOutlook) repo.removeOutlook(req.account);
+    repo.removeImap(req.account);
+    eventTokens.delete(req.account ?? null);
+    res.json({ ok: true });
   });
 
   // ---------- the business's plan ----------
@@ -1816,6 +1838,19 @@ window.addEventListener('message', function (e) {
       <table style="border-collapse:collapse;font-size:13px" cellpadding="6"><tr style="text-align:left"><th>Business</th><th>Month</th><th>Invoices read</th><th>Price checks</th><th>Statements read</th><th>Statement checks</th><th>Est. cost</th><th>Per invoice read</th></tr>
       ${rows.join('') || '<tr><td colspan="8">Nothing yet.</td></tr>'}</table>`).replace('max-width:460px', 'max-width:980px'));
   });
+
+  // Help, privacy policy and terms (public pages for the Add-on Store listing).
+  for (const [route, file] of [['/help', 'help.html'], ['/privacy', 'privacy.html'], ['/terms', 'terms.html']]) {
+    app.get(route, (req, res) => {
+      const fill = (t) => t.replace(/{{NAME}}/g, config.addonName || 'Job Costs')
+        .replace(/{{OPERATOR}}/g, config.operatorName || '[your business name]')
+        .replace(/{{ABN}}/g, config.operatorAbn ? `ABN ${config.operatorAbn}` : '[ABN]')
+        .replace(/{{EMAIL}}/g, config.supportEmail || '[support email]')
+        .replace(/{{URL}}/g, config.publicUrl)
+        .replace(/{{HOSTING}}/g, config.hostingRegion || '[the hosting region, e.g. Singapore]');
+      res.type('html').send(fill(fs.readFileSync(path.join(__dirname, '..', 'public', 'legal', file), 'utf8')));
+    });
+  }
 
   // After paying (or cancelling) on Stripe's page: back to ServiceM8.
   app.get('/billing/done', (req, res) => res.type('html').send(htmlPage('Job Costs', req.query.cancelled

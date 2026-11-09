@@ -194,6 +194,10 @@ function render() {
     <div class="days" style="gap:14px">${[['invoice_read', 'invoices read'], ['price_check', 'price checks'], ['statement_check', 'statement checks']]
       .map(([k, l]) => `<span><b style="font-size:18px">${(data.used || {})[k] || 0}</b> <span class="muted">${l}</span></span>`).join('')}</div></div>
   <div class="panel"><a class="btn" href="/plan?t=${encodeURIComponent(BOOT.token)}">⭐ Your plan</a> <span class="muted" style="font-size:12.5px">what’s included and what’s left this month</span></div>
+  <div class="panel"><h2>Help and your data</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/help" target="_blank" rel="noopener">❓ Help</a><a class="btn" href="/privacy" target="_blank" rel="noopener">Privacy</a><a class="btn" href="/terms" target="_blank" rel="noopener">Terms</a></div>
+    <div class="hint" style="margin-top:10px">Disconnect: Job Costs stops using your ServiceM8 account and mailboxes until it’s opened and approved again. Your invoices stay until you ask for them to be deleted.</div>
+    <button class="danger" data-disconnect style="margin-top:6px">Disconnect Job Costs</button></div>
   <div class="save"><button class="primary" id="save">Save</button></div>`;
 }
 async function load() {
@@ -201,6 +205,11 @@ async function load() {
 }
 document.addEventListener('click', async (e) => {
   const mb = e.target.closest('button'); if (mb && await mailboxClick(mb, load)) return;
+  if (mb && mb.dataset.disconnect !== undefined) {
+    if (!mb.dataset.sure) { mb.dataset.sure = '1'; mb.textContent = 'Sure? Disconnect'; return; }
+    try { await api('/disconnect', { method: 'POST' }); toast('Disconnected – close this window'); } catch (x) { toast(x.message); }
+    return;
+  }
   if (e.target.id !== 'save') return;
   const b = e.target; b.disabled = true;
   try {

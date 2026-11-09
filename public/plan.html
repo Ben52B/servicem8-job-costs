@@ -122,6 +122,8 @@ const LABEL = { invoice_read: 'invoices read', price_check: 'price checks', stat
 const big = (n) => n >= 1e8;
 const dateText = (d) => d ? new Date(d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 let data = null;
+// ServiceM8's iPhone / iPad app mustn't take payments: there, plans are changed on a computer.
+const onIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 function meter(k) {
   const lim = data.plan.limits[k], used = data.used[k] || 0;
   if (!lim) return '';
@@ -135,7 +137,7 @@ function render() {
     servicem8: 'Billed monthly with your ServiceM8 account', owner: 'Your own business – everything included', unlimited: 'Everything included' }[p.status] || '';
   let h = `<div class="panel"><h2>${esc(p.name)}${p.price ? ` <span class="muted" style="font-weight:600">· $${p.price}/month</span>` : ''}</h2><div class="hint">${esc(status)}</div>
     ${['invoice_read', 'price_check', 'statement_check'].map(meter).join('')}
-    ${data.manage ? `<div style="margin-top:10px"><button data-portal>Change card, plan or cancel</button> <span class="hint">opens Stripe’s secure page</span></div>` : ''}</div>`;
+    ${data.manage && !onIos ? `<div style="margin-top:10px"><button data-portal>Change card, plan or cancel</button> <span class="hint">opens Stripe’s secure page</span></div>` : ''}</div>`;
   if (data.plans.length) {
     h += `<div class="plans">${data.plans.map((x) => `<div class="plan ${x.key === p.key && ['active', 'past_due', 'trial'].includes(p.status) ? 'cur' : ''}">
       <b style="font-size:15px">${esc(x.name)}</b><div class="price">${x.price ? '$' + x.price : 'Free'}<span class="muted" style="font-size:12px;font-weight:600">${x.price ? ' /month' : ''}</span></div>
@@ -144,8 +146,8 @@ function render() {
         ${x.limits.statement_check ? `<li>${big(x.limits.statement_check) ? 'Unlimited' : x.limits.statement_check} statement checks a month</li>` : ''}
         ${x.features.filter((f) => f !== 'statement_check').map((f) => `<li>${esc(data.features[f])}</li>`).join('')}
         <li>Job costs, paid / unpaid and profit on every job</li><li>A summary in each job’s ServiceM8 diary</li></ul>
-      <div class="go">${x.price && data.canPay ? (x.key === p.key && p.status === 'active' ? '<span class="hint">Your plan</span>' : `<button class="primary" data-choose="${x.key}">Choose ${esc(x.name)}</button>`) : ''}</div></div>`).join('')}</div>
-      <div class="hint" style="margin-top:8px">Prices in AUD, per business, GST included. Payment is on Stripe’s secure page (opens outside ServiceM8). Change or cancel any time.</div>`;
+      <div class="go">${x.price && data.canPay && !onIos ? (x.key === p.key && p.status === 'active' ? '<span class="hint">Your plan</span>' : `<button class="primary" data-choose="${x.key}">Choose ${esc(x.name)}</button>`) : ''}</div></div>`).join('')}</div>
+      <div class="hint" style="margin-top:8px">${onIos ? 'To change your plan, open Job Costs from ServiceM8 on a computer.' : 'Prices in AUD, per business, GST included. Payment is on Stripe’s secure page (opens outside ServiceM8). Change or cancel any time.'}</div>`;
   }
   $('#content').innerHTML = h;
 }

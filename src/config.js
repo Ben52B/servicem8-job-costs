@@ -42,6 +42,12 @@ const config = {
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
   supportEmail: process.env.SUPPORT_EMAIL || null,
+  // For the Add-on Store: its name there (unique, not generic, max 30 characters), who runs it, and who it's for.
+  addonName: (process.env.ADDON_NAME || 'Job Costs').trim().slice(0, 30),
+  operatorName: (process.env.OPERATOR_NAME || '').trim(),
+  operatorAbn: (process.env.OPERATOR_ABN || '').trim(),
+  hostingRegion: (process.env.HOSTING_REGION || '').trim(),
+  targetAudience: (process.env.ADDON_AUDIENCE || 'Trades and field service businesses in Australia that buy materials and subcontract work for their jobs, from sole traders to about 50 staff. Works for any industry; garage door, plumbing, electrical and building businesses use price lists the most.').trim(),
   // Plans and payments (see src/plans.js): none (everything unlimited) | servicem8 (one fee billed by ServiceM8) | stripe (tiers)
   billingMode: (process.env.BILLING_MODE || 'none').trim().toLowerCase(),
   servicem8Plan: (process.env.SERVICEM8_PLAN || 'pro').trim().toLowerCase(),

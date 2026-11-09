@@ -1894,6 +1894,32 @@ test('plans (BILLING_MODE=stripe): a Pro trial, then Free; limits; paying on Str
   assert.equal(app.locals.planFor('acc-tier').key, 'unlimited');
 });
 
+test('Add-on Store: manifest with FAQs and audience; help, privacy and terms pages; disconnect', async () => {
+  const m = await fetch(`${base}/manifest.json`).then((r) => r.json());
+  assert.equal(m.$schema, 'https://api.servicem8.com/api_1.0/addonsdk/manifest-schema/v1.json');
+  assert.ok(m.name.length <= 30);
+  assert.equal(m.supportURL, 'http://test/help');
+  assert.ok(m.supportFAQ.length >= 1 && m.supportFAQ.length <= 10);
+  for (const f of m.supportFAQ) { assert.ok(f.question && f.answer.length <= 2000); assert.ok(!/<[a-z]/i.test(f.question + f.answer), 'plain text'); }
+  assert.ok(!m.addonTargetAudience || m.addonTargetAudience.length <= 2000);
+  assert.ok(Buffer.byteLength(JSON.stringify(m)) < 64 * 1024);
+  for (const page of ['/help', '/privacy', '/terms']) {
+    const r = await fetch(`${base}${page}`);
+    assert.equal(r.status, 200, page);
+    const html = await r.text();
+    assert.ok(!/{{[A-Z]+}}/.test(html), `${page}: every placeholder filled`);
+  }
+  assert.match(await fetch(`${base}/privacy`).then((r) => r.text()), /Anthropic/);
+  // log out: the business's ServiceM8 access and mailboxes are forgotten
+  JOBS['dc-job'] = { jobNumber: '208980', jobTitle: '8 Bye St' };
+  const t = await openCard('dc-job', 'acc-dc');
+  repo.saveTokens('acc-dc', { accessToken: 'a', refreshToken: 'r', expiresIn: 3600 });
+  repo.saveImap('acc-dc', { email: 'x@gmail.com', host: 'imap.gmail.com', passwordEnc: 'sealed' });
+  assert.equal((await post(t, '/disconnect')).status, 200);
+  assert.equal(repo.getTokens('acc-dc') && repo.getTokens('acc-dc').accessToken ? 'still' : 'gone', 'gone');
+  assert.equal(repo.getImap('acc-dc'), null);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html', 'plan.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

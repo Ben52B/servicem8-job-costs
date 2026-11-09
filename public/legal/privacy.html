@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{NAME}} Privacy Policy</title>
+<style>
+  :root { --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --bg: #f4f7f6; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; background: #fff; }
+  h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 26px 0 6px; } .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; } td, th { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+</style>
+</head>
+<body><main>
+<h1>{{NAME}} Privacy Policy</h1>
+<p class="muted">{{NAME}} is an add-on for ServiceM8, run by {{OPERATOR}} ({{ABN}}). Last updated: [date]. Contact: {{EMAIL}}.</p>
+
+<p>This policy explains what information {{NAME}} uses, why, where it is kept, who else handles it, and your choices. {{NAME}} is not made or supported by ServiceM8.</p>
+
+<h2>1. What we use from your ServiceM8 account</h2>
+<p>When you approve {{NAME}} in ServiceM8, it may read and write only what it needs to work:</p>
+<table>
+<tr><th>What</th><th>Why</th></tr>
+<tr><td>Jobs: job number, address, status, category, description/notes, badges and billing lines</td><td>To show each job's costs, suggest which job an invoice belongs to, and work out the job's price and profit</td></tr>
+<tr><td>Clients (company) names</td><td>To match invoices to jobs and spot stock order jobs</td></tr>
+<tr><td>Job diary files and notes</td><td>To bring invoice files in from the diary when you choose to, and to add invoice PDFs and short notes (and, if you switch it on, a summary note) to the diary</td></tr>
+<tr><td>Your account and staff IDs</td><td>To keep each business's information separate</td></tr>
+</table>
+<p>We do not read or use your customers' contact details, payments, quotes or invoices you send to customers except where they appear in job notes or diary files you choose to bring in.</p>
+
+<h2>2. What you give us</h2>
+<ul>
+<li><b>Supplier and subcontractor invoices</b> you upload, forward, or that arrive in a mailbox you connect, and the details read from them (supplier, invoice number, dates, lines, amounts).</li>
+<li><b>Mailbox access</b>, if you connect one. Outlook (Microsoft 365) is connected through Microsoft's sign-in; we keep the access token Microsoft gives us, never your Microsoft password. For Gmail or another mailbox you give us an app password, which we store encrypted. We only read your mailbox: we never send, change, move or delete emails. Emails that aren't bills are not kept.</li>
+<li><b>Price lists, rules, supplier statements</b> and settings you add.</li>
+<li><b>Which invoices are paid</b>, notes, and how costs are shared between jobs.</li>
+</ul>
+
+<h2>3. Who else handles your information</h2>
+<table>
+<tr><th>Who</th><th>What for</th></tr>
+<tr><td>Anthropic (Claude API)</td><td>Reading invoice files and emails, checking prices against your price lists, and checking supplier statements. Files are sent for reading only. Under Anthropic's commercial terms they are not used to train models.</td></tr>
+<tr><td>Render (hosting)</td><td>Runs {{NAME}} and stores its data and files, in {{HOSTING}}.</td></tr>
+<tr><td>Microsoft / Google / your email provider</td><td>Only if you connect a mailbox, to read it.</td></tr>
+<tr><td>Stripe</td><td>Only if you pay for a plan with us: payments are made on Stripe's own page; we never see or keep card details.</td></tr>
+<tr><td>ServiceM8</td><td>The invoice files and notes we add to your job diaries are stored by ServiceM8.</td></tr>
+</table>
+<p>We do not sell your information or use it for advertising, and we don't give it to anyone else unless the law requires it.</p>
+
+<h2>4. How long we keep it</h2>
+<p>We keep your information while you use {{NAME}}. If you disconnect (Settings → Disconnect) we stop using your ServiceM8 account and mailboxes; your invoices stay so you don't lose them if you come back. Email {{EMAIL}} to have everything deleted: we delete it within 30 days, except where the law requires us to keep records. We keep usage counts (how many invoices were read each month) for billing.</p>
+
+<h2>5. Security</h2>
+<p>Everything travels over encrypted connections (HTTPS). Mailbox passwords are stored encrypted. Each business only sees its own information. Access to the servers is limited to the people who run {{NAME}}.</p>
+
+<h2>6. Your rights</h2>
+<p>You can ask to see, correct, export (Bills → Export everything) or delete your information, and you can complain to us at {{EMAIL}}. If you're not happy with our answer you can contact the Office of the Australian Information Commissioner (oaic.gov.au). We handle personal information under the Australian Privacy Principles.</p>
+
+<h2>7. Changes</h2>
+<p>If we change this policy we'll update the date above, and tell you in the add-on if the change matters.</p>
+</main></body>
+</html>
