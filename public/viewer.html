@@ -17,11 +17,13 @@
 </style>
 </head>
 <body>
-<div class="bar"><b id="name">Invoice</b><button id="zoomOut" title="Smaller">−</button><button id="zoomIn" title="Bigger">+</button><button id="print">🖨 Print</button></div>
+<div class="bar"><button id="back" hidden onclick="history.back()">← Back</button><b id="name">Invoice</b><button id="zoomOut" title="Smaller">−</button><button id="zoomIn" title="Bigger">+</button><button id="print">🖨 Print</button></div>
 <div id="pages"><div class="msg">Loading…</div></div>
 <script type="module">
 // Shows an invoice PDF by drawing its pages (Chrome won't show PDFs opened from ServiceM8's window).
 const q = new URLSearchParams(location.search);
+// opened in the same window (the iPhone app): a way back
+if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) document.getElementById('back').hidden = false;
 const id = Number(q.get('id'));
 const diary = q.get('diary'); // a file in the ServiceM8 job diary (not added yet)
 const pl = q.get('pl'); // a supplier price list

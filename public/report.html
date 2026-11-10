@@ -82,6 +82,19 @@ function noteToken(res) {
 }
 try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
 if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
+// On the ServiceM8 iPhone/iPad app a new tab means leaving ServiceM8 for Safari: open our own pages in this window instead
+// (Microsoft's sign-in stays outside: it won't show inside a frame).
+(function () {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!ios) return;
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[target="_blank"]');
+    if (!a || !a.href) return;
+    let u; try { u = new URL(a.href, location.href); } catch (x) { return; }
+    if (u.origin !== location.origin || u.pathname.startsWith('/outlook/')) return;
+    e.preventDefault(); location.href = u.href;
+  }, true);
+})();
 setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

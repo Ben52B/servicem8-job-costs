@@ -691,7 +691,11 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   });
 
   // The window ServiceM8 shows: our page in a frame, sized to fit (the app shows it full screen).
-  const windowHtml = (url) => `<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
+  // (The viewport line makes phones use their real width: without it the ServiceM8 app draws the window
+  // at desktop width and shrinks it, which squeezes and cuts the page.)
+  const windowHtml = (url) => `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #f4f7f6; }</style>
+<script src="https://platform.servicem8.com/sdk/1.0/sdk.js"></script>
 <script>
 var sm8 = null;
 try { sm8 = SMClient.init(); } catch (e) {}
@@ -708,7 +712,7 @@ window.addEventListener('message', function (e) {
   if (e.origin === ${JSON.stringify(new URL(config.publicUrl).origin)} && e.data && e.data.jobcosts === 'size') fit(e.data.size);
 });
 </script>
-<iframe src="${url}" style="position:fixed;top:0;left:0;width:100%;height:100%;border:0" allow="clipboard-write"></iframe>`;
+<iframe src="${url}" style="position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;border:0;display:block" allow="clipboard-write"></iframe>`;
 
   // ServiceM8 calls this when someone clicks "Job Costs" on a job card.
   app.post('/servicem8/addon', express.text({ type: '*/*', limit: '1mb' }), async (req, res) => {
