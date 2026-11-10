@@ -13,12 +13,13 @@ const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer')
 const { duplicateMessage } = require('./processor');
 const { exportEverything } = require('./export');
 const mailbox = require('./mailbox');
+const picklist = require('./picklist');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
 const MAX_FILE_MB = 25;
 const page = (name) => fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html'), welcome: page('welcome.html') };
+const PAGES = { card: page('card.html'), report: page('report.html'), inbox: page('inbox.html'), bills: page('bills.html'), checks: page('checks.html'), summary: page('summary.html'), prices: page('prices.html'), stock: page('stock.html'), home: page('home.html'), settings: page('settings.html'), welcome: page('welcome.html'), picklist: page('picklist.html'), kits: page('kits.html') };
 
 /** undefined = not sent, null/'' = clear, a known code = set; anything else is invalid. */
 function parseReason(value) {
@@ -97,7 +98,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return null;
   };
   // Things that only make sense on one job (the menu's business-wide pages don't use them).
-  const needsJob = (method, p) => p === '/job' || /^\/(unassigned|assign$|items\/|diary|suggestions\/|invoices\/manual|invoices\/?$)/.test(p)
+  const needsJob = (method, p) => p === '/job' || /^\/(unassigned|assign$|items\/|diary|suggestions\/|invoices\/manual|invoices\/?$|picklist)/.test(p)
     || (/^\/invoices\/\d+$/.test(p) && method !== 'GET') || /^\/invoices\/\d+\/diary-keep/.test(p);
 
   // Card API auth: short-lived token handed to the card when ServiceM8 opened it.
@@ -682,6 +683,9 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       actions: [
         { name: 'Job Costs', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' },
         { name: 'Job Costs', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' }, // the iPhone / iPad app
+        // the pick list: what the installer collects for this job
+        { name: 'Pick list', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon-pick.png`, event: 'pick_list_open' },
+        { name: 'Pick list', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon-pick.png`, event: 'pick_list_open' },
       ],
       menuItems: [
         { name: 'Job Costs', type: 'addon', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the Add-ons menu
@@ -758,7 +762,8 @@ window.addEventListener('message', function (e) {
     // The window shows our page (from our own address, so everything on it works),
     // and asks ServiceM8 to make the window big enough.
     // Opens on the compact summary; "Open full Job Costs" inside it asks for the big window.
-    const url = `${config.publicUrl}/summary?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
+    const page = event.eventName === 'pick_list_open' ? 'picklist' : 'summary';
+    const url = `${config.publicUrl}/${page}?t=${encodeURIComponent(sessionToken(job.job_uuid))}`;
     reply(windowHtml(url));
   });
 
@@ -817,7 +822,7 @@ window.addEventListener('message', function (e) {
   });
 
   // Reports and Inbox pages (opened from the card, using the card's session).
-  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings', 'welcome']) {
+  for (const name of ['report', 'inbox', 'bills', 'checks', 'summary', 'prices', 'stock', 'home', 'settings', 'welcome', 'picklist', 'kits']) {
     app.get(`/${name}`, (req, res) => {
       const sess = sessionFrom(req.query.t);
       if (!sess) {
@@ -918,6 +923,75 @@ window.addEventListener('message', function (e) {
     if (after && after.error) return res.status(502).json({ error: after.error });
     res.json({ ok: true, found });
   });
+
+  // ---------- Pick list ----------
+  /** The business's kits; a garage door business starts with roller, sectional and motor kits (theirs to change). */
+  function kitsFor(accountUUID) {
+    const st = settingsFor(accountUUID);
+    if (!st.kits_seeded) {
+      if (!repo.listKits(accountUUID).length && /door/i.test(st.business_type || '')) for (const k of picklist.DEFAULT_KITS) repo.saveKit(accountUUID, k);
+      repo.saveSettings(accountUUID, { kits_seeded: true });
+    }
+    return repo.listKits(accountUUID);
+  }
+  const pickListOf = (job, accountUUID) => picklist.buildPickList({
+    summary: repo.getJobSummary(job.job_uuid), notes: (repo.getJob(job.job_uuid) || {}).notes || '',
+    kits: kitsFor(accountUUID), ticks: repo.pickTicks(job.job_uuid), extra: repo.listPickExtra(job.job_uuid),
+  });
+  api.get('/picklist', (req, res) => {
+    const j = repo.getJob(req.job.job_uuid);
+    res.json({ job: { job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
+      kits: kitsFor(req.account).length });
+  });
+  api.post('/picklist/tick', (req, res) => {
+    const key = String(req.body?.key || '');
+    if (!/^[inx]:[\w-]+(:\d+)?$/.test(key)) return res.status(400).json({ error: 'Which item?' });
+    repo.setPickTick(req.job.job_uuid, key, req.body?.picked !== false);
+    res.json({ ok: true, progress: pickListOf(req.job, req.account).progress });
+  });
+  api.post('/picklist/all', (req, res) => {
+    const list = pickListOf(req.job, req.account);
+    for (const k of picklist.allKeys(list)) repo.setPickTick(req.job.job_uuid, k, req.body?.picked !== false);
+    res.json({ ok: true });
+  });
+  api.post('/picklist/extra', (req, res) => {
+    const name = String(req.body?.name || '').trim().slice(0, 120);
+    if (!name) return res.status(400).json({ error: 'What needs picking up?' });
+    const qty = req.body?.qty === undefined || req.body?.qty === '' || req.body?.qty === null ? null : Number(req.body.qty);
+    if (qty !== null && !(qty > 0)) return res.status(400).json({ error: 'Quantity must be a number' });
+    res.status(201).json({ id: repo.addPickExtra(req.job.job_uuid, { name, qty }) });
+  });
+  api.delete('/picklist/extra/:id', (req, res) => (repo.deletePickExtra(req.job.job_uuid, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
+  // "Note it in the diary": what was picked up (and what's still missing), for the office
+  api.post('/picklist/diary', async (req, res) => {
+    const list = pickListOf(req.job, req.account);
+    const missing = [];
+    for (const g of list.groups) for (const it of g.items) {
+      if (it.parts.length) { const m = it.parts.filter((p) => !p.optional && !p.picked).map((p) => `${it.name}: ${p.name}`); missing.push(...m); }
+      else if (!it.picked) missing.push(it.name);
+    }
+    const text = (missing.length ? `Pick list: ${list.progress.picked} of ${list.progress.total} picked up. Still to get: ${missing.join('; ')}`
+      : `Pick list: everything picked up (${list.progress.total} item${list.progress.total === 1 ? '' : 's'}).`).slice(0, 1000);
+    const token = await diaryToken(req.account);
+    if (!token) return res.status(400).json({ error: 'Job Costs isn\u2019t approved in ServiceM8 yet' });
+    try { await diaryApi.addJobNote({ jobUUID: req.job.job_uuid, text }, token); res.json({ ok: true, text }); }
+    catch (e) { res.status(502).json({ error: diaryProblem(e) }); }
+  });
+  // Kits: what an item is made of (shared by the whole business)
+  api.get('/kits', (req, res) => res.json({ kits: kitsFor(req.account) }));
+  api.post('/kits', (req, res) => {
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: 'Name the kit (e.g. Sectional door)' });
+    const match = (Array.isArray(b.match_words) ? b.match_words : String(b.match_words || '').split(','))
+      .map((w) => String(w).trim().toLowerCase()).filter(Boolean).slice(0, 12);
+    if (!match.length) return res.status(400).json({ error: 'Add at least one word that finds it on an invoice (e.g. sectional)' });
+    const parts = (Array.isArray(b.parts) ? b.parts.map((x) => (typeof x === 'string' ? x : x.name)) : String(b.parts || '').split(/\r?\n/))
+      .map(picklist.parsePart).filter(Boolean).slice(0, 30);
+    const id = repo.saveKit(req.account, { id: b.id || null, name, match_words: match, parts });
+    return id ? res.json({ ok: true, id }) : res.status(404).json({ error: 'Not found' });
+  });
+  api.delete('/kits/:id', (req, res) => (repo.deleteKit(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
 
   // ---------- Settings of the business ----------
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];

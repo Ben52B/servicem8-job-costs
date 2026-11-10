@@ -326,6 +326,7 @@ function migrateColumns(db) {
   if (!jobCols.includes('sm8_status')) db.exec('ALTER TABLE jobs ADD COLUMN sm8_status TEXT');
   if (!jobCols.includes('client_name')) db.exec('ALTER TABLE jobs ADD COLUMN client_name TEXT');
   if (!jobCols.includes('category_name')) db.exec('ALTER TABLE jobs ADD COLUMN category_name TEXT');
+  if (!jobCols.includes('notes')) db.exec('ALTER TABLE jobs ADD COLUMN notes TEXT'); // the job's description from ServiceM8 (for the pick list)
   // Stock order job: auto = matched by client/category; manual = the switch on the card (wins when set).
   if (!jobCols.includes('stock_auto')) db.exec('ALTER TABLE jobs ADD COLUMN stock_auto INTEGER NOT NULL DEFAULT 0');
   if (!jobCols.includes('stock_manual')) db.exec('ALTER TABLE jobs ADD COLUMN stock_manual INTEGER');
@@ -372,6 +373,12 @@ function migrateColumns(db) {
   // A mailbox a business connected (Gmail or any IMAP mailbox); the password is stored encrypted.
   db.exec(`CREATE TABLE IF NOT EXISTS imap_connections (account_key TEXT PRIMARY KEY, email TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 993,
     password_enc TEXT NOT NULL, connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), last_check TEXT, error TEXT)`);
+  // Pick list: kits (what an item is made of), ticks, and items added by hand.
+  db.exec(`CREATE TABLE IF NOT EXISTS kits (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, name TEXT NOT NULL,
+      match_words TEXT NOT NULL DEFAULT '[]', parts TEXT NOT NULL DEFAULT '[]', position INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS pick_ticks (job_uuid TEXT NOT NULL, key TEXT NOT NULL, picked_at TEXT NOT NULL, PRIMARY KEY (job_uuid, key));
+    CREATE TABLE IF NOT EXISTS pick_extra (id INTEGER PRIMARY KEY AUTOINCREMENT, job_uuid TEXT NOT NULL, name TEXT NOT NULL, qty REAL,
+      source TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));`);
   // What each business used each month (Claude requests and their tokens), for limits and costs.
   db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -408,7 +415,7 @@ function createRepo(db, dataDir) {
     // ---------- jobs & accounts ----------
 
     ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null, status = null,
-      clientName = null, categoryName = null, stockAuto = undefined }) {
+      clientName = null, categoryName = null, stockAuto = undefined, description = undefined }) {
       const job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       if (!job) {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -430,6 +437,7 @@ function createRepo(db, dataDir) {
           .run(clientName, categoryName, jobUUID);
       }
       if (stockAuto !== undefined) db.prepare('UPDATE jobs SET stock_auto = ? WHERE job_uuid = ?').run(stockAuto ? 1 : 0, jobUUID);
+      if (description !== undefined && description !== null) db.prepare('UPDATE jobs SET notes = ? WHERE job_uuid = ?').run(String(description).slice(0, 6000), jobUUID);
       if (quoteAmount != null && isFinite(quoteAmount)) {
         db.prepare(`UPDATE jobs SET quote_amount = ?, quote_source = 'servicem8'
           WHERE job_uuid = ? AND COALESCE(quote_source, '') != 'manual'`).run(round2(quoteAmount), jobUUID);
@@ -1363,7 +1371,7 @@ function createRepo(db, dataDir) {
           if (mine) {
             lines.push({
               ...base, share: mine.fraction, share_quantity: trace.quantity ? round3(mine.fraction * trace.quantity) : null,
-              cost: round2(it.cost * mine.fraction), category: mine.category || inv.category || 'materials',
+              cost: round2(it.cost * mine.fraction), category: mine.category || inv.category || 'materials', item_category: it.category || null,
               mistake_reason: mine.mistake_reason, mistake_at: mine.mistake_at,
             });
           } else otherLines.push(base);
@@ -1603,6 +1611,35 @@ function createRepo(db, dataDir) {
       db.prepare("UPDATE imap_connections SET last_check = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = ? WHERE account_key = ?").run(error, accountUUID ?? '');
     },
     removeImap(accountUUID) { db.prepare('DELETE FROM imap_connections WHERE account_key = ?').run(accountUUID ?? ''); },
+
+    // ---------- pick list ----------
+    listKits(accountUUID) {
+      return db.prepare('SELECT * FROM kits WHERE account_key = ? ORDER BY position, id').all(accountUUID ?? '')
+        .map((k) => ({ ...k, match_words: parseJson(k.match_words, []), parts: parseJson(k.parts, []) }));
+    },
+    saveKit(accountUUID, { id = null, name, match_words = [], parts = [] }) {
+      const words = JSON.stringify(match_words), ps = JSON.stringify(parts);
+      if (id) {
+        const r = db.prepare('UPDATE kits SET name = ?, match_words = ?, parts = ? WHERE id = ? AND account_key = ?').run(name, words, ps, Number(id), accountUUID ?? '');
+        return r.changes ? Number(id) : null;
+      }
+      const pos = (db.prepare('SELECT MAX(position) AS p FROM kits WHERE account_key = ?').get(accountUUID ?? '').p ?? -1) + 1;
+      return Number(db.prepare('INSERT INTO kits (account_key, name, match_words, parts, position) VALUES (?, ?, ?, ?, ?)').run(accountUUID ?? '', name, words, ps, pos).lastInsertRowid);
+    },
+    deleteKit(accountUUID, id) { return db.prepare('DELETE FROM kits WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
+    pickTicks(jobUUID) { return new Map(db.prepare('SELECT key, picked_at FROM pick_ticks WHERE job_uuid = ?').all(jobUUID).map((r) => [r.key, r.picked_at])); },
+    setPickTick(jobUUID, key, picked) {
+      if (picked) db.prepare("INSERT OR IGNORE INTO pick_ticks (job_uuid, key, picked_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))").run(jobUUID, key);
+      else db.prepare('DELETE FROM pick_ticks WHERE job_uuid = ? AND key = ?').run(jobUUID, key);
+    },
+    listPickExtra(jobUUID) { return db.prepare('SELECT * FROM pick_extra WHERE job_uuid = ? ORDER BY id').all(jobUUID); },
+    addPickExtra(jobUUID, { name, qty = null, source = null }) {
+      return Number(db.prepare('INSERT INTO pick_extra (job_uuid, name, qty, source) VALUES (?, ?, ?, ?)').run(jobUUID, name, qty, source).lastInsertRowid);
+    },
+    deletePickExtra(jobUUID, id) {
+      db.prepare("DELETE FROM pick_ticks WHERE job_uuid = ? AND (key = ? OR key LIKE ?)").run(jobUUID, `x:${Number(id)}`, `x:${Number(id)}:%`);
+      return db.prepare('DELETE FROM pick_extra WHERE id = ? AND job_uuid = ?').run(Number(id), jobUUID).changes > 0;
+    },
 
     // ---------- usage ----------
     /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */

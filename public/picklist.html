@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pick list</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f7f6; --card: #fff; --ink: #17312b; --muted: #6b8a82; --line: #e3ece9; --line2: #f0f5f3;
+    --brand: #10b981; --brand-dark: #059669; --brand-soft: #e7f8f1; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #be123c; --bad-soft: #ffe4e6; --sun: #f97316;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.45 "Plus Jakarta Sans", "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 18px 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 800; }
+  .muted { color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  button, .btn { font: inherit; font-weight: 600; border: 1px solid #d6e2de; background: #fff; color: var(--ink); border-radius: 10px; padding: 6px 12px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(16, 185, 129, .28); }
+  button.danger { color: var(--bad); }
+  select { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; color: var(--ink); max-width: 260px; }
+  .address { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 18px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+  .address code { background: var(--brand-soft); color: var(--brand-dark); padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .item { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .item .t { font-weight: 700; font-size: 14px; }
+  .item .sub { font-size: 12px; color: var(--muted); }
+  .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
+  .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
+  .trace span { padding: 1px 8px; border-radius: 10px; background: #f0fdf4; color: #166534; }
+  .trace span.left { background: var(--warn-soft); color: #92400e; }
+  .trace span.dup { background: var(--bad-soft); color: var(--bad); }
+  .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
+  .recent .item { background: #fbfdfc; }
+  .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
+.move{display:inline-flex;gap:4px;align-items:center}.move input{width:90px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px}
+.pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
+.dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
+  @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+</style>
+<style>
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
+  .bar input[type=search] { flex: 1; min-width: 220px; font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 8px 12px; background: #fff; }
+  .seg button { border-radius: 10px; }
+  .seg button.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+  table.bills { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  table.bills th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 700; padding: 9px 10px; border-bottom: 1px solid var(--line); background: #fbfdfc; }
+  table.bills td { padding: 9px 10px; border-bottom: 1px solid var(--line2); vertical-align: middle; }
+  table.bills tr:last-child td { border-bottom: 0; }
+  table.bills tr.sel td { background: var(--brand-soft); }
+  .num, table.bills th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .c-paid { background: var(--brand-soft); color: var(--brand-dark); } .c-unpaid { background: var(--bad-soft); color: var(--bad); } .c-part { background: var(--warn-soft); color: #92400e; }
+  .foot { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 -4px 16px rgba(16,40,34,.06); }
+  .foot .spacer { flex: 1; }
+  .lnk { background: none; border: 0; padding: 0 2px; color: var(--brand-dark); text-decoration: underline; cursor: pointer; font: inherit; box-shadow: none; }
+</style>
+<style>
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; min-width: 150px; }
+  .kpi .l { font-size: 11.5px; color: var(--muted); font-weight: 700; } .kpi .v { font-size: 20px; font-weight: 800; }
+  .lines { margin-top: 6px; } .lines .ln { margin-top: 5px; font-size: 12.5px; }
+  details.used summary { cursor: pointer; font-weight: 700; font-size: 15px; margin: 20px 0 8px; }
+</style>
+<style>
+  .wrap { max-width: 720px; }
+  .prog { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin: 8px 0 12px; }
+  .prog .bar { height: 10px; background: var(--line2); border-radius: 8px; overflow: hidden; margin-top: 6px; } .prog .bar span { display: block; height: 100%; background: var(--brand); transition: width .2s; }
+  .grp { margin: 14px 0 6px; font-weight: 800; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+  .grp .muted { font-weight: 600; font-size: 12px; }
+  .it { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; }
+  .it.done { background: #f3fbf7; border-color: #c8eedd; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .tick { flex: none; width: 30px; height: 30px; border-radius: 9px; border: 2px solid #c7d6d1; background: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; box-shadow: none; }
+  .tick.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .tick.on::after { content: '✓'; font-weight: 800; font-size: 17px; }
+  .nm { flex: 1; min-width: 0; } .nm b { font-size: 15px; } .done .nm b { text-decoration: line-through; color: var(--muted); }
+  .sub { font-size: 12px; color: var(--muted); }
+  .parts { margin: 8px 0 0 42px; display: grid; gap: 6px; }
+  .parts .row { gap: 10px; } .parts .tick { width: 26px; height: 26px; } .parts .on::after { font-size: 14px; }
+  .parts .pn.done { text-decoration: line-through; color: var(--muted); }
+  .opt { font-size: 11px; color: var(--muted); }
+  .qty { font-weight: 800; color: var(--brand-dark); white-space: nowrap; }
+  .add { display: flex; gap: 6px; margin-top: 10px; } .add input { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 9px 10px; }
+  .add input#xName { flex: 1; min-width: 0; } .add input#xQty { width: 64px; }
+  .acts2 { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 30px; }
+  .x { border: 0; background: none; color: var(--muted); font-size: 16px; padding: 2px 6px; box-shadow: none; }
+  @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><a class="btn" data-back href="#" onclick="location.href=(BOOT.home?'/home?t=':'/card?t=')+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Job Costs</a><h1>📋 Pick list</h1></header>
+  <div id="content"><div class="empty"><span class="spin"></span></div></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const BOOT = /*__BOOT__*/null;
+// Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
+function noteToken(res) {
+  const nt = res && res.headers && res.headers.get('X-Session-Token');
+  if (!nt || !BOOT || nt === BOOT.token) return;
+  const oldEnc = encodeURIComponent(BOOT.token), newEnc = encodeURIComponent(nt);
+  BOOT.token = nt;
+  try { T = newEnc; } catch (e) { /* this page keeps no copy */ }
+  document.querySelectorAll('a[href]').forEach((a) => { if (a.getAttribute('href').includes(oldEnc)) a.setAttribute('href', a.getAttribute('href').split(oldEnc).join(newEnc)); });
+  if (location.search.includes(oldEnc)) history.replaceState(null, '', location.href.split(oldEnc).join(newEnc));
+}
+try { const u = new URL(location.href); if (BOOT && BOOT.token && u.searchParams.get('t') && u.searchParams.get('t') !== BOOT.token) { u.searchParams.set('t', BOOT.token); history.replaceState(null, '', u); } } catch (e) { /* fine */ }
+if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => { a.textContent = '← Job Costs home'; });
+// On the ServiceM8 iPhone/iPad app a new tab means leaving ServiceM8 for Safari: open our own pages in this window instead
+// (Microsoft's sign-in stays outside: it won't show inside a frame).
+(function () {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!ios) return;
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[target="_blank"]');
+    if (!a || !a.href) return;
+    let u; try { u = new URL(a.href, location.href); } catch (x) { return; }
+    if (u.origin !== location.origin || u.pathname.startsWith('/outlook/')) return;
+    e.preventDefault(); location.href = u.href;
+  }, true);
+})();
+setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
+const fmtDate = (d) => d ? new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { Authorization: 'Bearer ' + BOOT.token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  noteToken(res);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || 'Something went wrong');
+  return body;
+}
+let data = null;
+const fmtQty = (q, u) => (q == null ? '' : `${Number(q).toLocaleString('en-AU', { maximumFractionDigits: 2 })}${u && !/^(ea|each)$/i.test(u) ? ' ' + u : ''} ×`);
+const ICON = { supplier: '🏬', stock: '📦', notes: '📝', manual: '✍' };
+function render() {
+  const d = data, pr = d.progress;
+  const pct = pr.total ? Math.round(pr.picked / pr.total * 100) : 0;
+  let h = `<div class="sub" style="margin-top:2px">Job #${esc(d.job.job_number || '')}${d.job.client_name ? ' · ' + esc(d.job.client_name) : ''}${d.job.job_title ? ' · ' + esc(String(d.job.job_title).split(',')[0]) : ''}</div>
+    <div class="prog"><b>${pr.total && pr.picked === pr.total ? '✅ Everything picked up' : `${pr.picked} of ${pr.total} picked up`}</b><div class="bar"><span style="width:${pct}%"></span></div></div>`;
+  if (!d.groups.length) h += `<div class="empty">Nothing to pick up yet.<br>Items show up here from the job's invoices${d.job.has_notes ? '' : ' and its notes'} – or add them below.</div>`;
+  for (const g of d.groups) {
+    const left = g.items.filter((i) => !i.picked).length;
+    h += `<div class="grp">${ICON[g.kind] || '•'} ${esc(g.title)} <span class="muted">${left ? left + ' to get' : '✓ done'}</span></div>`;
+    if (g.kind === 'notes') h += `<div class="sub" style="margin:-2px 0 6px">From the job notes – not on an invoice yet, so check it's been ordered.</div>`;
+    for (const it of g.items) {
+      h += `<div class="it ${it.picked ? 'done' : ''}"><div class="row">
+        ${it.parts.length ? `<button class="tick ${it.picked ? 'on' : ''}" data-item-all="${esc(it.key)}" title="Tick all its parts"></button>` : `<button class="tick ${it.picked ? 'on' : ''}" data-key="${esc(it.key)}" data-on="${it.picked ? 1 : 0}"></button>`}
+        <div class="nm"><b>${esc(it.name)}</b>${it.invoice ? `<div class="sub">${esc(it.invoice.supplier || '')}${it.invoice.number ? ' #' + esc(it.invoice.number) : ''}${it.kit ? ' · ' + esc(it.kit) : ''}</div>` : it.kit ? `<div class="sub">${esc(it.kit)}</div>` : ''}</div>
+        ${it.qty != null ? `<span class="qty">${esc(fmtQty(it.qty, it.unit))}</span>` : ''}
+        ${it.source === 'manual' ? `<button class="x" data-del-extra="${it.id}" title="Remove">✕</button>` : ''}</div>
+        ${it.parts.length ? `<div class="parts">${it.parts.map((p) => `<div class="row"><button class="tick ${p.picked ? 'on' : ''}" data-key="${esc(p.key)}" data-on="${p.picked ? 1 : 0}"></button>
+          <span class="pn ${p.picked ? 'done' : ''}">${p.qty ? `<b>${p.qty} ×</b> ` : ''}${esc(p.name)}${p.optional ? ' <span class="opt">if needed</span>' : ''}</span></div>`).join('')}</div>` : ''}</div>`;
+    }
+  }
+  h += `<div class="add"><input id="xName" placeholder="Add something to pick up, e.g. Concrete bags" autocomplete="off"><input id="xQty" inputmode="decimal" placeholder="Qty"><button class="primary" data-add>Add</button></div>
+    <div class="acts2"><button data-all>✓ Tick everything</button><button data-none>Untick all</button><button data-diary>📝 Note it in the job diary</button>
+      <a class="btn" href="/kits?t=${encodeURIComponent(BOOT.token)}">🧩 Kits${d.kits ? ` (${d.kits})` : ''}</a></div>`;
+  $('#content').innerHTML = h;
+}
+async function load() { try { data = await api('/picklist'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const d = b.dataset;
+  try {
+    if (d.key) {
+      const on = d.on !== '1';
+      b.classList.toggle('on', on); d.on = on ? '1' : '0'; // straight away, on a slow connection too
+      await api('/picklist/tick', { method: 'POST', body: JSON.stringify({ key: d.key, picked: on }) });
+      return load();
+    }
+    if (d.itemAll) {
+      const it = data.groups.flatMap((g) => g.items).find((x) => x.key === d.itemAll);
+      const on = !it.picked;
+      for (const p of it.parts.filter((x) => !x.optional || !on)) await api('/picklist/tick', { method: 'POST', body: JSON.stringify({ key: p.key, picked: on }) });
+      return load();
+    }
+    if (d.add !== undefined) {
+      const name = $('#xName').value.trim();
+      if (!name) { $('#xName').focus(); return toast('What needs picking up?'); }
+      await api('/picklist/extra', { method: 'POST', body: JSON.stringify({ name, qty: $('#xQty').value.trim() }) });
+      return load();
+    }
+    if (d.delExtra) { await api('/picklist/extra/' + d.delExtra, { method: 'DELETE' }); return load(); }
+    if (d.all !== undefined) { await api('/picklist/all', { method: 'POST', body: JSON.stringify({ picked: true }) }); toast('All ticked'); return load(); }
+    if (d.none !== undefined) {
+      if (!d.sure) { d.sure = '1'; b.textContent = 'Sure? Untick all'; return; }
+      await api('/picklist/all', { method: 'POST', body: JSON.stringify({ picked: false }) }); return load();
+    }
+    if (d.diary !== undefined) { b.disabled = true; const r = await api('/picklist/diary', { method: 'POST' }); toast('Added to the job diary'); b.disabled = false; return; }
+  } catch (x) { toast(x.message); b.disabled = false; load(); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.target.id === 'xName' || e.target.id === 'xQty')) { e.preventDefault(); document.querySelector('[data-add]').click(); } });
+load();
+</script>
+</body>
+</html>
