@@ -397,6 +397,18 @@ function migrateColumns(db) {
       timezone: 'Australia/Melbourne', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18 });
     for (const a of db.prepare('SELECT account_key FROM accounts').all()) db.prepare('INSERT OR IGNORE INTO account_settings (account_key, data) VALUES (?, ?)').run(a.account_key, legacy);
   }
+  // ServiceM8 approvals of the other add-ons run by this server (e.g. the picking list): one per business and add-on.
+  const hadAppTokens = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_tokens'").get();
+  db.exec(`CREATE TABLE IF NOT EXISTS app_tokens (account_key TEXT NOT NULL, app TEXT NOT NULL, access_token TEXT, refresh_token TEXT, expires_at TEXT,
+    PRIMARY KEY (account_key, app))`);
+  // Businesses already here when the picking list became its own add-on had it inside Job Costs: they keep the link.
+  if (!hadAppTokens) {
+    for (const a of db.prepare("SELECT account_key FROM accounts WHERE account_key != '__pending__'").all()) {
+      const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(a.account_key);
+      const data = { ...(row ? parseJson(row.data, {}) : {}), pick_enabled: true };
+      db.prepare('INSERT INTO account_settings (account_key, data) VALUES (?, ?) ON CONFLICT(account_key) DO UPDATE SET data = excluded.data').run(a.account_key, JSON.stringify(data));
+    }
+  }
   if (!cols(db, 'statement_checks').includes('resolved')) db.exec('ALTER TABLE statement_checks ADD COLUMN resolved TEXT'); // JSON: flags sorted out, by invoice reference
   if (!cols(db, 'allocations').includes('category')) db.exec('ALTER TABLE allocations ADD COLUMN category TEXT');
   const accCols = cols(db, 'accounts');
@@ -1673,6 +1685,29 @@ function createRepo(db, dataDir) {
       db.prepare("DELETE FROM pick_ticks WHERE job_uuid = ? AND (key = ? OR key LIKE ?)").run(jobUUID, `x:${Number(id)}`, `x:${Number(id)}:%`);
       return db.prepare('DELETE FROM pick_extra WHERE id = ? AND job_uuid = ?').run(Number(id), jobUUID).changes > 0;
     },
+
+    // ---------- approvals of the other add-ons (the picking list) ----------
+    saveAppTokens(accountUUID, app, { accessToken, refreshToken, expiresIn }) {
+      db.prepare(`INSERT INTO app_tokens (account_key, app, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account_key, app) DO UPDATE SET access_token = excluded.access_token, refresh_token = COALESCE(excluded.refresh_token, app_tokens.refresh_token),
+          expires_at = excluded.expires_at`).run(accountUUID ?? '', app, accessToken, refreshToken || null, new Date(Date.now() + (expiresIn || 3600) * 1000).toISOString());
+    },
+    getAppTokens(accountUUID, app) {
+      const r = db.prepare('SELECT * FROM app_tokens WHERE account_key = ? AND app = ?').get(accountUUID ?? '', app);
+      return r && r.access_token ? { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: r.expires_at } : null;
+    },
+    /** An approval saved before we knew the business goes to the first business that clicks the add-on. */
+    claimPendingAppTokens(accountUUID, app) {
+      if (accountUUID == null) return false;
+      const p = db.prepare("SELECT * FROM app_tokens WHERE account_key = '__pending__' AND app = ?").get(app);
+      if (!p) return false;
+      db.prepare(`INSERT INTO app_tokens (account_key, app, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account_key, app) DO UPDATE SET access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at`)
+        .run(accountUUID, app, p.access_token, p.refresh_token, p.expires_at);
+      db.prepare("DELETE FROM app_tokens WHERE account_key = '__pending__' AND app = ?").run(app);
+      return true;
+    },
+    removeAppTokens(accountUUID, app) { db.prepare('DELETE FROM app_tokens WHERE account_key = ? AND app = ?').run(accountUUID ?? '', app); },
 
     // ---------- usage ----------
     /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */

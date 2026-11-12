@@ -225,6 +225,7 @@
   .pull-opt.m { border-color: #a7e3c9; background: #f3fbf7; }
   .pull-opt input { font: inherit; border: 1px solid #d6e2de; border-radius: 8px; padding: 5px 6px; }
   @media (max-width: 780px) { .jl-row { flex-wrap: wrap; } .jl-acts { width: 100%; justify-content: flex-start; padding-left: 30px; } }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -364,6 +365,7 @@ function render() {
   if (isStock) renderStockKpis();
   else if (!typingIn($('#kpis'))) renderKpis();
   renderJobLines();
+  $('#pickLink').hidden = !state.data.pickList;
   renderList();
   if (state.forceDetail || !typingIn($('#detail'))) { state.forceDetail = false; renderDetail(); }
   renderPreview();
@@ -1128,6 +1130,7 @@ $('#reportsLink').href = '/report?t=' + encodeURIComponent(BOOT.token);
 $('#billsLink').href = '/bills?t=' + encodeURIComponent(BOOT.token);
 $('#stockLink').href = '/stock?t=' + encodeURIComponent(BOOT.token);
 $('#pickLink').href = '/picklist?t=' + encodeURIComponent(BOOT.token);
+$('#pickLink').hidden = true; // shown once we know the business has the picking list
 $('#settingsLink').href = '/settings?t=' + encodeURIComponent(BOOT.token);
 $('#checkLink').href = '/checks?t=' + encodeURIComponent(BOOT.token);
 $('#pricesLink').href = '/prices?t=' + encodeURIComponent(BOOT.token);

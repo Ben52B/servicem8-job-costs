@@ -1618,8 +1618,8 @@ test('Export everything: one zip with every invoice (paid or not, which job), li
 
 test('the iPhone app and the Add-ons menu: a job button in the app, and Job Costs home from the menu', async () => {
   const m = await fetch(`${base}/manifest.json`).then((r) => r.json());
-  assert.deepEqual(m.actions.map((a) => [a.type, a.entity, a.event]), [['online', 'job', 'job_costs_open'], ['app', 'job', 'job_costs_open'],
-    ['online', 'job', 'pick_list_open'], ['app', 'job', 'pick_list_open']]);
+  assert.deepEqual(m.actions.map((a) => [a.type, a.entity, a.event]), [['online', 'job', 'job_costs_open'], ['app', 'job', 'job_costs_open']],
+    'the picking list is its own add-on now');
   assert.deepEqual(m.menuItems.map((x) => [x.type, x.event]), [['addon', 'job_costs_menu'], ['app', 'job_costs_menu']]);
   await openCard('job-a', 'acc-1'); // the business is known
   // from the menu: no job in the event
@@ -1996,6 +1996,52 @@ test('pick list: built from the job’s invoices, stock and notes, with kits; ti
   const evm = jwt.sign({ eventName: 'job_costs_menu', eventArgs: {}, auth: { accountUUID: 'acc-pick', accessToken: 'x' } }, SECRET);
   const tm = decodeURIComponent((await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: evm }).then((x) => x.json())).eventResponse.match(/<iframe src="[^"]*\?t=([^"]+)"/)[1]);
   assert.equal((await api(tm, '/picklist')).status, 400);
+});
+
+test('Picking List Creator: its own ServiceM8 add-on; works from the job’s ServiceM8 lines without Job Costs; links to Job Costs only when both', async () => {
+  const appP = createApp({ config: { ...config, pickAppId: 'pick-id', pickAppSecret: 'pick-secret' }, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary });
+  const srvP = await new Promise((r) => { const x = appP.listen(0, () => r(x)); });
+  const bP = `http://127.0.0.1:${srvP.address().port}`;
+  const call = (t, p, o = {}) => fetch(`${bP}/api${p}`, { ...o, headers: { Authorization: `Bearer ${t}`, ...(o.json ? { 'Content-Type': 'application/json' } : {}) }, body: o.json ? JSON.stringify(o.json) : o.body });
+  try {
+    const m = await fetch(`${bP}/pick/manifest.json`).then((r) => r.json());
+    assert.equal(m.name, 'Picking List Creator');
+    assert.deepEqual(m.actions.map((a) => [a.type, a.event]), [['online', 'pick_list_open'], ['app', 'pick_list_open']]);
+    // installing it asks ServiceM8 for its own approval
+    const act = await fetch(`${bP}/pick/servicem8/activate`, { redirect: 'manual' });
+    assert.equal(act.status, 302);
+    assert.match(act.headers.get('location'), /client_id=pick-id/);
+    assert.match(act.headers.get('location'), /redirect_uri=http%3A%2F%2Ftest%2Fpick%2Fservicem8%2Foauth%2Fcallback/);
+    // a business with only the picking list clicks it on a job
+    JOBS['pk-job'] = { jobNumber: '209400', jobTitle: '4 Pick St', description: 'NEW DOOR CALCULATIONS\nDoor - $3000\nPosts - $180\nRemotes - $90', lines: [
+      { uuid: 'pl1', name: 'Sectional door supply & install', qty: 1 }, { uuid: 'pl2', name: 'Merlin MR850 motor', qty: 1 },
+      { uuid: 'pl3', name: 'Posts', qty: 2 }, { uuid: 'pl4', name: 'Labour', qty: 4 }] };
+    const ev = (secret) => jwt.sign({ eventName: 'pick_list_open', eventArgs: { jobUUID: 'pk-job' }, auth: { accountUUID: 'acc-pk', accessToken: 'x' } }, secret);
+    const bad = await fetch(`${bP}/pick/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev('wrong') }).then((r) => r.json());
+    assert.match(bad.eventResponse, /Could not open Picking List Creator/);
+    const { eventResponse } = await fetch(`${bP}/pick/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev('pick-secret') }).then((r) => r.json());
+    const src = eventResponse.match(/<iframe src="([^"]+)"/)[1];
+    assert.ok(src.startsWith('http://test/picklist?t='));
+    const t = decodeURIComponent(src.split('t=')[1]);
+    assert.equal(repo.getSettings('acc-pk').pick_enabled, true);
+    const p = await call(t, '/picklist').then((r) => r.json());
+    assert.equal(p.jobCosts, false, 'no Job Costs: no link back to it');
+    const onJob = p.groups.find((g) => g.kind === 'job');
+    assert.deepEqual(onJob.items.map((i) => i.name), ['Sectional door supply & install', 'Merlin MR850 motor', 'Posts'], 'from the job’s lines (labour left out)');
+    assert.deepEqual(p.groups.find((g) => g.kind === 'notes').items.map((i) => i.name), ['Remotes'], 'notes add only what the lines don’t have');
+    // ticking works the same
+    await call(t, '/picklist/tick', { method: 'POST', json: { key: onJob.items[2].key, picked: true } });
+    assert.equal((await call(t, '/picklist').then((r) => r.json())).progress.picked, 1);
+    // Job Costs shows its picking list link only for businesses that have the picking list
+    assert.equal((await call(t, '/job').then((r) => r.json())).pickList, true);
+    JOBS['pk-job2'] = { jobNumber: '209401', jobTitle: '5 Pick St' };
+    const tj = await openCard('pk-job2', 'acc-jc-only');
+    assert.equal((await json(tj, '/job')).pickList, false);
+    // and the picking list links back to Job Costs when the business has it
+    await upload(tj, 'pk-door.pdf');
+    const pj = await json(tj, '/picklist');
+    assert.equal(pj.jobCosts, true);
+  } finally { srvP.close(); }
 });
 
 test('the card, report and inbox page scripts have no syntax errors', () => {

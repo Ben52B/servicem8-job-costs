@@ -684,9 +684,6 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       actions: [
         { name: 'Job Costs', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' },
         { name: 'Job Costs', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_open' }, // the iPhone / iPad app
-        // the pick list: what the installer collects for this job
-        { name: 'Pick list', type: 'online', entity: 'job', iconURL: `${config.publicUrl}/icon-pick.png`, event: 'pick_list_open' },
-        { name: 'Pick list', type: 'app', entity: 'job', iconURL: `${config.publicUrl}/icon-pick.png`, event: 'pick_list_open' },
       ],
       menuItems: [
         { name: 'Job Costs', type: 'addon', iconURL: `${config.publicUrl}/icon.png`, event: 'job_costs_menu' }, // the Add-ons menu
@@ -718,6 +715,81 @@ window.addEventListener('message', function (e) {
 });
 </script>
 <iframe src="${url}" style="position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;border:0;display:block" allow="clipboard-write"></iframe>`;
+
+  // ================= The picking list: a separate ServiceM8 add-on run by this server =================
+  const pickRedirect = () => `${config.publicUrl}/pick/servicem8/oauth/callback`;
+  const PICK_SCOPES = ['read_jobs read_job_materials read_customers publish_job_notes', 'read_jobs read_job_materials read_customers'];
+  const pickApproval = (attempt) => oauth.authorizeUrl({ appId: config.pickAppId, redirectUri: pickRedirect(), scope: PICK_SCOPES[attempt],
+    state: jwt.sign({ purpose: 'pick-oauth', attempt }, config.sessionSecret, { expiresIn: '15m' }) });
+  /** A ServiceM8 token for the picking list: its own approval, or Job Costs' if the business has both. */
+  async function pickTokenFor(accountUUID, eventToken) {
+    const t = repo.getAppTokens(accountUUID, 'pick');
+    if (!t) return accessTokenFor(accountUUID, eventToken || eventTokens.get(accountUUID ?? null));
+    if (t.refreshToken && Date.parse(t.expiresAt) - Date.now() < 120000) {
+      try { const fresh = await oauth.refreshAccessToken({ appId: config.pickAppId, appSecret: config.pickAppSecret, refreshToken: t.refreshToken });
+        repo.saveAppTokens(accountUUID, 'pick', fresh); return fresh.accessToken; }
+      catch (e) { console.error(`Picking list token refresh failed: ${e.message}`); }
+    }
+    return t.accessToken;
+  }
+  const pickName = () => config.pickAddonName || 'Picking List Creator';
+  app.get('/pick/servicem8/activate', (req, res) => {
+    if (!config.pickAppId) return res.status(500).type('html').send(htmlPage(pickName(), '<h2>Almost there</h2><p>Set <b>PICK_APP_ID</b> and <b>PICK_APP_SECRET</b> in Render, then try again.</p>'));
+    res.redirect(pickApproval(0));
+  });
+  app.get('/pick/servicem8/oauth/callback', async (req, res) => {
+    let st;
+    try { st = jwt.verify(String(req.query.state || ''), config.sessionSecret); if (st.purpose !== 'pick-oauth') throw new Error('bad state'); }
+    catch { return res.status(400).type('html').send(htmlPage(pickName(), '<h2>That link has expired</h2><p>Please install the add-on again from ServiceM8.</p>')); }
+    const attempt = Number(st.attempt) || 0;
+    if (/scope/i.test(`${req.query.error || ''} ${req.query.error_description || ''}`) && attempt + 1 < PICK_SCOPES.length) return res.redirect(pickApproval(attempt + 1));
+    if (req.query.error || !req.query.code) return res.status(400).type('html').send(htmlPage(pickName(), `<h2>Not connected</h2><p>ServiceM8 said: ${String(req.query.error_description || req.query.error || 'no approval code').replace(/</g, '&lt;')}</p>`));
+    try {
+      const tokens = await oauth.exchangeCode({ appId: config.pickAppId, appSecret: config.pickAppSecret, code: String(req.query.code), redirectUri: pickRedirect() });
+      const acc = await oauth.fetchAccount(tokens.accessToken);
+      if (acc) { repo.ensureAccount(acc.accountUUID); repo.saveAppTokens(acc.accountUUID, 'pick', tokens); repo.saveSettings(acc.accountUUID, { pick_enabled: true }); }
+      else repo.saveAppTokens('__pending__', 'pick', tokens);
+      res.type('html').send(htmlPage(`${pickName()} connected`, `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">${pickName()} is connected</h2>
+        <p>Open any job in ServiceM8 and click <b>${pickName()}</b>.</p><p style="color:#6b8a82">You can close this page.</p>`));
+    } catch (e) {
+      console.error(`Picking list connect failed: ${e.message}`);
+      res.status(502).type('html').send(htmlPage(pickName(), `<h2>Couldn't connect to ServiceM8</h2><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check PICK_APP_ID and PICK_APP_SECRET in Render.</p>`));
+    }
+  });
+  app.get('/pick/manifest.json', (req, res) => {
+    const name = pickName(); const icon = `${config.publicUrl}/icon-pick.png`;
+    res.json({
+      $schema: 'https://api.servicem8.com/api_1.0/addonsdk/manifest-schema/v1.json',
+      name, version: '1.0', iconURL: icon, supportURL: `${config.publicUrl}/help`,
+      ...(config.supportEmail ? { supportEmail: config.supportEmail } : {}),
+      actions: [
+        { name, type: 'online', entity: 'job', iconURL: icon, event: 'pick_list_open' },
+        { name, type: 'app', entity: 'job', iconURL: icon, event: 'pick_list_open' }, // the iPhone / iPad app
+      ],
+    });
+  });
+  // Someone clicked the picking list on a job.
+  app.post('/pick/servicem8/addon', express.text({ type: '*/*', limit: '1mb' }), async (req, res) => {
+    const reply = (html) => res.set('Cache-Control', 'no-store').json({ eventResponse: html });
+    let event;
+    try { event = verifyEvent(req.body, config.pickAppSecret || config.servicem8AppSecret); }
+    catch (e) { return reply(`<div style="font-family:sans-serif;padding:16px"><b>Could not open ${pickName()}</b><p>${String(e.message).replace(/</g, '&lt;')}</p><p>Check PICK_APP_SECRET in Render matches the add-on's App Secret.</p></div>`); }
+    if (!event.jobUUID) return reply(`<div style="font-family:sans-serif;padding:16px">Open ${pickName()} from a job.</div>`);
+    repo.ensureAccount(event.accountUUID);
+    repo.claimPendingAppTokens(event.accountUUID, 'pick');
+    if (!settingsFor(event.accountUUID).pick_enabled) repo.saveSettings(event.accountUUID, { pick_enabled: true });
+    if (event.accessToken) eventTokens.set(event.accountUUID ?? null, event.accessToken);
+    // the job's details, notes and lines from ServiceM8 (quickly; the page shows what's there if ServiceM8 is slow)
+    const work = (async () => {
+      const token = await pickTokenFor(event.accountUUID, event.accessToken);
+      const info = token ? await fetchJobImpl(event.jobUUID, token) : null;
+      return repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID, ...(withStockFlag(info, event.accountUUID) || {}) });
+    })();
+    work.catch((e) => console.error(`Picking list click: ${e.message}`));
+    let job = await Promise.race([work.catch(() => null), new Promise((r) => setTimeout(() => r(null), config.clickTimeoutMs || 3000))]);
+    if (!job) job = repo.ensureJob({ jobUUID: event.jobUUID, accountUUID: event.accountUUID });
+    reply(windowHtml(`${config.publicUrl}/picklist?t=${encodeURIComponent(sessionToken(job.job_uuid))}`));
+  });
 
   // ServiceM8 calls this when someone clicks "Job Costs" on a job card.
   app.post('/servicem8/addon', express.text({ type: '*/*', limit: '1mb' }), async (req, res) => {
@@ -979,16 +1051,17 @@ window.addEventListener('message', function (e) {
   }
   const pickListOf = (job, accountUUID) => picklist.buildPickList({
     summary: repo.getJobSummary(job.job_uuid), notes: (repo.getJob(job.job_uuid) || {}).notes || '',
-    kits: kitsFor(accountUUID), ticks: repo.pickTicks(job.job_uuid), extra: repo.listPickExtra(job.job_uuid),
+    kits: kitsFor(accountUUID), ticks: repo.pickTicks(job.job_uuid), extra: repo.listPickExtra(job.job_uuid), jobLines: repo.jobLines(job.job_uuid),
   });
+  const hasJobCosts = (accountUUID) => !!repo.getTokens(accountUUID) || !!repo.db.prepare('SELECT 1 FROM invoices WHERE account_uuid IS ? LIMIT 1').get(accountUUID);
   api.get('/picklist', (req, res) => {
     const j = repo.getJob(req.job.job_uuid);
-    res.json({ job: { job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
+    res.json({ jobCosts: hasJobCosts(req.account), job: { job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
       kits: kitsFor(req.account).length });
   });
   api.post('/picklist/tick', (req, res) => {
     const key = String(req.body?.key || '');
-    if (!/^[inx]:[\w-]+(:\d+)?$/.test(key)) return res.status(400).json({ error: 'Which item?' });
+    if (!/^[inxl]:[\w-]+(:\d+)?$/.test(key)) return res.status(400).json({ error: 'Which item?' });
     repo.setPickTick(req.job.job_uuid, key, req.body?.picked !== false);
     res.json({ ok: true, progress: pickListOf(req.job, req.account).progress });
   });
@@ -1124,7 +1197,7 @@ window.addEventListener('message', function (e) {
     for (const i of summary.invoices || []) if (i.price_check && i.price_check.suggested_rule) i.price_check.rule_saved = ruleTexts.has(i.price_check.suggested_rule);
     const acc = repo.ensureAccount(req.account);
     const note = sm8Notes.get(req.job.job_uuid) || null;
-    res.json({ ...summary, welcome: needsWelcome(req.account), splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
+    res.json({ ...summary, welcome: needsWelcome(req.account), pickList: !!settingsFor(req.account).pick_enabled, splitParts: repo.splitParts(req.account, req.job.job_number), sm8Note: note === LOADING ? null : note, sm8Loading: note === LOADING,
       diaryNote: diaryErrors.get(req.account) || null,
       priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       inboxAddress: inboxAddress(acc.inbox_code, config), inboxCount: repo.inboxCount(req.account),

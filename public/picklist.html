@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pick list</title>
+<title>Picking list</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -48,6 +48,7 @@
 .pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
 .dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+  [hidden] { display: none !important; }
 </style>
 <style>
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
@@ -100,7 +101,7 @@
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" data-back href="#" onclick="location.href=(BOOT.home?'/home?t=':'/card?t=')+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Job Costs</a><h1>📋 Pick list</h1></header>
+  <header><a class="btn" id="toJobCosts" hidden href="#" onclick="location.href='/card?t='+encodeURIComponent(BOOT.token);return false" style="margin-right:4px">← Job Costs</a><h1>📋 Picking list</h1></header>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -146,17 +147,19 @@ async function api(path, opts = {}) {
 }
 let data = null;
 const fmtQty = (q, u) => (q == null ? '' : `${Number(q).toLocaleString('en-AU', { maximumFractionDigits: 2 })}${u && !/^(ea|each)$/i.test(u) ? ' ' + u : ''} ×`);
-const ICON = { supplier: '🏬', stock: '📦', notes: '📝', manual: '✍' };
+const ICON = { supplier: '🏬', stock: '📦', job: '📋', notes: '📝', manual: '✍' };
 function render() {
   const d = data, pr = d.progress;
+  $('#toJobCosts').hidden = !d.jobCosts; // only for businesses that also have Job Costs
   const pct = pr.total ? Math.round(pr.picked / pr.total * 100) : 0;
   let h = `<div class="sub" style="margin-top:2px">Job #${esc(d.job.job_number || '')}${d.job.client_name ? ' · ' + esc(d.job.client_name) : ''}${d.job.job_title ? ' · ' + esc(String(d.job.job_title).split(',')[0]) : ''}</div>
     <div class="prog"><b>${pr.total && pr.picked === pr.total ? '✅ Everything picked up' : `${pr.picked} of ${pr.total} picked up`}</b><div class="bar"><span style="width:${pct}%"></span></div></div>`;
-  if (!d.groups.length) h += `<div class="empty">Nothing to pick up yet.<br>Items show up here from the job's invoices${d.job.has_notes ? '' : ' and its notes'} – or add them below.</div>`;
+  if (!d.groups.length) h += `<div class="empty">Nothing to pick up yet.<br>Items show up here from the job's lines in ServiceM8${d.jobCosts ? ', its invoices' : ''} and its notes – or add them below.</div>`;
   for (const g of d.groups) {
     const left = g.items.filter((i) => !i.picked).length;
     h += `<div class="grp">${ICON[g.kind] || '•'} ${esc(g.title)} <span class="muted">${left ? left + ' to get' : '✓ done'}</span></div>`;
     if (g.kind === 'notes') h += `<div class="sub" style="margin:-2px 0 6px">From the job notes – not on an invoice yet, so check it's been ordered.</div>`;
+    if (g.kind === 'job' && d.jobCosts) h += `<div class="sub" style="margin:-2px 0 6px">On the job in ServiceM8 – no supplier invoice for it yet.</div>`;
     for (const it of g.items) {
       h += `<div class="it ${it.picked ? 'done' : ''}"><div class="row">
         ${it.parts.length ? `<button class="tick ${it.picked ? 'on' : ''}" data-item-all="${esc(it.key)}" title="Tick all its parts"></button>` : `<button class="tick ${it.picked ? 'on' : ''}" data-key="${esc(it.key)}" data-on="${it.picked ? 1 : 0}"></button>`}

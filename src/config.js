@@ -42,6 +42,10 @@ const config = {
   // when its client name or category name contains one of these (comma separated, any case).
   // Each job also has a switch to correct it either way.
   supportEmail: process.env.SUPPORT_EMAIL || null,
+  // The picking list, a separate ServiceM8 add-on run by the same server (its own App ID and secret).
+  pickAppId: (process.env.PICK_APP_ID || '').trim(),
+  pickAppSecret: process.env.PICK_APP_SECRET || '',
+  pickAddonName: (process.env.PICK_ADDON_NAME || 'Picking List Creator').trim().slice(0, 30),
   // Opens /admin/usage?key=... (for the add-on's owner); not set = the page is off.
   adminKey: process.env.ADMIN_KEY || '',
   // Claude prices in USD per million tokens (input, output, cache write, cache read), to estimate what each business costs.

@@ -62,7 +62,8 @@ function itemsFromNotes(notes) {
  * Build the pick list of a job. Returns { groups: [{ title, kind, items: [...] }], progress: { picked, total } }.
  * Each item: { key, name, qty, unit, where, source, invoice, parts: [{ key, name, qty, optional, picked }], picked }.
  */
-function buildPickList({ summary, notes, kits, ticks, extra }) {
+function buildPickList({ summary, notes, kits, ticks, extra, jobLines = null }) {
+  const { kindsOf, mainKind } = require('./joblines');
   const items = [];
   const kitCovered = new Set();
   const nameCovered = [];
@@ -82,8 +83,27 @@ function buildPickList({ summary, notes, kits, ticks, extra }) {
       });
     }
   }
-  // from the job notes: what has a price but isn't on an invoice yet
+  // from the job's lines in ServiceM8 (door, motor, posts…): what no invoice covers yet
+  const invoiceKinds = new Set();
+  for (const it of items) { const k = mainKind(it.name); if (k) invoiceKinds.add(k); }
+  const lineKinds = new Set();
+  for (const l of jobLines || []) {
+    const name = String(l.name || '').trim();
+    const kinds = kindsOf(name.replace(/supply\s*(and|&)\s*install(ation)?/i, ' '));
+    if (!name || !kinds.length || (NOT_MATERIAL.test(name) && !kinds.length)) continue;
+    kinds.forEach((k) => lineKinds.add(k));
+    if (kinds.every((k) => invoiceKinds.has(k))) continue; // its invoice is on the list already
+    const kit = matchKit(kits, name);
+    if (kit) kitCovered.add(kit.id ?? kit.name);
+    const key = `l:${String(l.uuid || slug(name)).replace(/[^\w-]/g, '')}`;
+    items.push({ key, name, qty: l.qty ?? null, unit: null, where: 'On the job', source: 'job', kit: kit ? kit.name : null,
+      parts: kit ? kit.parts.map((p, i) => ({ key: `${key}:${i}`, ...p })) : [] });
+    nameCovered.push(words(name));
+  }
+  // from the job notes: what has a price but isn't on an invoice (or a job line) yet
   for (const n of itemsFromNotes(notes)) {
+    const nk = kindsOf(n.label);
+    if (nk.length && nk.every((k) => lineKinds.has(k) || invoiceKinds.has(k))) continue;
     const kit = matchKit(kits, n.hint);
     const w = words(n.label).trim().split(' ').filter((x) => x.length > 2).map((x) => x.replace(/s$/, ''));
     const covered = (kit && kitCovered.has(kit.id ?? kit.name)) || (w.length && nameCovered.some((d) => w.every((x) => d.includes(` ${x}`))));
@@ -110,11 +130,11 @@ function buildPickList({ summary, notes, kits, ticks, extra }) {
     }
   }
   // grouped by where to collect: suppliers first, then our stock, then not invoiced yet, then added by hand
-  const order = (w) => (w === 'Our stock' ? 1 : w === 'Not on an invoice yet' ? 2 : w === 'Added by hand' ? 3 : 0);
+  const order = (w) => (w === 'Our stock' ? 1 : w === 'On the job' ? 2 : w === 'Not on an invoice yet' ? 3 : w === 'Added by hand' ? 4 : 0);
   const groups = [];
   for (const it of items) {
     let g = groups.find((x) => x.title === it.where);
-    if (!g) { g = { title: it.where, kind: ['supplier', 'stock', 'notes', 'manual'][order(it.where)], items: [] }; groups.push(g); }
+    if (!g) { g = { title: it.where, kind: ['supplier', 'stock', 'job', 'notes', 'manual'][order(it.where)], items: [] }; groups.push(g); }
     g.items.push(it);
   }
   groups.sort((a, b) => order(a.title) - order(b.title) || a.title.localeCompare(b.title));
