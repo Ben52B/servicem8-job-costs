@@ -213,6 +213,18 @@
   .pc-choose select { max-width: 220px; font: inherit; font-size: 12.5px; } .pc-choose input { min-width: 160px; font: inherit; font-size: 12.5px; border: 1px solid #d6e2de; border-radius: 8px; padding: 3px 8px; }
   details.rnote { font-size: 12.5px; color: #64748b; margin: 10px 0 0; } details.rnote summary { cursor: pointer; font-weight: 600; } details.rnote div { margin-top: 4px; }
   a.welcome { display: block; background: #eef2ff; border: 1px solid #c7d2fe; color: #3730a3; border-radius: 14px; padding: 10px 14px; margin: 0 0 12px; text-decoration: none; font-size: 13.5px; }
+  .jl { padding: 10px 14px; margin-bottom: 12px; }
+  .jl-head { border: 0; background: none; box-shadow: none; padding: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; text-align: left; font-size: 13.5px; cursor: pointer; }
+  .jl-list { margin-top: 8px; display: grid; gap: 2px; }
+  .jl-row { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line2, #eef3f1); font-size: 13.5px; }
+  .jl-ic { width: 20px; text-align: center; font-weight: 800; } .jl-row.covered .jl-ic { color: var(--ok); } .jl-row.missing .jl-ic { color: var(--bad); } .jl-row.not_needed { opacity: .7; }
+  .jl-nm { flex: 1; min-width: 0; } .jl-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pull-bg { position: fixed; inset: 0; background: rgba(15, 30, 26, .45); display: flex; align-items: center; justify-content: center; padding: 14px; z-index: 60; }
+  .pull { background: #fff; border-radius: 16px; padding: 16px; width: 100%; max-width: 560px; max-height: 85vh; overflow: auto; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .pull-opt { display: flex; gap: 8px; align-items: center; padding: 8px; border: 1px solid #e3ece9; border-radius: 12px; margin-bottom: 6px; }
+  .pull-opt.m { border-color: #a7e3c9; background: #f3fbf7; }
+  .pull-opt input { font: inherit; border: 1px solid #d6e2de; border-radius: 8px; padding: 5px 6px; }
+  @media (max-width: 780px) { .jl-row { flex-wrap: wrap; } .jl-acts { width: 100%; justify-content: flex-start; padding-left: 30px; } }
 </style>
 </head>
 <body>
@@ -233,6 +245,7 @@
   <section id="stockBanner"></section>
   <section id="suggest"></section>
   <section class="kpis" id="kpis"></section>
+  <section id="jobLines"></section>
   <section class="cols">
     <aside id="aside">
       <button class="primary add-btn" data-add>＋ Add costs</button>
@@ -349,6 +362,7 @@ function render() {
   renderSuggestions();
   if (isStock) renderStockKpis();
   else if (!typingIn($('#kpis'))) renderKpis();
+  renderJobLines();
   renderList();
   if (state.forceDetail || !typingIn($('#detail'))) { state.forceDetail = false; renderDetail(); }
   renderPreview();
@@ -372,6 +386,62 @@ function renderSuggestions() {
 }
 
 // ---------- Totals ----------
+// ---------- the job's lines in ServiceM8, each with the cost that covers it ----------
+function renderJobLines() {
+  const lines = state.data.jobLines;
+  const el = $('#jobLines');
+  if (!lines || !lines.length) { el.innerHTML = ''; return; }
+  const missing = lines.filter((l) => l.status === 'missing');
+  if (state.linesOpen === undefined) state.linesOpen = missing.length > 0;
+  const covered = lines.filter((l) => l.status === 'covered').length;
+  const head = `<button class="jl-head" data-lines-toggle>📋 <b>Job lines in ServiceM8</b>
+    <span class="muted">${covered} with a cost${missing.length ? '' : ' ✓'}</span>${missing.length ? ` <span class="chip c-err">⚠ ${missing.length} without a cost</span>` : ''} <span class="muted">${state.linesOpen ? '▴' : '▾'}</span></button>`;
+  if (!state.linesOpen) { el.innerHTML = `<div class="card jl">${head}</div>`; return; }
+  const row = (l) => {
+    const by = l.covered_by.map((c) => `${c.stock ? '📦 ' : ''}${esc(c.invoice.supplier || '')}${c.invoice.invoice_number ? ' #' + esc(c.invoice.invoice_number) : ''}`);
+    const uniq = [...new Set(by)].join(', ');
+    return `<div class="jl-row ${l.status}"><span class="jl-ic">${l.status === 'covered' ? '✓' : l.status === 'not_needed' ? '–' : '⚠'}</span>
+      <div class="jl-nm"><b>${esc(l.name)}</b>${l.qty && l.qty !== 1 ? ` <span class="muted">× ${esc(String(l.qty))}</span>` : ''}
+        <div class="muted" style="font-size:12px">${l.status === 'covered' ? esc(uniq) : l.status === 'not_needed' ? 'No cost needed' : `No cost on the job yet${l.missing_kinds.length < l.kinds.length ? ` for: ${esc(l.missing_kinds.join(', '))}` : ''}${uniq ? ' · has ' + esc(uniq) : ''}`}</div></div>
+      <div class="jl-acts">${l.status === 'missing' ? `<button class="small primary" data-pull="${esc(l.uuid)}">📦 Pull from stock</button><button class="small" data-not-needed="${esc(l.uuid)}" title="e.g. the customer supplies it">No cost needed</button>`
+        : l.status === 'not_needed' ? `<button class="small" data-needed="${esc(l.uuid)}">Undo</button>` : ''}</div></div>`;
+  };
+  el.innerHTML = `<div class="card jl">${head}<div class="jl-list">${lines.map(row).join('')}</div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Each line of the job in ServiceM8 (door, motor, posts…) and the invoice that covers its cost. No cost yet? Pull it from a stock invoice, or wait for the supplier's invoice.</div></div>`;
+}
+// "Pull from stock": choose the stock invoice (and how many)
+async function openPull(uuid) {
+  const line = state.data.jobLines.find((l) => l.uuid === uuid);
+  const box = document.createElement('div');
+  box.className = 'pull-bg';
+  box.innerHTML = `<div class="pull" role="dialog" aria-modal="true"><div style="display:flex;gap:8px;align-items:center"><b style="flex:1;font-size:16px">Pull "${esc(line.name)}" from stock</b><button data-pull-close>✕</button></div>
+    <div class="muted" style="font-size:12.5px;margin:4px 0 10px">Choose the stock invoice it comes from. It becomes this job's cost and comes out of stock.</div><div id="pullList"><span class="spin"></span></div></div>`;
+  document.body.appendChild(box);
+  const close = () => box.remove();
+  box.addEventListener('click', async (e) => {
+    if (e.target === box || e.target.closest('[data-pull-close]')) return close();
+    const b = e.target.closest('[data-pull-item]'); if (!b) return;
+    const qEl = box.querySelector('#pq-' + b.dataset.pullItem);
+    b.disabled = true;
+    try {
+      await post('/joblines/pull', { item_id: Number(b.dataset.pullItem), qty: qEl ? Number(qEl.value) : undefined });
+      close(); toast('Pulled from stock onto this job'); load();
+    } catch (x) { toast(x.message); b.disabled = false; }
+  });
+  try {
+    const r = await api('/joblines/stock?kinds=' + encodeURIComponent(line.missing_kinds.join(',')));
+    const list = box.querySelector('#pullList');
+    if (!r.options.length) { list.innerHTML = '<div class="muted">Nothing in stock. When the supplier’s invoice comes in, add it to this job.</div>'; return; }
+    const want = Number(line.qty) > 0 ? Number(line.qty) : 1;
+    list.innerHTML = (r.options.some((o) => o.match) ? '' : '<div class="muted" style="font-size:12.5px;margin-bottom:6px">Nothing in stock looks like this line – everything in stock:</div>')
+      + r.options.map((o) => `<div class="pull-opt ${o.match ? 'm' : ''}"><div style="flex:1;min-width:0"><b>${esc(o.description)}</b>
+        <div class="muted" style="font-size:12px">${esc(o.invoice.supplier || '')}${o.invoice.invoice_number ? ' #' + esc(o.invoice.invoice_number) : ''}${o.invoice.invoice_date ? ' · ' + esc(fmtDate(o.invoice.invoice_date)) : ''} ·
+          ${o.left_quantity != null ? `${o.left_quantity} left${o.unit_cost != null ? ' · ' + money(o.unit_cost) + ' each' : ''}` : money(o.left_amount) + ' left'}</div></div>
+        ${o.left_quantity != null ? `<input id="pq-${o.item_id}" type="number" min="1" step="1" max="${o.left_quantity}" value="${Math.min(want, o.left_quantity)}" style="width:62px">` : ''}
+        <button class="primary small" data-pull-item="${o.item_id}">Pull</button></div>`).join('');
+  } catch (x) { box.querySelector('#pullList').innerHTML = `<div class="muted">${esc(x.message)}</div>`; }
+}
+
 function renderKpis() {
   const t = state.data.totals;
   const hasQuote = t.quote != null;
@@ -840,6 +910,10 @@ document.addEventListener('click', async (e) => {
   if (!t) return;
   const ds = t.dataset;
   try {
+    if (ds.linesToggle !== undefined) { state.linesOpen = !state.linesOpen; return renderJobLines(); }
+    if (ds.pull) return openPull(ds.pull);
+    if (ds.notNeeded) { await post(`/joblines/${encodeURIComponent(ds.notNeeded)}/not-needed`, { not_needed: true }); return load(); }
+    if (ds.needed) { await post(`/joblines/${encodeURIComponent(ds.needed)}/not-needed`, { not_needed: false }); return load(); }
     if (ds.select) {
       state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; render();
       // on a phone the details are below the list: take the user there

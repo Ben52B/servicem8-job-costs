@@ -186,7 +186,10 @@ async function readJob(jobUUID, accessToken) {
       ...(await (async () => {
         const lines = await fetchJobLines(jobUUID, accessToken);
         if (lines && lines.error) return { quoteAmount: null, linesError: lines.error };
-        return { quoteAmount: fullPriceFromLines(lines), linesError: null };
+        // the lines themselves too: Job Costs checks each one has a cost (door, motor, posts…)
+        const items = (Array.isArray(lines) ? lines : []).filter((l) => String(l.active) !== '0')
+          .map((l) => ({ uuid: l.uuid, name: String(l.name || '').slice(0, 200), qty: Number(l.quantity) || null, price: isFinite(Number(l.price)) ? Number(l.price) : null }));
+        return { quoteAmount: fullPriceFromLines(lines), linesError: null, lines: items };
       })()),
       status: job.status || null,
     };

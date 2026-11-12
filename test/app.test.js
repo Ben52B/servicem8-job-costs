@@ -1857,6 +1857,64 @@ test('deleting from the Inbox: "ignore it if it comes in again" drops the same b
   assert.equal((await json(t, '/settings')).settings.ask_ignore_on_delete, false);
 });
 
+test('ServiceM8 job lines: each line shows the cost that covers it; a line without one is pulled from a stock invoice you choose', async () => {
+  const jl = require('../src/joblines');
+  // matching by kind of thing
+  assert.deepEqual(jl.kindsOf('Sectional door supply & install with Merlin motor'), ['motor', 'door']);
+  assert.deepEqual(jl.kindsOf('Post covers x2'), ['post cover']);
+  assert.equal(jl.mainKind('Bolt 800N opener for roller door'), 'motor', 'an opener for a door is a motor, not a door');
+  const m = jl.matchLines([{ uuid: 'a', name: 'Sectional door supply & install with motor' }], [{ key: '1', description: 'Insulated sectional door 2300x4830' }]);
+  assert.deepEqual([m[0].status, m[0].missing_kinds], ['missing', ['motor']], 'a line needs every kind it names');
+
+  JOBS['jl-job'] = { jobNumber: '209300', jobTitle: '3 Lines St', lines: [
+    { uuid: 'l1', name: 'Sectional door supply & install', qty: 1, price: 3000 },
+    { uuid: 'l2', name: 'Merlin MR850 motor', qty: 1, price: 650 },
+    { uuid: 'l3', name: 'Posts', qty: 2, price: 90 },
+    { uuid: 'l4', name: 'Post covers', qty: 2, price: 40 },
+    { uuid: 'l5', name: 'Labour', qty: 4, price: 95 },
+    { uuid: 'l6', name: 'Header flashing', qty: 1, price: 95 }] };
+  const t = await openCard('jl-job', 'acc-jl');
+  const mk = (sup, num, items) => { const inv = repo.createInvoice({ accountUUID: 'acc-jl', source: 'upload' });
+    const sub = items.reduce((a, i) => a + i.line_total, 0);
+    repo.saveExtraction(inv.id, { supplier_name: sup, invoice_number: num, subtotal: sub, tax: Math.round(sub * 10) / 100, total: Math.round(sub * 110) / 100, items: items.map((i) => ({ category: 'materials', ...i })) });
+    return inv.id; };
+  repo.assignWhole(mk('Summit Door Supplies', 'SD-1', [{ description: 'Insulated Sectional Door 2300x4830', quantity: 1, line_total: 2800 }, { description: 'Head flashing 5m', quantity: 1, line_total: 60 }]), 'jl-job', {});
+  const opener = mk('Bolt Openers Co', 'BO-1', [{ description: 'Bolt 800N opener', quantity: 10, line_total: 3100 }]); repo.keepAsStock(opener);
+  const posts = mk('Coastal Steel', 'CS-1', [{ description: 'Galv posts 100x100 2.4m', quantity: 20, line_total: 900 }]); repo.keepAsStock(posts);
+  let s = await json(t, '/job');
+  const st = () => Object.fromEntries(s.jobLines.map((l) => [l.uuid, l.status]));
+  assert.deepEqual(st(), { l1: 'covered', l2: 'missing', l3: 'missing', l4: 'missing', l6: 'covered' }, 'labour isn’t a thing to cost');
+  assert.equal(s.jobLines.find((l) => l.uuid === 'l6').covered_by[0].invoice.invoice_number, 'SD-1');
+  // pull the motor from stock: the matching stock comes first
+  const opts = (await json(t, '/joblines/stock?kinds=motor')).options;
+  assert.deepEqual([opts[0].description, opts[0].match, opts[0].left_quantity, opts[0].unit_cost], ['Bolt 800N opener', true, 10, 310]);
+  assert.equal((await post(t, '/joblines/pull', { item_id: opts[0].item_id, qty: 11 })).status, 400, 'only 10 left');
+  assert.equal((await post(t, '/joblines/pull', { item_id: opts[0].item_id, qty: 1 })).status, 200);
+  s = await json(t, '/job');
+  assert.equal(st().l2, 'covered');
+  assert.equal(s.jobLines.find((l) => l.uuid === 'l2').covered_by[0].stock, true);
+  assert.equal(Math.round(s.totals.total * 100), Math.round((2800 + 60 + 310) * 100), 'its cost is on the job: 1 of 10 openers = $310');
+  assert.equal(repo.listStock('acc-jl').stock.find((i) => i.id === opener).lines[0].trace.left_quantity, 9, '9 left in stock');
+  // posts: 2 of them
+  const p2 = (await json(t, '/joblines/stock?kinds=post')).options.find((o) => o.match);
+  await post(t, '/joblines/pull', { item_id: p2.item_id, qty: 2 });
+  s = await json(t, '/job');
+  assert.equal(st().l3, 'covered');
+  assert.equal(st().l4, 'missing', 'posts don’t cover post covers');
+  // the customer supplies the post covers: no cost needed (and back)
+  await post(t, '/joblines/l4/not-needed', { not_needed: true });
+  s = await json(t, '/job');
+  assert.equal(st().l4, 'not_needed');
+  await post(t, '/joblines/l4/not-needed', { not_needed: false });
+  assert.equal(Object.fromEntries((await json(t, '/job')).jobLines.map((l) => [l.uuid, l.status])).l4, 'missing');
+  // another business can't pull this business's stock
+  JOBS['jl-job2'] = { jobNumber: '209301', jobTitle: '4 Lines St' };
+  const t2 = await openCard('jl-job2', 'acc-jl2');
+  assert.equal((await post(t2, '/joblines/pull', { item_id: opts[0].item_id, qty: 1 })).status, 404);
+  assert.deepEqual((await json(t2, '/joblines/stock')).options, []);
+  assert.equal((await json(t2, '/job')).jobLines, null, 'no lines known for that job');
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

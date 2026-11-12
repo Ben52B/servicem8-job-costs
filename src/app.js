@@ -13,6 +13,7 @@ const { isSupported, guessMime, htmlToText, CATEGORIES } = require('./analyzer')
 const { duplicateMessage } = require('./processor');
 const { exportEverything } = require('./export');
 const mailbox = require('./mailbox');
+const joblines = require('./joblines');
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
@@ -97,7 +98,7 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     return null;
   };
   // Things that only make sense on one job (the menu's business-wide pages don't use them).
-  const needsJob = (method, p) => p === '/job' || /^\/(unassigned|assign$|items\/|diary|suggestions\/|invoices\/manual|invoices\/?$)/.test(p)
+  const needsJob = (method, p) => p === '/job' || /^\/(unassigned|assign$|items\/|diary|suggestions\/|invoices\/manual|invoices\/?$|joblines)/.test(p)
     || (/^\/invoices\/\d+$/.test(p) && method !== 'GET') || /^\/invoices\/\d+\/diary-keep/.test(p);
 
   // Card API auth: short-lived token handed to the card when ServiceM8 opened it.
@@ -919,6 +920,49 @@ window.addEventListener('message', function (e) {
     res.json({ ok: true, found });
   });
 
+  // ---------- ServiceM8 lines without a cost: pull them from a stock invoice ----------
+  // Stock lines with something left, the ones of the same kind first (oldest invoice first).
+  api.get('/joblines/stock', (req, res) => {
+    const kinds = String(req.query.kinds || '').split(',').filter(Boolean);
+    const opts = [];
+    for (const inv of repo.listStock(req.account).stock) {
+      for (const l of inv.lines || []) {
+        if (!(l.trace.left > 1e-6)) continue;
+        const kind = joblines.mainKind(l.description);
+        opts.push({ item_id: l.item_id, description: l.description, kind, match: kinds.includes(kind), unit: l.unit,
+          left_quantity: l.trace.quantity ? l.trace.left_quantity : null, left_amount: l.trace.left_amount, unit_cost: l.unit_cost,
+          invoice: { id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date } });
+      }
+    }
+    opts.sort((a, b) => (b.match - a.match) || String(a.invoice.invoice_date || '').localeCompare(String(b.invoice.invoice_date || '')));
+    res.json({ options: opts });
+  });
+  // Take some of a stock line onto this job (as its cost).
+  api.post('/joblines/pull', (req, res) => {
+    const item = repo.getItem(Number(req.body?.item_id));
+    if (!item || (item.account_uuid ?? null) !== req.account) return res.status(404).json({ error: 'Not found' });
+    const trace = repo._trace({ ...item, quantity: Number(item.quantity) > 0 ? item.quantity : null }, repo.db.prepare('SELECT * FROM allocations WHERE item_id = ?').all(item.id), req.job.job_uuid);
+    const mine = repo.db.prepare('SELECT fraction FROM allocations WHERE item_id = ? AND job_uuid = ?').get(item.id, req.job.job_uuid);
+    const have = mine ? mine.fraction : 0;
+    let add;
+    if (item.quantity) {
+      const q = Number(req.body?.qty ?? 1);
+      if (!(q > 0)) return res.status(400).json({ error: 'How many?' });
+      if (q > trace.left_quantity + 1e-9) return res.status(400).json({ error: `Only ${trace.left_quantity} left on that invoice` });
+      add = q / item.quantity;
+    } else {
+      add = trace.left; // no quantity on the line: the rest of it
+      if (!(add > 1e-9)) return res.status(400).json({ error: 'Nothing left on that line' });
+    }
+    try { repo.setShare(item.id, req.job.job_uuid, Math.min(1, have + add), {}); }
+    catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+    res.json({ ok: true });
+  });
+  api.post('/joblines/:uuid/not-needed', (req, res) => {
+    repo.setJobLineFlag(req.job.job_uuid, String(req.params.uuid), req.body?.not_needed !== false);
+    res.json({ ok: true });
+  });
+
   // ---------- Settings of the business ----------
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   api.get('/settings', (req, res) => {
@@ -984,8 +1028,21 @@ window.addEventListener('message', function (e) {
     if (!job || (job.account_uuid ?? null) !== req.account) return res.status(404).json({ error: `Job #${n} wasn\u2019t found in ServiceM8` });
     res.json({ token: sessionToken(job.job_uuid), job_number: job.job_number });
   }); // open windows check in, so their session stays fresh
+  /** The job's ServiceM8 lines, each with the cost that covers it (or none yet). null when not known yet. */
+  function linesCheck(job, summary) {
+    const lines = repo.jobLines(job.job_uuid);
+    if (!lines) return null;
+    const costs = [];
+    for (const inv of summary.invoices || []) {
+      if (inv.status !== 'ready' || inv.duplicate_of) continue;
+      for (const l of inv.items || []) costs.push({ key: `${inv.id}:${l.id}`, description: l.description,
+        invoice: { id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number }, stock: !!inv.kept_as_stock });
+    }
+    return joblines.matchLines(lines, costs, repo.jobLineFlags(job.job_uuid));
+  }
   api.get('/job', (req, res) => {
     const summary = repo.getJobSummary(req.job.job_uuid);
+    summary.jobLines = repo.isStockJob(req.job.job_uuid) ? null : linesCheck(req.job, summary);
     if (checker) priceCheckUnchecked(req.account, summary.invoices || []);
     // what the statement checks found on this job's invoices (until marked resolved)
     const flags = repo.checkFlagsFor(req.account, (summary.invoices || []).map((i) => i.id));

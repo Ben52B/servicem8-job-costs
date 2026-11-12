@@ -326,6 +326,7 @@ function migrateColumns(db) {
   if (!jobCols.includes('sm8_status')) db.exec('ALTER TABLE jobs ADD COLUMN sm8_status TEXT');
   if (!jobCols.includes('client_name')) db.exec('ALTER TABLE jobs ADD COLUMN client_name TEXT');
   if (!jobCols.includes('category_name')) db.exec('ALTER TABLE jobs ADD COLUMN category_name TEXT');
+  if (!jobCols.includes('sm8_lines')) db.exec('ALTER TABLE jobs ADD COLUMN sm8_lines TEXT'); // the job's line items in ServiceM8 (JSON)
   // Stock order job: auto = matched by client/category; manual = the switch on the card (wins when set).
   if (!jobCols.includes('stock_auto')) db.exec('ALTER TABLE jobs ADD COLUMN stock_auto INTEGER NOT NULL DEFAULT 0');
   if (!jobCols.includes('stock_manual')) db.exec('ALTER TABLE jobs ADD COLUMN stock_manual INTEGER');
@@ -375,6 +376,8 @@ function migrateColumns(db) {
   // Invoices a business deleted and asked to ignore: if the same bill is emailed again, it's dropped quietly.
   db.exec(`CREATE TABLE IF NOT EXISTS ignored_bills (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT, invoice_number TEXT,
     total REAL, file_hash TEXT, label TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  // ServiceM8 job lines marked "no cost needed" (e.g. the customer supplies it).
+  db.exec('CREATE TABLE IF NOT EXISTS job_line_flags (job_uuid TEXT NOT NULL, line_uuid TEXT NOT NULL, PRIMARY KEY (job_uuid, line_uuid))');
   // What each business used each month (Claude requests and their tokens), for limits and costs.
   db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -411,7 +414,7 @@ function createRepo(db, dataDir) {
     // ---------- jobs & accounts ----------
 
     ensureJob({ jobUUID, accountUUID = null, jobNumber = null, jobTitle = null, quoteAmount = null, status = null,
-      clientName = null, categoryName = null, stockAuto = undefined }) {
+      clientName = null, categoryName = null, stockAuto = undefined, lines = undefined }) {
       const job = db.prepare('SELECT * FROM jobs WHERE job_uuid = ?').get(jobUUID);
       if (!job) {
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -433,6 +436,7 @@ function createRepo(db, dataDir) {
           .run(clientName, categoryName, jobUUID);
       }
       if (stockAuto !== undefined) db.prepare('UPDATE jobs SET stock_auto = ? WHERE job_uuid = ?').run(stockAuto ? 1 : 0, jobUUID);
+      if (Array.isArray(lines)) db.prepare('UPDATE jobs SET sm8_lines = ? WHERE job_uuid = ?').run(JSON.stringify(lines.slice(0, 200)), jobUUID);
       if (quoteAmount != null && isFinite(quoteAmount)) {
         db.prepare(`UPDATE jobs SET quote_amount = ?, quote_source = 'servicem8'
           WHERE job_uuid = ? AND COALESCE(quote_source, '') != 'manual'`).run(round2(quoteAmount), jobUUID);
@@ -1623,6 +1627,14 @@ function createRepo(db, dataDir) {
           && invoiceNumberKey(r.invoice_number) === invoiceNumberKey(inv.invoice_number)
           && sameSupplier(supplierKey(r.supplier), supplierKey(inv.supplier))
           && Math.abs(Math.round(r.total * 100) - Math.round(inv.total * 100)) <= 1));
+    },
+
+    // ---------- the job's ServiceM8 lines ----------
+    jobLines(jobUUID) { const j = db.prepare('SELECT sm8_lines FROM jobs WHERE job_uuid = ?').get(jobUUID); return j && j.sm8_lines ? parseJson(j.sm8_lines, []) : null; },
+    jobLineFlags(jobUUID) { return new Set(db.prepare('SELECT line_uuid FROM job_line_flags WHERE job_uuid = ?').all(jobUUID).map((r) => r.line_uuid)); },
+    setJobLineFlag(jobUUID, lineUUID, on) {
+      if (on) db.prepare('INSERT OR IGNORE INTO job_line_flags (job_uuid, line_uuid) VALUES (?, ?)').run(jobUUID, lineUUID);
+      else db.prepare('DELETE FROM job_line_flags WHERE job_uuid = ? AND line_uuid = ?').run(jobUUID, lineUUID);
     },
 
     // ---------- usage ----------
