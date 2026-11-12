@@ -95,6 +95,8 @@
   .add { display: flex; gap: 6px; margin-top: 10px; } .add input { font: inherit; border: 1px solid #d6e2de; border-radius: 10px; padding: 9px 10px; }
   .add input#xName { flex: 1; min-width: 0; } .add input#xQty { width: 64px; }
   .acts2 { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 30px; }
+  .drv { display: inline-flex; gap: 4px; margin-left: auto; } .pill { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; box-shadow: none; }
+  .pill.on { background: var(--brand); border-color: var(--brand); color: #fff; }
   .x { border: 0; background: none; color: var(--muted); font-size: 16px; padding: 2px 6px; box-shadow: none; }
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
 </style>
@@ -163,16 +165,17 @@ function render() {
     for (const it of g.items) {
       h += `<div class="it ${it.picked ? 'done' : ''}"><div class="row">
         ${it.parts.length ? `<button class="tick ${it.picked ? 'on' : ''}" data-item-all="${esc(it.key)}" title="Tick all its parts"></button>` : `<button class="tick ${it.picked ? 'on' : ''}" data-key="${esc(it.key)}" data-on="${it.picked ? 1 : 0}"></button>`}
-        <div class="nm"><b>${esc(it.name)}</b>${it.invoice ? `<div class="sub">${esc(it.invoice.supplier || '')}${it.invoice.number ? ' #' + esc(it.invoice.number) : ''}${it.kit ? ' · ' + esc(it.kit) : ''}</div>` : it.kit ? `<div class="sub">${esc(it.kit)}</div>` : ''}</div>
+        <div class="nm"><b>${esc(it.name)}</b>${it.detail ? `<div class="sub">${esc(it.detail)}</div>` : ''}${it.invoice ? `<div class="sub">${esc(it.invoice.supplier || '')}${it.invoice.number ? ' #' + esc(it.invoice.number) : ''}</div>` : ''}</div>
         ${it.qty != null ? `<span class="qty">${esc(fmtQty(it.qty, it.unit))}</span>` : ''}
         ${it.source === 'manual' ? `<button class="x" data-del-extra="${it.id}" title="Remove">✕</button>` : ''}</div>
         ${it.parts.length ? `<div class="parts">${it.parts.map((p) => `<div class="row"><button class="tick ${p.picked ? 'on' : ''}" data-key="${esc(p.key)}" data-on="${p.picked ? 1 : 0}"></button>
-          <span class="pn ${p.picked ? 'done' : ''}">${p.qty ? `<b>${p.qty} ×</b> ` : ''}${esc(p.name)}${p.optional ? ' <span class="opt">if needed</span>' : ''}</span></div>`).join('')}</div>` : ''}</div>`;
+          <span class="pn ${p.picked ? 'done' : ''}">${p.qty ? `<b>${p.qty} ×</b> ` : ''}${esc(p.name)}${p.optional ? ` <span class="opt">${esc(p.note || 'if needed')}</span>` : ''}</span>
+          ${p.chooseDrive ? `<span class="drv">${['chain', 'belt'].map((v) => `<button class="pill ${p.drive === v ? 'on' : ''}" data-drive="${v}">${v === 'chain' ? 'Chain' : 'Belt'}</button>`).join('')}</span>` : ''}</div>`).join('')}</div>` : ''}</div>`;
     }
   }
   h += `<div class="add"><input id="xName" placeholder="Add something to pick up, e.g. Concrete bags" autocomplete="off"><input id="xQty" inputmode="decimal" placeholder="Qty"><button class="primary" data-add>Add</button></div>
     <div class="acts2"><button data-all>✓ Tick everything</button><button data-none>Untick all</button><button data-diary>📝 Note it in the job diary</button>
-      <a class="btn" href="/kits?t=${encodeURIComponent(BOOT.token)}">🧩 Kits${d.kits ? ` (${d.kits})` : ''}</a></div>`;
+      <a class="btn" href="/kits?t=${encodeURIComponent(BOOT.token)}">🧩 Items &amp; parts</a></div>`;
   $('#content').innerHTML = h;
 }
 async function load() { try { data = await api('/picklist'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
@@ -184,6 +187,11 @@ document.addEventListener('click', async (e) => {
       const on = d.on !== '1';
       b.classList.toggle('on', on); d.on = on ? '1' : '0'; // straight away, on a slow connection too
       await api('/picklist/tick', { method: 'POST', body: JSON.stringify({ key: d.key, picked: on }) });
+      return load();
+    }
+    if (d.drive) {
+      const r = await api('/picklist/drive', { method: 'POST', body: JSON.stringify({ drive: d.drive }) });
+      toast(r.remembered ? `${d.drive === 'belt' ? 'Belt' : 'Chain'} – remembered for ${r.remembered.toUpperCase()}` : 'Saved');
       return load();
     }
     if (d.itemAll) {

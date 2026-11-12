@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kits</title>
+<title>Items &amp; parts</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -81,13 +81,13 @@
   .hint { font-size: 12.5px; color: var(--muted); }
   .r { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } }
+  .bi { padding: 6px 0; border-top: 1px solid var(--line2); } details.kit summary { cursor: pointer; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><a class="btn" href="#" onclick="history.length > 1 ? history.back() : (location.href='/card?t='+encodeURIComponent(BOOT.token));return false" style="margin-right:4px">← Back</a><h1>🧩 Kits</h1></header>
-  <div class="hint" style="margin:6px 0 12px">A kit is what one item is made of, so the pick list shows every part to collect. A kit is used when one of its words is in the
-    invoice line (or the job notes), e.g. "sectional". Kits are tried from the top, so put the more specific ones first.</div>
+  <header><a class="btn" href="#" onclick="history.length > 1 ? history.back() : (location.href='/card?t='+encodeURIComponent(BOOT.token));return false" style="margin-right:4px">← Back</a><h1>🧩 Items &amp; parts</h1></header>
+  <div class="hint" style="margin:6px 0 12px">The picking list finds each thing on the job's lines, invoices and notes, and gives it the boxes below.</div>
   <div id="content"><div class="empty"><span class="spin"></span></div></div>
 </div>
 <div class="toast" id="toast"></div>
@@ -135,15 +135,25 @@ let kits = [];
 const partText = (p) => `${p.qty ? p.qty + ' x ' : ''}${p.name}`;
 function form(k) {
   const id = k ? k.id : 'new';
-  return `<div class="kit">${k ? '' : '<b>＋ New kit</b>'}
-    <label for="n-${id}">Name</label><input id="n-${id}" value="${esc(k ? k.name : '')}" placeholder="e.g. Sectional door">
-    <label for="w-${id}">Words that find it (comma between)</label><input id="w-${id}" value="${esc(k ? k.match_words.join(', ') : '')}" placeholder="e.g. sectional, panel lift">
+  return `<div class="kit">${k ? '' : '<b>＋ New item</b>'}
+    <label for="n-${id}">Name</label><input id="n-${id}" value="${esc(k ? k.name : '')}" placeholder="e.g. Gate motor">
+    <label for="w-${id}">Words that find it (comma between)</label><input id="w-${id}" value="${esc(k ? k.match_words.join(', ') : '')}" placeholder="e.g. gate motor, sliding gate">
     <label for="p-${id}">Parts – one per line. "2 x Tracks" for a quantity, "(if needed)" for optional ones</label>
     <textarea id="p-${id}" placeholder="Door panels&#10;Tracks&#10;Springs&#10;Low headroom kit (if needed)">${esc(k ? k.parts.map(partText).join('\n') : '')}</textarea>
-    <div class="r"><button class="primary" data-save="${id}">${k ? 'Save' : 'Add kit'}</button>${k ? `<button class="danger" data-del="${id}">Delete</button>` : ''}</div></div>`;
+    <div class="r"><button class="primary" data-save="${id}">${k ? 'Save' : 'Add item'}</button>${k ? `<button class="danger" data-del="${id}">Delete</button>` : ''}</div></div>`;
 }
-function render() { $('#content').innerHTML = kits.map(form).join('') + form(null); }
-async function load() { try { kits = (await api('/kits')).kits; render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
+let built = [], models = { chain_models: [], belt_models: [] };
+function render() {
+  let h = `<div class="kit"><b>Chain or belt?</b><div class="hint" style="margin:4px 0 6px">Motor models with a chain or a belt track. When the job says neither, the model decides –
+    and when you pick Chain or Belt on a job, its model is added here.</div>
+    <label for="m-chain">Chain models (comma between)</label><input id="m-chain" value="${esc(models.chain_models.join(', '))}" placeholder="e.g. mr650, ms65">
+    <label for="m-belt">Belt models</label><input id="m-belt" value="${esc(models.belt_models.join(', '))}" placeholder="e.g. mr850">
+    <div class="r"><button class="primary" data-models>Save</button></div></div>`;
+  h += `<details class="kit"><summary><b>Built-in items</b> <span class="hint">(${built.length})</span></summary>${built.map((b) => `<div class="bi"><b>${esc(b.name)}</b>${b.parts.length ? `<div class="hint">${b.parts.map(esc).join(' · ')}</div>` : '<div class="hint">one box</div>'}</div>`).join('')}</details>`;
+  h += `<h3 style="margin:18px 0 4px">Your own items</h3><div class="hint" style="margin-bottom:8px">For things the built-in ones don't cover, or to give one your own parts. Yours are looked for first.</div>`;
+  $('#content').innerHTML = h + kits.map(form).join('') + form(null);
+}
+async function load() { try { const r = await api('/kits'); kits = r.kits; built = r.builtIn || []; models = r; render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; } }
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
   const d = b.dataset;
@@ -151,6 +161,10 @@ document.addEventListener('click', async (e) => {
     if (d.save) {
       const id = d.save;
       await api('/kits', { method: 'POST', body: JSON.stringify({ id: id === 'new' ? null : Number(id), name: $('#n-' + id).value, match_words: $('#w-' + id).value, parts: $('#p-' + id).value }) });
+      toast('Saved'); return load();
+    }
+    if (d.models !== undefined) {
+      await api('/kits/models', { method: 'PUT', body: JSON.stringify({ chain_models: $('#m-chain').value, belt_models: $('#m-belt').value }) });
       toast('Saved'); return load();
     }
     if (d.del) {

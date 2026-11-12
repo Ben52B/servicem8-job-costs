@@ -1040,17 +1040,19 @@ window.addEventListener('message', function (e) {
     res.json({ ok: true });
   });
   // ---------- Pick list ----------
-  /** The business's kits; a garage door business starts with roller, sectional and motor kits (theirs to change). */
+  /** The business's own items. The three starting kits of the first version are built in now: removed once (unless changed). */
   function kitsFor(accountUUID) {
     const st = settingsFor(accountUUID);
-    if (!st.kits_seeded) {
-      if (!repo.listKits(accountUUID).length && /door/i.test(st.business_type || '')) for (const k of picklist.DEFAULT_KITS) repo.saveKit(accountUUID, k);
-      repo.saveSettings(accountUUID, { kits_seeded: true });
+    if (!st.kits_v2) {
+      const OLD = { Motor: '["Motor","Track (chain or belt)"]', 'Sectional door': '["Door panels","Tracks","Springs","Bar (shaft)","Hardware box","Back support bar","Low headroom kit"]',
+        'Roller door': '["Door","Tracks","Hardware box / bag","Brackets"]' };
+      for (const k of repo.listKits(accountUUID)) if (OLD[k.name] === JSON.stringify((k.parts || []).map((x) => x.name))) repo.deleteKit(accountUUID, k.id);
+      repo.saveSettings(accountUUID, { kits_v2: true, kits_seeded: true });
     }
     return repo.listKits(accountUUID);
   }
   const pickListOf = (job, accountUUID) => picklist.buildPickList({
-    summary: repo.getJobSummary(job.job_uuid), notes: (repo.getJob(job.job_uuid) || {}).notes || '',
+    summary: repo.getJobSummary(job.job_uuid), notes: (repo.getJob(job.job_uuid) || {}).notes || '', settings: settingsFor(accountUUID),
     kits: kitsFor(accountUUID), ticks: repo.pickTicks(job.job_uuid), extra: repo.listPickExtra(job.job_uuid), jobLines: repo.jobLines(job.job_uuid),
   });
   const hasJobCosts = (accountUUID) => !!repo.getTokens(accountUUID) || !!repo.db.prepare('SELECT 1 FROM invoices WHERE account_uuid IS ? LIMIT 1').get(accountUUID);
@@ -1061,9 +1063,25 @@ window.addEventListener('message', function (e) {
   });
   api.post('/picklist/tick', (req, res) => {
     const key = String(req.body?.key || '');
-    if (!/^[inxl]:[\w-]+(:\d+)?$/.test(key)) return res.status(400).json({ error: 'Which item?' });
+    if (!/^([inxl]:[\w-]+(:\d+)?|t:[\w-]+(:[\w-]+)?)$/.test(key)) return res.status(400).json({ error: 'Which item?' });
     repo.setPickTick(req.job.job_uuid, key, req.body?.picked !== false);
     res.json({ ok: true, progress: pickListOf(req.job, req.account).progress });
+  });
+  // Chain or belt: chosen on the job, and remembered for that motor model (so the next job with it knows)
+  api.post('/picklist/drive', (req, res) => {
+    const drive = req.body?.drive;
+    if (!['chain', 'belt'].includes(drive)) return res.status(400).json({ error: 'Chain or belt?' });
+    repo.setPickTick(req.job.job_uuid, 'o:drive-chain', drive === 'chain');
+    repo.setPickTick(req.job.job_uuid, 'o:drive-belt', drive === 'belt');
+    const motor = pickListOf(req.job, req.account).groups.flatMap((g) => g.items).find((i) => i.type === 'motor');
+    let remembered = null;
+    if (motor && motor.model && req.body?.remember !== false) {
+      const st = settingsFor(req.account);
+      const other = drive === 'belt' ? 'chain_models' : 'belt_models'; const mine = `${drive}_models`;
+      repo.saveSettings(req.account, { [other]: (st[other] || []).filter((m) => m !== motor.model), [mine]: [...new Set([...(st[mine] || []), motor.model])].slice(-200) });
+      remembered = motor.model;
+    }
+    res.json({ ok: true, remembered, progress: pickListOf(req.job, req.account).progress });
   });
   api.post('/picklist/all', (req, res) => {
     const list = pickListOf(req.job, req.account);
@@ -1094,14 +1112,23 @@ window.addEventListener('message', function (e) {
     catch (e) { res.status(502).json({ error: diaryProblem(e) }); }
   });
   // Kits: what an item is made of (shared by the whole business)
-  api.get('/kits', (req, res) => res.json({ kits: kitsFor(req.account) }));
+  api.get('/kits', (req, res) => { const st = settingsFor(req.account);
+    res.json({ kits: kitsFor(req.account), builtIn: picklist.catalogue(), chain_models: st.chain_models || [], belt_models: st.belt_models || [] }); });
+  api.put('/kits/models', (req, res) => {
+    const list = (v) => (Array.isArray(v) ? v : String(v || '').split(/[,\n]/)).map((w) => String(w).trim().toLowerCase()).filter(Boolean).slice(0, 200);
+    const chain = list(req.body?.chain_models); const belt = list(req.body?.belt_models);
+    const both = chain.filter((m) => belt.includes(m));
+    if (both.length) return res.status(400).json({ error: `${both[0]} can't be both chain and belt` });
+    repo.saveSettings(req.account, { chain_models: chain, belt_models: belt });
+    res.json({ ok: true });
+  });
   api.post('/kits', (req, res) => {
     const b = req.body || {};
     const name = String(b.name || '').trim().slice(0, 60);
-    if (!name) return res.status(400).json({ error: 'Name the kit (e.g. Sectional door)' });
+    if (!name) return res.status(400).json({ error: 'Name the item (e.g. Gate motor)' });
     const match = (Array.isArray(b.match_words) ? b.match_words : String(b.match_words || '').split(','))
       .map((w) => String(w).trim().toLowerCase()).filter(Boolean).slice(0, 12);
-    if (!match.length) return res.status(400).json({ error: 'Add at least one word that finds it on an invoice (e.g. sectional)' });
+    if (!match.length) return res.status(400).json({ error: 'Add at least one word that finds it on the job (e.g. gate motor)' });
     const parts = (Array.isArray(b.parts) ? b.parts.map((x) => (typeof x === 'string' ? x : x.name)) : String(b.parts || '').split(/\r?\n/))
       .map(picklist.parsePart).filter(Boolean).slice(0, 30);
     const id = repo.saveKit(req.account, { id: b.id || null, name, match_words: match, parts });

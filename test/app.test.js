@@ -1916,20 +1916,51 @@ test('ServiceM8 job lines: each line shows the cost that covers it; a line witho
   assert.equal((await json(t2, '/job')).jobLines, null, 'no lines known for that job');
 });
 
-test('pick list: built from the job’s invoices, stock and notes, with kits; ticking, adding, the diary note; kits per business', async () => {
+test('picking list: finds each thing on the job and gives it its own boxes; chain or belt; ticking, adding, the diary note; own items', async () => {
   const pl = require('../src/picklist');
   // the job notes: only items with a price count; delivery, labour and the total don't
   const notes = `$3172+GST from fine tuned....\n\nNEW DOOR CALCULATIONS (PLEASE REMOVE ITEMS THAT ARE NOT REQUIRED)\n\nSupplier:ECO insulated \nDoor Type/Colour/Finish:Panel TBA\nH2300\nW4830\n` +
     `Door - $3375+5%+3543.75\nMotor - $650\nPosts - $180\nPost Covers - $\nLabor - $400\nDelivery/Gliderol roller door Steel Wrapping - $75 (A series)/ $134 (AA/B Series)\nFlashing - $95\nTotal - $5000`;
   assert.deepEqual(pl.itemsFromNotes(notes).map((x) => x.label), ['Door', 'Motor', 'Posts', 'Flashing']);
-  assert.deepEqual(pl.parsePart('2 x Tracks'), { name: 'Tracks', qty: 2 });
-  assert.deepEqual(pl.parsePart('Low headroom kit (if needed)'), { name: 'Low headroom kit (if needed)', optional: true });
-  assert.equal(pl.matchKit(pl.DEFAULT_KITS, 'Merlin opener for roller door').name, 'Motor', 'more specific kits are tried first');
+  // what one line names
+  const things = (t, q = 1) => pl.thingsIn(t, q, []).map((f) => [f.type, f.qty]);
+  assert.deepEqual(things('Merlin MR850 motor with 2 remotes and safety beams'), [['motor', 1], ['remote', 2], ['sensor', 1]], 'one line, three things (not 850 motors)');
+  assert.deepEqual(things('Merlin smart hub'), [['smart_hub', 1]], 'a smart hub is its own thing, not a motor');
+  assert.deepEqual(things('Merlin remote', 2), [['remote', 2]]);
+  assert.deepEqual(things('Merlin MR650'), [['motor', 1]], 'a motor brand alone is a motor');
+  assert.deepEqual(things('B&D Controll-A-Door belt drive'), [['motor', 1]], 'not a door');
+  assert.deepEqual(things('Post covers', 2), [['post_cover', 2]], 'post covers aren’t posts');
+  assert.deepEqual(things('Header beam'), [['lintel', 1]], 'a header beam isn’t safety beams');
+  assert.deepEqual(things('Remotes x 3', null), [['remote', 3]]);
+  assert.deepEqual(things('Sectional door supply & install'), [['sectional', 1]], 'one door');
+  assert.deepEqual(pl.thingsIn('Merlin opener for roller door', 1, []).map((f) => [f.type, f.doorContext]), [['motor', 'roller']], 'the motor of a roller door – not a door');
+  // chain or belt: the words, else the business's models
+  assert.equal(pl.driveOf(['Merlin MR850 belt drive'], {}), 'belt');
+  assert.equal(pl.driveOf(['Merlin MR850'], {}), null);
+  assert.equal(pl.driveOf(['Merlin MR850 motor'], { belt_models: ['mr850'] }), 'belt');
+  assert.equal(pl.modelOf('Merlin MR850 motor'), 'mr850');
+  // the boxes depend on the door
+  const build = (lines, extra = {}) => pl.buildPickList({ summary: { invoices: [] }, notes: '', ticks: new Set(), extra: [], jobLines: lines.map((name, i) => ({ uuid: `u${i}`, name, qty: 1 })), ...extra });
+  const items = (l) => l.groups.flatMap((g) => g.items);
+  let b = items(build(['Roller door 2.4 x 2.4', 'Merlin opener']));
+  assert.deepEqual(b.map((i) => [i.name, i.parts.map((p) => p.name)]), [['Roller door', ['Door (curtain)', 'Tracks', 'Hardware box / bag', 'Brackets']], ['Motor', ['Motor box']]],
+    'a roller door motor has no track');
+  b = items(build(['Sectional door', 'Low headroom kit', 'Merlin MR650 chain drive', 'Safety beams', 'Smart hub']));
+  assert.deepEqual(b.map((i) => i.name), ['Sectional door', 'Motor', 'Smart hub', 'Safety beams']);
+  assert.deepEqual(b[0].parts.map((p) => p.name).slice(-1), ['Low headroom kit'], 'low headroom is a part of the door when asked for');
+  assert.deepEqual(b[1].parts.map((p) => [p.name, !!p.optional]), [['Motor box', false], ['Chain track', false]]);
+  assert.deepEqual([b[2].parts, b[3].parts], [[], []], 'one box each');
+  b = items(build(['Sectional door']));
+  assert.equal(b[0].parts.some((p) => /headroom/i.test(p.name)), false, 'no low headroom kit unless asked for');
+  b = items(build(['Merlin MR850']));
+  assert.deepEqual(b[0].parts.map((p) => [p.name, !!p.optional]), [['Motor box', false], ['Track – chain or belt?', true]], 'which door isn’t known: the track if needed');
+  assert.deepEqual(items(build(['Removal of old door', 'Labour', 'Gate latch'])).map((i) => i.name), ['Gate latch'], 'taking the old one away and labour aren’t picked up');
 
-  JOBS['pick-job'] = { jobNumber: '209100', jobTitle: '9 Pick St', description: notes };
+  JOBS['pick-job'] = { jobNumber: '209100', jobTitle: '9 Pick St', description: notes, lines: [
+    { uuid: 'pj1', name: 'Sectional door supply & install', qty: 1 }, { uuid: 'pj2', name: 'Safety beams and smart hub', qty: 1 },
+    { uuid: 'pj3', name: 'Remotes', qty: 2 }, { uuid: 'pj4', name: 'Labour', qty: 4 }] };
   const t = await openCard('pick-job', 'acc-pick');
   assert.match(repo.getJob('pick-job').notes, /NEW DOOR CALCULATIONS/, 'the job notes are kept for the pick list');
-  // a garage door business gets the starting kits
   await api(t, '/settings', { method: 'PUT', json: { business_type: 'garage door installation business' } });
   // the door is invoiced (with delivery, which isn't picked up); a motor comes from stock
   const door = repo.createInvoice({ accountUUID: 'acc-pick', source: 'upload' });
@@ -1943,50 +1974,63 @@ test('pick list: built from the job’s invoices, stock and notes, with kits; ti
   repo.addShare(repo.db.prepare('SELECT id FROM items WHERE invoice_id = ?').get(stock.id).id, 'pick-job', 0.2, {});
   let p = await json(t, '/picklist');
   const byTitle = Object.fromEntries(p.groups.map((g) => [g.title, g]));
-  assert.deepEqual(Object.keys(byTitle), ['Summit Door Supplies', 'Our stock', 'Not on an invoice yet']);
+  assert.deepEqual(Object.keys(byTitle), ['Summit Door Supplies', 'Our stock', 'On the job', 'Not on an invoice yet']);
   const d = byTitle['Summit Door Supplies'].items;
-  assert.deepEqual(d.map((i) => [i.name, i.kit]), [['Eco Insulated Sectional Door 2300x4830', 'Sectional door']], 'delivery isn’t picked up');
-  assert.deepEqual(d[0].parts.map((x) => x.name), ['Door panels', 'Tracks', 'Springs', 'Bar (shaft)', 'Hardware box', 'Back support bar', 'Low headroom kit']);
-  assert.equal(d[0].parts[6].optional, true);
+  assert.deepEqual(d.map((i) => [i.name, i.detail]), [['Sectional door', 'Eco Insulated Sectional Door 2300x4830']], 'one door (invoice, job line and notes), no delivery');
+  assert.deepEqual(d[0].parts.map((x) => x.name), ['Door panels', 'Tracks', 'Springs', 'Bar (shaft)', 'Hardware box', 'Back support bar']);
   const motor = byTitle['Our stock'].items[0];
-  assert.deepEqual([motor.qty, motor.kit, motor.parts.length], [1, 'Motor', 2], '1 of the 5 openers, from stock');
-  assert.deepEqual(byTitle['Not on an invoice yet'].items.map((i) => i.name), ['Posts', 'Flashing'], 'door and motor are covered by the invoices');
-  assert.deepEqual(p.progress, { picked: 0, total: 6 + 2 + 2 }, 'required parts + items without parts');
+  assert.deepEqual([motor.name, motor.detail, motor.qty, motor.parts.map((x) => x.name)], ['Motor', 'Bolt 800N opener', 1, ['Motor box', 'Track – chain or belt?']], '1 of the 5 openers, from stock');
+  assert.deepEqual(byTitle['On the job'].items.map((i) => [i.name, i.qty]), [['Smart hub', 1], ['Safety beams', 1], ['Remotes', 2]], 'each its own box (labour left out)');
+  assert.deepEqual(byTitle['Not on an invoice yet'].items.map((i) => i.name), ['Flashing', 'Posts'], 'the door and motor of the notes are the invoiced ones');
+  assert.deepEqual(p.progress, { picked: 0, total: 6 + 2 + 3 + 2 });
+  // chain or belt? picked on the job, and remembered for the model
+  const dr = await post(t, '/picklist/drive', { drive: 'belt' }).then((x) => x.json());
+  assert.equal(dr.remembered, 'bolt 800n');
+  p = await json(t, '/picklist');
+  assert.deepEqual(p.groups.find((g) => g.title === 'Our stock').items[0].parts[1].name, 'Belt track');
+  assert.deepEqual((await json(t, '/kits')).belt_models, ['bolt 800n']);
+  assert.equal((await post(t, '/picklist/drive', { drive: 'rope' })).status, 400);
   // tick a part, an item, then everything
   let r = await post(t, '/picklist/tick', { key: d[0].parts[0].key, picked: true }).then((x) => x.json());
   assert.equal(r.progress.picked, 1);
   assert.equal((await post(t, '/picklist/tick', { key: 'bad key!' })).status, 400);
   await post(t, '/picklist/all', { picked: true });
   p = await json(t, '/picklist');
-  assert.deepEqual(p.progress, { picked: 10, total: 10 });
+  assert.deepEqual(p.progress, { picked: 13, total: 13 });
   assert.equal(p.groups[0].items[0].picked, true);
-  assert.equal(p.groups[0].items[0].parts[6].picked, false, 'optional parts aren’t ticked by "everything"');
   // something extra, added by hand
   assert.equal((await post(t, '/picklist/extra', { name: '' })).status, 400);
   const { id: xid } = await post(t, '/picklist/extra', { name: 'Concrete bags', qty: 3 }).then((x) => x.json());
   p = await json(t, '/picklist');
   assert.deepEqual(p.groups.find((g) => g.kind === 'manual').items.map((i) => [i.name, i.qty]), [['Concrete bags', 3]]);
-  assert.deepEqual(p.progress, { picked: 10, total: 11 });
+  assert.deepEqual(p.progress, { picked: 13, total: 14 });
   // the diary note says what's missing
   const before = diary.notes.length;
   const dn = await post(t, '/picklist/diary').then((x) => x.json());
-  assert.match(dn.text, /^Pick list: 10 of 11 picked up\. Still to get: Concrete bags$/);
+  assert.match(dn.text, /^Pick list: 13 of 14 picked up\. Still to get: Concrete bags$/);
   assert.equal(diary.notes.length, before + 1);
   assert.equal((await api(t, `/picklist/extra/${xid}`, { method: 'DELETE' })).status, 200);
   // ticks survive the list being rebuilt (e.g. after an invoice is read again)
-  assert.equal((await json(t, '/picklist')).progress.picked, 10);
-  // kits: the business's own, editable
+  assert.equal((await json(t, '/picklist')).progress.picked, 13);
+  // the business's own items: looked for first
   const k = await json(t, '/kits');
-  assert.deepEqual(k.kits.map((x) => x.name), ['Motor', 'Sectional door', 'Roller door']);
+  assert.deepEqual(k.kits, [], 'the built-in items need no kits');
+  assert.ok(k.builtIn.some((x) => x.name === 'Smart hub'));
   assert.equal((await post(t, '/kits', { name: 'Gate', match_words: '' })).status, 400);
-  await post(t, '/kits', { id: k.kits[0].id, name: 'Motor', match_words: 'motor, opener', parts: 'Motor\n2 x Remotes\nTrack (chain or belt)' });
+  await post(t, '/kits', { name: 'Smart hub', match_words: 'smart hub', parts: 'Hub\nPower pack' });
   p = await json(t, '/picklist');
-  assert.deepEqual(p.groups.find((g) => g.title === 'Our stock').items[0].parts.map((x) => [x.name, x.qty || 1]), [['Motor', 1], ['Remotes', 2], ['Track (chain or belt)', 1]]);
-  // another kind of business starts with no kits; another business never sees these
+  assert.deepEqual(p.groups.find((g) => g.title === 'On the job').items.find((i) => i.name === 'Smart hub').parts.map((x) => x.name), ['Hub', 'Power pack']);
+  // chain and belt models can be set by hand
+  assert.equal((await api(t, '/kits/models', { method: 'PUT', json: { chain_models: 'mr650', belt_models: 'mr650, mr850' } })).status, 400);
+  assert.equal((await api(t, '/kits/models', { method: 'PUT', json: { chain_models: 'MR650', belt_models: 'mr850' } })).status, 200);
+  assert.deepEqual((await json(t, '/kits')).chain_models, ['mr650']);
+  // the three kits the first version started door businesses with go (unless changed); another business never sees these
   JOBS['pick-job2'] = { jobNumber: '209101', jobTitle: '1 Other St' };
+  repo.saveKit('acc-pick2', { name: 'Motor', match_words: ['motor'], parts: [{ name: 'Motor' }, { name: 'Track (chain or belt)' }] });
+  repo.saveKit('acc-pick2', { name: 'Roller door', match_words: ['roller'], parts: [{ name: 'Door' }, { name: 'Curtain lock' }] });
   const t2 = await openCard('pick-job2', 'acc-pick2');
-  assert.deepEqual((await json(t2, '/kits')).kits, []);
-  assert.equal((await api(t2, `/kits/${k.kits[1].id}`, { method: 'DELETE' })).status, 404);
+  assert.deepEqual((await json(t2, '/kits')).kits.map((x) => x.name), ['Roller door'], 'the changed one stays');
+  assert.equal((await api(t2, `/kits/${(await json(t, '/kits')).kits[0].id}`, { method: 'DELETE' })).status, 404);
   // the "Pick list" button in ServiceM8 opens it
   const ev = jwt.sign({ eventName: 'pick_list_open', eventArgs: { jobUUID: 'pick-job' }, auth: { accountUUID: 'acc-pick', accessToken: 'x' } }, SECRET);
   const { eventResponse } = await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev }).then((x) => x.json());
@@ -2027,10 +2071,12 @@ test('Picking List Creator: its own ServiceM8 add-on; works from the job’s Ser
     const p = await call(t, '/picklist').then((r) => r.json());
     assert.equal(p.jobCosts, false, 'no Job Costs: no link back to it');
     const onJob = p.groups.find((g) => g.kind === 'job');
-    assert.deepEqual(onJob.items.map((i) => i.name), ['Sectional door supply & install', 'Merlin MR850 motor', 'Posts'], 'from the job’s lines (labour left out)');
+    assert.deepEqual(onJob.items.map((i) => i.name), ['Sectional door', 'Motor', 'Posts'], 'from the job’s lines (labour left out)');
+    assert.deepEqual(onJob.items[1].parts.map((x) => x.name), ['Motor box', 'Track – chain or belt?']);
     assert.deepEqual(p.groups.find((g) => g.kind === 'notes').items.map((i) => i.name), ['Remotes'], 'notes add only what the lines don’t have');
     // ticking works the same
     await call(t, '/picklist/tick', { method: 'POST', json: { key: onJob.items[2].key, picked: true } });
+    assert.equal(onJob.items[2].key, 't:post');
     assert.equal((await call(t, '/picklist').then((r) => r.json())).progress.picked, 1);
     // Job Costs shows its picking list link only for businesses that have the picking list
     assert.equal((await call(t, '/job').then((r) => r.json())).pickList, true);
