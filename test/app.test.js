@@ -1618,7 +1618,8 @@ test('Export everything: one zip with every invoice (paid or not, which job), li
 
 test('the iPhone app and the Add-ons menu: a job button in the app, and Job Costs home from the menu', async () => {
   const m = await fetch(`${base}/manifest.json`).then((r) => r.json());
-  assert.deepEqual(m.actions.map((a) => [a.type, a.entity, a.event]), [['online', 'job', 'job_costs_open'], ['app', 'job', 'job_costs_open']]);
+  assert.deepEqual(m.actions.map((a) => [a.type, a.entity, a.event]), [['online', 'job', 'job_costs_open'], ['app', 'job', 'job_costs_open'],
+    ['online', 'job', 'pick_list_open'], ['app', 'job', 'pick_list_open']]);
   assert.deepEqual(m.menuItems.map((x) => [x.type, x.event]), [['addon', 'job_costs_menu'], ['app', 'job_costs_menu']]);
   await openCard('job-a', 'acc-1'); // the business is known
   // from the menu: no job in the event
@@ -1915,8 +1916,90 @@ test('ServiceM8 job lines: each line shows the cost that covers it; a line witho
   assert.equal((await json(t2, '/job')).jobLines, null, 'no lines known for that job');
 });
 
+test('pick list: built from the job’s invoices, stock and notes, with kits; ticking, adding, the diary note; kits per business', async () => {
+  const pl = require('../src/picklist');
+  // the job notes: only items with a price count; delivery, labour and the total don't
+  const notes = `$3172+GST from fine tuned....\n\nNEW DOOR CALCULATIONS (PLEASE REMOVE ITEMS THAT ARE NOT REQUIRED)\n\nSupplier:ECO insulated \nDoor Type/Colour/Finish:Panel TBA\nH2300\nW4830\n` +
+    `Door - $3375+5%+3543.75\nMotor - $650\nPosts - $180\nPost Covers - $\nLabor - $400\nDelivery/Gliderol roller door Steel Wrapping - $75 (A series)/ $134 (AA/B Series)\nFlashing - $95\nTotal - $5000`;
+  assert.deepEqual(pl.itemsFromNotes(notes).map((x) => x.label), ['Door', 'Motor', 'Posts', 'Flashing']);
+  assert.deepEqual(pl.parsePart('2 x Tracks'), { name: 'Tracks', qty: 2 });
+  assert.deepEqual(pl.parsePart('Low headroom kit (if needed)'), { name: 'Low headroom kit (if needed)', optional: true });
+  assert.equal(pl.matchKit(pl.DEFAULT_KITS, 'Merlin opener for roller door').name, 'Motor', 'more specific kits are tried first');
+
+  JOBS['pick-job'] = { jobNumber: '209100', jobTitle: '9 Pick St', description: notes };
+  const t = await openCard('pick-job', 'acc-pick');
+  assert.match(repo.getJob('pick-job').notes, /NEW DOOR CALCULATIONS/, 'the job notes are kept for the pick list');
+  // a garage door business gets the starting kits
+  await api(t, '/settings', { method: 'PUT', json: { business_type: 'garage door installation business' } });
+  // the door is invoiced (with delivery, which isn't picked up); a motor comes from stock
+  const door = repo.createInvoice({ accountUUID: 'acc-pick', source: 'upload' });
+  repo.saveExtraction(door.id, { supplier_name: 'Summit Door Supplies', invoice_number: 'SD-1', total: 3412, tax: 310.18, subtotal: 3101.82, items: [
+    { description: 'Eco Insulated Sectional Door 2300x4830', quantity: 1, line_total: 3001.82, category: 'materials' },
+    { description: 'Delivery', line_total: 100, category: 'freight' }] });
+  repo.assignWhole(door.id, 'pick-job', {});
+  const stock = repo.createInvoice({ accountUUID: 'acc-pick', source: 'upload' });
+  repo.saveExtraction(stock.id, { supplier_name: 'Bolt Openers Co', invoice_number: 'BO-9', total: 1100, tax: 100, subtotal: 1000, items: [{ description: 'Bolt 800N opener', quantity: 5, line_total: 1000, category: 'materials' }] });
+  repo.keepAsStock(stock.id);
+  repo.addShare(repo.db.prepare('SELECT id FROM items WHERE invoice_id = ?').get(stock.id).id, 'pick-job', 0.2, {});
+  let p = await json(t, '/picklist');
+  const byTitle = Object.fromEntries(p.groups.map((g) => [g.title, g]));
+  assert.deepEqual(Object.keys(byTitle), ['Summit Door Supplies', 'Our stock', 'Not on an invoice yet']);
+  const d = byTitle['Summit Door Supplies'].items;
+  assert.deepEqual(d.map((i) => [i.name, i.kit]), [['Eco Insulated Sectional Door 2300x4830', 'Sectional door']], 'delivery isn’t picked up');
+  assert.deepEqual(d[0].parts.map((x) => x.name), ['Door panels', 'Tracks', 'Springs', 'Bar (shaft)', 'Hardware box', 'Back support bar', 'Low headroom kit']);
+  assert.equal(d[0].parts[6].optional, true);
+  const motor = byTitle['Our stock'].items[0];
+  assert.deepEqual([motor.qty, motor.kit, motor.parts.length], [1, 'Motor', 2], '1 of the 5 openers, from stock');
+  assert.deepEqual(byTitle['Not on an invoice yet'].items.map((i) => i.name), ['Posts', 'Flashing'], 'door and motor are covered by the invoices');
+  assert.deepEqual(p.progress, { picked: 0, total: 6 + 2 + 2 }, 'required parts + items without parts');
+  // tick a part, an item, then everything
+  let r = await post(t, '/picklist/tick', { key: d[0].parts[0].key, picked: true }).then((x) => x.json());
+  assert.equal(r.progress.picked, 1);
+  assert.equal((await post(t, '/picklist/tick', { key: 'bad key!' })).status, 400);
+  await post(t, '/picklist/all', { picked: true });
+  p = await json(t, '/picklist');
+  assert.deepEqual(p.progress, { picked: 10, total: 10 });
+  assert.equal(p.groups[0].items[0].picked, true);
+  assert.equal(p.groups[0].items[0].parts[6].picked, false, 'optional parts aren’t ticked by "everything"');
+  // something extra, added by hand
+  assert.equal((await post(t, '/picklist/extra', { name: '' })).status, 400);
+  const { id: xid } = await post(t, '/picklist/extra', { name: 'Concrete bags', qty: 3 }).then((x) => x.json());
+  p = await json(t, '/picklist');
+  assert.deepEqual(p.groups.find((g) => g.kind === 'manual').items.map((i) => [i.name, i.qty]), [['Concrete bags', 3]]);
+  assert.deepEqual(p.progress, { picked: 10, total: 11 });
+  // the diary note says what's missing
+  const before = diary.notes.length;
+  const dn = await post(t, '/picklist/diary').then((x) => x.json());
+  assert.match(dn.text, /^Pick list: 10 of 11 picked up\. Still to get: Concrete bags$/);
+  assert.equal(diary.notes.length, before + 1);
+  assert.equal((await api(t, `/picklist/extra/${xid}`, { method: 'DELETE' })).status, 200);
+  // ticks survive the list being rebuilt (e.g. after an invoice is read again)
+  assert.equal((await json(t, '/picklist')).progress.picked, 10);
+  // kits: the business's own, editable
+  const k = await json(t, '/kits');
+  assert.deepEqual(k.kits.map((x) => x.name), ['Motor', 'Sectional door', 'Roller door']);
+  assert.equal((await post(t, '/kits', { name: 'Gate', match_words: '' })).status, 400);
+  await post(t, '/kits', { id: k.kits[0].id, name: 'Motor', match_words: 'motor, opener', parts: 'Motor\n2 x Remotes\nTrack (chain or belt)' });
+  p = await json(t, '/picklist');
+  assert.deepEqual(p.groups.find((g) => g.title === 'Our stock').items[0].parts.map((x) => [x.name, x.qty || 1]), [['Motor', 1], ['Remotes', 2], ['Track (chain or belt)', 1]]);
+  // another kind of business starts with no kits; another business never sees these
+  JOBS['pick-job2'] = { jobNumber: '209101', jobTitle: '1 Other St' };
+  const t2 = await openCard('pick-job2', 'acc-pick2');
+  assert.deepEqual((await json(t2, '/kits')).kits, []);
+  assert.equal((await api(t2, `/kits/${k.kits[1].id}`, { method: 'DELETE' })).status, 404);
+  // the "Pick list" button in ServiceM8 opens it
+  const ev = jwt.sign({ eventName: 'pick_list_open', eventArgs: { jobUUID: 'pick-job' }, auth: { accountUUID: 'acc-pick', accessToken: 'x' } }, SECRET);
+  const { eventResponse } = await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: ev }).then((x) => x.json());
+  assert.match(eventResponse, /<iframe src="http:\/\/test\/picklist\?t=/);
+  assert.equal((await fetch(`${base}/picklist?t=${encodeURIComponent(t)}`)).status, 200);
+  // from the menu (no job) it asks for a job
+  const evm = jwt.sign({ eventName: 'job_costs_menu', eventArgs: {}, auth: { accountUUID: 'acc-pick', accessToken: 'x' } }, SECRET);
+  const tm = decodeURIComponent((await fetch(`${base}/servicem8/addon`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: evm }).then((x) => x.json())).eventResponse.match(/<iframe src="[^"]*\?t=([^"]+)"/)[1]);
+  assert.equal((await api(tm, '/picklist')).status, 400);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
-  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html']) {
+  for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html', 'picklist.html', 'kits.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
     const js = html.split('<script>')[1].split('</script>')[0].replace('/*__BOOT__*/null', '{}');
     assert.doesNotThrow(() => new Function(js), file);
