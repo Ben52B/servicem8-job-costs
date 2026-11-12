@@ -927,7 +927,7 @@ window.addEventListener('message', function (e) {
     const used = Object.fromEntries(Object.entries(month ? month.kinds : {}).map(([k, v]) => [k, v.count]));
     const im = repo.getImap(req.account);
     const accRow = repo.ensureAccount(req.account);
-    res.json({ settings: settingsFor(req.account), days: DAYS, used, inboxAddress: inboxAddress(accRow.inbox_code, config),
+    res.json({ settings: settingsFor(req.account), days: DAYS, used, inboxAddress: inboxAddress(accRow.inbox_code, config), ignored: repo.listIgnored(req.account),
       priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       imap: im ? { email: im.email, host: im.host, error: im.error, last_check: im.last_check } : null,
       outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null } });
@@ -951,6 +951,7 @@ window.addEventListener('message', function (e) {
     }
     if ((ch.check_from ?? settingsFor(req.account).check_from) >= (ch.check_to ?? settingsFor(req.account).check_to)) return res.status(400).json({ error: 'The checking hours end before they start' });
     if (b.diary_summary !== undefined) ch.diary_summary = !!b.diary_summary;
+    if (b.ask_ignore_on_delete !== undefined) ch.ask_ignore_on_delete = !!b.ask_ignore_on_delete;
     if (b.onboarded !== undefined) ch.onboarded = !!b.onboarded;
     const wasOn = settingsFor(req.account).diary_summary;
     const saved = repo.saveSettings(req.account, ch);
@@ -1371,7 +1372,8 @@ window.addEventListener('message', function (e) {
     }
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
       recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(hoursOf(req.account)),
-      statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length });
+      statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
+      askIgnore: settingsFor(req.account).ask_ignore_on_delete !== false });
   });
   api.post('/inbox/:id/assign', async (req, res) => {
     const inv = accountInvoice(req, res);
@@ -1450,9 +1452,13 @@ window.addEventListener('message', function (e) {
     if (!inv) return;
     const jobs = repo.jobsOnInvoice(inv.id);
     if (jobs.length) return res.status(409).json({ error: `Part of this invoice is on ${jobList(jobs)}. Take it off those jobs first.` });
+    // "Ignore it in the future": the same bill emailed again is dropped quietly
+    if (req.query.ignore === '1' || req.body?.ignore === true) repo.addIgnored(inv);
     repo.deleteInvoice(inv.id);
-    res.json({ ok: true });
+    res.json({ ok: true, ignored: req.query.ignore === '1' || req.body?.ignore === true });
   });
+  api.get('/ignored', (req, res) => res.json({ ignored: repo.listIgnored(req.account) }));
+  api.delete('/ignored/:id', (req, res) => (repo.removeIgnored(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
 
   api.get('/inbox-count', (req, res) => res.json({ count: repo.inboxCount(req.account) }));
 

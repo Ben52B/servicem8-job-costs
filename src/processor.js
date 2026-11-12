@@ -27,6 +27,15 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     const inv = repo.getInvoice(id);
     if (!inv) return;
     // The same bill already in Job Costs isn't added twice (and a second copy could get paid twice).
+    // Came in by itself (email / Outlook / a connected mailbox) and the business asked to ignore this bill: drop it quietly.
+    const automatic = ['email', 'outlook', 'mailbox'].includes(inv.source);
+    const ignored = (fields) => {
+      if (!automatic || !repo.isIgnored || !repo.isIgnored({ ...inv, ...fields })) return false;
+      log.log?.(`"${inv.file_name}" is an invoice you asked to ignore, not kept`);
+      repo.setImportOutcome?.(id, 'ignored');
+      repo.deleteInvoice(id);
+      return true;
+    };
     // Only a copy that's new: "Read again" on an invoice already on a job or in stock leaves it where it is.
     const isNew = !inv.kept_as_stock && !(repo.jobsOnInvoice ? repo.jobsOnInvoice(id).length : 0);
     const blocked = (twin) => {
@@ -43,6 +52,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
         try {
           const hash = crypto.createHash('sha256').update(fs.readFileSync(path.join(repo.filesDir, inv.file_path))).digest('hex');
           repo.setFileHash(id, hash);
+          if (ignored({ file_hash: hash, supplier: null, invoice_number: null })) return;
           if (blocked(repo.twinOf({ ...inv, file_hash: hash, supplier: null }))) return; // identical file: no need to read it
         } catch { /* file missing: the read below reports it */ }
       }
@@ -72,6 +82,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
         return repo.setInvoiceError(id, 'This is a remittance (a payment advice), not a bill, so it isn\u2019t added as a cost. Delete it.');
       }
       repo.saveExtraction(id, result);
+      if (ignored(repo.getInvoice(id))) return;
       if (blocked(repo.twinOf(repo.getInvoice(id)))) return;
       // Uploaded on a job: it goes on that job. Emailed: suggest a job for it.
       if (inv.origin_job_uuid) repo.assignToOrigin(id);

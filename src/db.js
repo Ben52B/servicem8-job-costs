@@ -372,6 +372,9 @@ function migrateColumns(db) {
   // A mailbox a business connected (Gmail or any IMAP mailbox); the password is stored encrypted.
   db.exec(`CREATE TABLE IF NOT EXISTS imap_connections (account_key TEXT PRIMARY KEY, email TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 993,
     password_enc TEXT NOT NULL, connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), last_check TEXT, error TEXT)`);
+  // Invoices a business deleted and asked to ignore: if the same bill is emailed again, it's dropped quietly.
+  db.exec(`CREATE TABLE IF NOT EXISTS ignored_bills (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT, invoice_number TEXT,
+    total REAL, file_hash TEXT, label TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
   // What each business used each month (Claude requests and their tokens), for limits and costs.
   db.exec(`CREATE TABLE IF NOT EXISTS usage (account_key TEXT NOT NULL, month TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -1603,6 +1606,24 @@ function createRepo(db, dataDir) {
       db.prepare("UPDATE imap_connections SET last_check = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), error = ? WHERE account_key = ?").run(error, accountUUID ?? '');
     },
     removeImap(accountUUID) { db.prepare('DELETE FROM imap_connections WHERE account_key = ?').run(accountUUID ?? ''); },
+
+    // ---------- invoices to ignore if they come in again ----------
+    addIgnored(inv) {
+      const label = [inv.supplier || inv.file_name || 'Invoice', inv.invoice_number ? '#' + inv.invoice_number : null].filter(Boolean).join(' ');
+      db.prepare('INSERT INTO ignored_bills (account_key, supplier, invoice_number, total, file_hash, label) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(inv.account_uuid ?? '', inv.supplier || null, inv.invoice_number || null, inv.total ?? null, inv.file_hash || null, label);
+    },
+    listIgnored(accountUUID) { return db.prepare('SELECT id, supplier, invoice_number, total, label, created_at FROM ignored_bills WHERE account_key = ? ORDER BY id DESC').all(accountUUID ?? ''); },
+    removeIgnored(accountUUID, id) { return db.prepare('DELETE FROM ignored_bills WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
+    /** Is this invoice one the business asked to ignore? (the same file, or the same supplier, number and amount) */
+    isIgnored(inv) {
+      const rows = db.prepare('SELECT * FROM ignored_bills WHERE account_key = ?').all(inv.account_uuid ?? '');
+      return rows.some((r) => (r.file_hash && inv.file_hash && r.file_hash === inv.file_hash)
+        || (r.invoice_number && inv.invoice_number && r.supplier && inv.supplier && r.total != null && inv.total != null
+          && invoiceNumberKey(r.invoice_number) === invoiceNumberKey(inv.invoice_number)
+          && sameSupplier(supplierKey(r.supplier), supplierKey(inv.supplier))
+          && Math.abs(Math.round(r.total * 100) - Math.round(inv.total * 100)) <= 1));
+    },
 
     // ---------- usage ----------
     /** Count one Claude request of a kind (invoice_read, price_check, statement_read, statement_check) with its tokens and cost. */

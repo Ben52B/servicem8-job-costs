@@ -200,6 +200,11 @@ function render() {
     <label class="f">Between</label><div class="hours"><select id="from">${hourOpts(st.check_from, 0, 23)}</select> and <select id="to">${hourOpts(st.check_to, 1, 24)}</select></div>
     <label class="f" for="tz">Time zone</label><select id="tz">${zones.map((z) => `<option ${z === st.timezone ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select>
     <div class="hint" style="margin-top:4px">Outside these hours nothing is checked automatically; <b>↻ Check now</b> works any time.</div></div>
+  <div class="panel"><h2>Deleted invoices</h2>
+    <label class="switch"><input type="checkbox" id="ai" ${st.ask_ignore_on_delete !== false ? 'checked' : ''}><span><b>Ask whether to ignore an invoice when I delete it from the Inbox</b><br>
+      <span class="muted" style="font-size:12.5px">So the same bill isn\u2019t brought in again if it\u2019s emailed again.</span></span></label>
+    ${(data.ignored || []).length ? `<div class="hint" style="margin-top:10px">Ignored if they come in again:</div>${data.ignored.map((x) => `<div class="mb" style="display:flex;gap:8px;align-items:center">
+      <span style="flex:1">${esc(x.label)}${x.total != null ? ` <span class="muted">· $${Number(x.total).toFixed(2)}</span>` : ''}</span><button data-unignore="${x.id}">Stop ignoring</button></div>`).join('')}` : ''}</div>
   <div class="panel"><h2>ServiceM8 job diary</h2>
     <label class="switch"><input type="checkbox" id="ds" ${st.diary_summary ? 'checked' : ''}><span><b>Keep a Job Costs summary in each job's diary</b><br>
       <span class="muted" style="font-size:12.5px">One note per job, kept up to date: costs, paid, still to pay and profit – so everyone sees it in the diary, on the desktop and in the app.</span></span></label></div>
@@ -213,13 +218,14 @@ async function load() {
 }
 document.addEventListener('click', async (e) => {
   const mb = e.target.closest('button'); if (mb && await mailboxClick(mb, load)) return;
+  if (mb && mb.dataset.unignore) { try { await api('/ignored/' + mb.dataset.unignore, { method: 'DELETE' }); toast('It\u2019ll be brought in again if it\u2019s emailed'); } catch (x) { toast(x.message); } return load(); }
   if (e.target.id !== 'save') return;
   const b = e.target; b.disabled = true;
   try {
     const r = await api('/settings', { method: 'PUT', body: JSON.stringify({
       business_name: $('#bn').value, business_type: $('#bt').value, stock_clients: $('#sc').value, stock_categories: $('#sk').value,
       check_days: [...document.querySelectorAll('[data-day]')].filter((x) => x.checked).map((x) => x.dataset.day),
-      check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked }) });
+      check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked }) });
     data.settings = r.settings; render(); toast('Saved');
   } catch (x) { toast(x.message); b.disabled = false; }
 });

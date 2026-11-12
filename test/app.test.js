@@ -1816,6 +1816,47 @@ test('connect Gmail (or any mailbox) in Settings: checked for invoices, password
   } finally { srvM.close(); }
 });
 
+test('deleting from the Inbox: "ignore it if it comes in again" drops the same bill next time; uploads by hand still come in', async () => {
+  JOBS['ign-job'] = { jobNumber: '209200', jobTitle: '2 Ignore St' };
+  const t = await openCard('ign-job', 'acc-ign');
+  const inboxIds = async () => (await json(t, '/inbox')).invoices.map((i) => i.id);
+  assert.equal((await json(t, '/inbox')).askIgnore, true, 'asks by default');
+  await email(t, { subject: 'Invoice', file: 'ign-door.pdf' });
+  const first = latestInvoice();
+  assert.ok((await inboxIds()).includes(first.id));
+  // deleted, and ignored from now on
+  const del = await api(t, `/inbox/${first.id}?ignore=1`, { method: 'DELETE' }).then((x) => x.json());
+  assert.equal(del.ignored, true);
+  const ign = (await json(t, '/ignored')).ignored;
+  assert.equal(ign.length, 1);
+  assert.match(ign[0].label, /^Door Supplies Pty Ltd #INV-100/);
+  // the same bill emailed again: not kept
+  const before = repo.db.prepare("SELECT COUNT(*) AS n FROM invoices WHERE account_uuid = 'acc-ign'").get().n;
+  await email(t, { subject: 'Invoice again', file: 'copy-of-ign-door.pdf' });
+  assert.equal(repo.db.prepare("SELECT COUNT(*) AS n FROM invoices WHERE account_uuid = 'acc-ign'").get().n, before, 'dropped quietly');
+  // another business isn't affected
+  JOBS['ign-job2'] = { jobNumber: '209201', jobTitle: '3 Ignore St' };
+  const t2 = await openCard('ign-job2', 'acc-ign2');
+  assert.deepEqual((await json(t2, '/ignored')).ignored, []);
+  // uploaded by hand: you want it, so it comes in
+  const fd = new FormData(); fd.append('files', new Blob(['%PDF-1.4 by hand' + uniq()], { type: 'application/pdf' }), 'copy-of-ign-door.pdf');
+  await api(t, '/inbox/upload', { method: 'POST', body: fd }); await processor.idle();
+  const byHand = latestInvoice();
+  assert.equal(byHand.status, 'ready');
+  assert.ok((await inboxIds()).includes(byHand.id));
+  await api(t, `/inbox/${byHand.id}`, { method: 'DELETE' }); // deleted without ignoring: nothing more ignored
+  assert.equal((await json(t, '/ignored')).ignored.length, 1);
+  // stop ignoring: it comes in again
+  assert.equal((await api(t, `/ignored/${ign[0].id}`, { method: 'DELETE' })).status, 200);
+  await email(t, { subject: 'Invoice once more', file: 'copy-of-ign-door.pdf' });
+  assert.ok((await inboxIds()).includes(latestInvoice().id));
+  assert.equal((await api(t2, `/ignored/${ign[0].id}`, { method: 'DELETE' })).status, 404);
+  // "don't ask me again"
+  await api(t, '/settings', { method: 'PUT', json: { ask_ignore_on_delete: false } });
+  assert.equal((await json(t, '/inbox')).askIgnore, false);
+  assert.equal((await json(t, '/settings')).settings.ask_ignore_on_delete, false);
+});
+
 test('the card, report and inbox page scripts have no syntax errors', () => {
   for (const file of ['card.html', 'report.html', 'inbox.html', 'bills.html', 'checks.html', 'summary.html', 'prices.html', 'stock.html', 'home.html', 'settings.html', 'welcome.html']) {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');

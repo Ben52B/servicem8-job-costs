@@ -49,6 +49,17 @@
   .toast.show { opacity: 1; }
   @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+  .ask { position: fixed; inset: 0; background: rgba(15, 30, 26, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+  .ask-card { background: #fff; border-radius: 16px; padding: 18px 18px 16px; max-width: 420px; width: 100%; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+  .item.wide { display: block; }
+  .item.wide .hd { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+  .item.wide .amt { font-weight: 800; font-size: 15px; white-space: nowrap; } .item.wide .amt .muted { font-weight: 600; font-size: 12px; }
+  .item.wide .sub { margin-top: 2px; }
+  .pcline { margin-top: 6px; font-size: 12.5px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .sugg { margin-top: 8px; background: var(--warn-soft); border-radius: 12px; padding: 8px 10px; display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .sugg .why { flex: 1 1 260px; min-width: 0; } .sugg .go { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .acts.left { justify-content: flex-start; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line2); }
+  .paidbox { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -171,7 +182,7 @@ function renderImport() {
       <button class="small" data-open-folder="${esc(f.id)}" data-name="${esc(f.name)}">Open ›</button></div>`).join('');
   const pickable = imp.messages.filter((m) => !m.status || m.status === 'new');
   // What became of each email: only ones really in Job Costs are greyed out
-  const WHY = { quote: 'a quote', statement: 'a statement', remittance: 'a remittance', not_invoice: 'not an invoice', nothing: 'no PDF or invoice in it', not_kept: 'nothing kept from it', duplicate: 'already in Job Costs' };
+  const WHY = { quote: 'a quote', statement: 'a statement', remittance: 'a remittance', not_invoice: 'not an invoice', nothing: 'no PDF or invoice in it', not_kept: 'nothing kept from it', duplicate: 'already in Job Costs', ignored: 'an invoice you asked to ignore' };
   const badge = (m) => ({
     imported: '<span class="chip c-proc">✓ in Job Costs</span>',
     statement: '<span class="chip" style="background:#eef2ff;color:#3730a3">📄 in Statement check</span>',
@@ -219,19 +230,22 @@ function render() {
   }
   for (const i of fresh) {
     const s = i.suggestion;
-    h += `<div class="item"><div><div class="t">${esc(i.supplier || 'Unknown supplier')} <span class="muted" style="font-weight:600">${money(i.total_ex ?? i.total)} ex GST</span>${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</div>
-      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), i.email_from, i.source === 'outlook' && 'from Outlook'].filter(Boolean).join(' · '))}</div>
-      ${pcChip(i) ? `<div style="margin-top:5px;font-size:12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
-      ${s ? `<div class="trace"><span class="left">💡 Looks like ${esc(jobLabel(s))} – ${esc(s.reason || '')}</span></div>` : ''}
-      ${i.looks_like_stock ? '<div class="trace"><span class="left">💡 Looks like stock – no job number or site on it, and it reads like a restock order</span></div>' : ''}
-      ${dupNote(i.possible_duplicate, s && s.job_uuid)}</div>
-      <div class="acts">${fileLink(i)}
-        <label title="Tick to mark it paid when you add it" style="display:inline-flex;align-items:center;gap:4px;font-weight:600;white-space:nowrap"><input type="checkbox" id="pd-${i.id}"> Paid</label>
-        ${s ? `<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>` : ''}
-        ${jobBox(i.id, !!s)}
-        <button class="${i.looks_like_stock ? 'primary' : ''}" data-stock="${i.id}" title="Not for one job – keep it to take items from later">${i.looks_like_stock ? '✓ ' : ''}📦 Send to stock</button>
-        ${s && !s.is_stock ? openJob(s.job_uuid, s.job_number) : ''}
-        <button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
+    // the invoice across the full width; the suggested job with its button under it; the other choices in one row below
+    const paidBox = `<label class="paidbox" title="Tick to mark it paid when you add it"><input type="checkbox" id="pd-${i.id}"> Paid</label>`;
+    const from = String(i.email_from || '').replace(/\s*<[^>]*>\s*$/, '').replace(/^"|"$/g, '') || String(i.email_from || '').replace(/[<>]/g, '');
+    h += `<div class="item wide">
+      <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</span>
+        <span class="amt">${money(i.total_ex ?? i.total)} <span class="muted">ex GST</span></span></div>
+      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
+      ${pcChip(i) ? `<div class="pcline">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
+      ${dupNote(i.possible_duplicate, s && s.job_uuid)}
+      ${s ? `<div class="sugg"><span class="why">💡 Looks like <b>${esc(jobLabel(s))}</b><span class="muted"> – ${esc(s.reason || '')}</span></span>
+        <span class="go">${paidBox}<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>${!s.is_stock ? openJob(s.job_uuid, s.job_number) : ''}</span></div>`
+        : i.looks_like_stock ? `<div class="sugg"><span class="why">💡 Looks like stock<span class="muted"> – no job number or site on it, and it reads like a restock order</span></span>
+        <span class="go">${paidBox}<button class="primary" data-stock="${i.id}">✓ 📦 Send to stock</button></span></div>` : ''}
+      <div class="acts left">${fileLink(i)}${s || i.looks_like_stock ? '' : paidBox}${jobBox(i.id, !!s)}
+        ${i.looks_like_stock ? '' : `<button data-stock="${i.id}" title="Not for one job – keep it to take items from later">📦 Send to stock</button>`}
+        <span style="flex:1"></span><button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
   }
   const recent = data.recent || [];
   if (recent.length) {
@@ -267,7 +281,30 @@ document.addEventListener('change', async (e) => {
   if (t.dataset.pickFolder) { t.checked ? imp.whole.set(t.dataset.pickFolder, t.dataset.name) : imp.whole.delete(t.dataset.pickFolder); return renderImport(); }
   if (t.dataset.pickAll !== undefined) { for (const m of imp.messages) if (!m.status || m.status === 'new') t.checked ? imp.emails.set(m.id, true) : imp.emails.delete(m.id); return renderImport(); }
 });
+// "Ignore this invoice if it comes in again?" – resolves true (ignore), false (don't), or null (closed)
+function askIgnore() {
+  return new Promise((resolve) => {
+    const box = document.createElement('div');
+    box.className = 'ask';
+    box.innerHTML = `<div class="ask-card" role="dialog" aria-modal="true" aria-labelledby="askT">
+      <b id="askT" style="font-size:16px">Ignore this invoice if it comes in again?</b>
+      <div class="muted" style="margin:6px 0 12px;font-size:13px">If the same bill is emailed again (or forwarded), Job Costs won\u2019t bring it back into the Inbox. You can undo this in ⚙ Settings.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" data-a="yes">Yes, ignore it</button><button data-a="no">No</button></div>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:12px;font-size:13px"><input type="checkbox" id="askNever"> Don\u2019t ask me again</label></div>`;
+    const done = async (v) => {
+      if (v === false && box.querySelector('#askNever').checked) {
+        try { await api('/settings', { method: 'PUT', body: JSON.stringify({ ask_ignore_on_delete: false }) }); data.askIgnore = false; } catch (x) { /* asks next time */ }
+      }
+      box.remove(); resolve(v);
+    };
+    box.addEventListener('click', (ev) => { const a = ev.target.closest('[data-a]'); if (a) done(a.dataset.a === 'yes'); else if (ev.target === box) done(null); });
+    document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { document.removeEventListener('keydown', esc); done(null); } });
+    document.body.appendChild(box);
+    box.querySelector('[data-a="yes"]').focus();
+  });
+}
 document.addEventListener('click', async (e) => {
+  if (e.target.closest('.ask')) return; // the question box handles its own clicks
   const b = e.target.closest('button'); if (!b) return;
   const d = b.dataset;
   try {
@@ -297,7 +334,11 @@ document.addEventListener('click', async (e) => {
     if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid: paidTick(d.stock) }) }); toast('Sent to stock' + andPaid(d.stock) + ' – take items from it on any job'); return load(); }
     if (d.del) {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
-      await api(`/inbox/${d.del}`, { method: 'DELETE' }); toast('Deleted'); return load();
+      // ask whether to ignore this bill if it's emailed again (unless "don't ask me again" was ticked)
+      const ignore = data.askIgnore ? await askIgnore() : false;
+      if (ignore === null) { delete b.dataset.sure; b.textContent = '🗑 Delete'; return; } // closed: nothing deleted
+      await api(`/inbox/${d.del}${ignore ? '?ignore=1' : ''}`, { method: 'DELETE' });
+      toast(ignore ? 'Deleted – it won\u2019t be brought in again' : 'Deleted'); return load();
     }
     if (d.importOpen !== undefined) return openImport();
     if (d.importClose !== undefined) { $('#importBox').hidden = true; return; }
