@@ -182,8 +182,11 @@ function thingsIn(text, lineQty, kits) {
       out.push({ type: f.type, kit: f.kit || null, qty, text: seg.trim(), doorContext: f.doorContext || null });
     }
   }
+  // a line about a door that lists what comes with it ("…including tracks, springs, cables") names the door's own parts, not more items
+  if (out.some((f) => BY_TYPE[f.type]?.door)) return out.filter((f) => !DOOR_PART_TYPES.has(f.type));
   return out;
 }
+const DOOR_PART_TYPES = new Set(['spring']);
 
 /** The track of a motor: 'chain', 'belt', or null (not known yet). */
 function driveOf(texts, settings = {}) {

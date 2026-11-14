@@ -1933,6 +1933,9 @@ test('picking list: finds each thing on the job and gives it its own boxes; chai
   assert.deepEqual(things('Header beam'), [['lintel', 1]], 'a header beam isn’t safety beams');
   assert.deepEqual(things('Remotes x 3', null), [['remote', 3]]);
   assert.deepEqual(things('Sectional door supply & install'), [['sectional', 1]], 'one door');
+  assert.deepEqual(things('Sectional Door System - ECO DOORS - 2300H x 4830W - Supply new sectional door -New hardware including, tracks, mounts, brackets, springs, cables, nuts and bolts -Colorbond panels'),
+    [['sectional', 1]], 'what comes with the door (job 208118) isn’t more items');
+  assert.deepEqual(things('Replacement springs'), [['spring', 1]], 'springs on their own still are');
   assert.deepEqual(pl.thingsIn('Merlin opener for roller door', 1, []).map((f) => [f.type, f.doorContext]), [['motor', 'roller']], 'the motor of a roller door – not a door');
   // chain or belt: the words, else the business's models
   assert.equal(pl.driveOf(['Merlin MR850 belt drive'], {}), 'belt');

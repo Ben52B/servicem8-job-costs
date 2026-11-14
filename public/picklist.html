@@ -159,9 +159,11 @@ function render() {
   if (!d.groups.length) h += `<div class="empty">Nothing to pick up yet.<br>Items show up here from the job's lines in ServiceM8${d.jobCosts ? ', its invoices' : ''} and its notes – or add them below.</div>`;
   for (const g of d.groups) {
     const left = g.items.filter((i) => !i.picked).length;
-    h += `<div class="grp">${ICON[g.kind] || '•'} ${esc(g.title)} <span class="muted">${left ? left + ' to get' : '✓ done'}</span></div>`;
+    const title = g.kind === 'supplier' ? `Pick up from ${g.title}` : g.kind === 'stock' ? 'From our stock' : g.kind === 'job' ? 'On the ServiceM8 job' : g.title;
+    h += `<div class="grp">${ICON[g.kind] || '•'} ${esc(title)} <span class="muted">${left ? left + ' to get' : '✓ done'}</span></div>`;
     if (g.kind === 'notes') h += `<div class="sub" style="margin:-2px 0 6px">From the job notes – not on an invoice yet, so check it's been ordered.</div>`;
-    if (g.kind === 'job' && d.jobCosts) h += `<div class="sub" style="margin:-2px 0 6px">On the job in ServiceM8 – no supplier invoice for it yet.</div>`;
+    if (g.kind === 'supplier') h += `<div class="sub" style="margin:-2px 0 6px">Bought from them for this job – it's on their invoice.</div>`;
+    if (g.kind === 'job' && d.jobCosts) h += `<div class="sub" style="margin:-2px 0 6px">From the job's lines in ServiceM8 – no supplier invoice for it yet, so check it's been ordered.</div>`;
     for (const it of g.items) {
       h += `<div class="it ${it.picked ? 'done' : ''}"><div class="row">
         ${it.parts.length ? `<button class="tick ${it.picked ? 'on' : ''}" data-item-all="${esc(it.key)}" title="Tick all its parts"></button>` : `<button class="tick ${it.picked ? 'on' : ''}" data-key="${esc(it.key)}" data-on="${it.picked ? 1 : 0}"></button>`}
