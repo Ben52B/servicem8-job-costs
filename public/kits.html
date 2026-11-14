@@ -149,7 +149,7 @@ function render() {
     <label for="m-chain">Chain models (comma between)</label><input id="m-chain" value="${esc(models.chain_models.join(', '))}" placeholder="e.g. mr650, ms65">
     <label for="m-belt">Belt models</label><input id="m-belt" value="${esc(models.belt_models.join(', '))}" placeholder="e.g. mr850">
     <div class="r"><button class="primary" data-models>Save</button></div></div>`;
-  h += `<details class="kit"><summary><b>Built-in items</b> <span class="hint">(${built.length})</span></summary>${built.map((b) => `<div class="bi"><b>${esc(b.name)}</b>${b.parts.length ? `<div class="hint">${b.parts.map(esc).join(' · ')}</div>` : '<div class="hint">one box</div>'}</div>`).join('')}</details>`;
+  h += `<details class="kit"><summary><b>Built-in items</b> <span class="hint">(${built.length})</span></summary>${built.map((b) => `<div class="bi"><b>${esc(b.name)}</b>${b.parts.length ? `<div class="hint">${b.parts.map(esc).join('<br>')}</div>` : '<div class="hint">one box</div>'}</div>`).join('')}</details>`;
   h += `<h3 style="margin:18px 0 4px">Your own items</h3><div class="hint" style="margin-bottom:8px">For things the built-in ones don't cover, or to give one your own parts. Yours are looked for first.</div>`;
   $('#content').innerHTML = h + kits.map(form).join('') + form(null);
 }

@@ -1943,11 +1943,36 @@ test('picking list: finds each thing on the job and gives it its own boxes; chai
   const build = (lines, extra = {}) => pl.buildPickList({ summary: { invoices: [] }, notes: '', ticks: new Set(), extra: [], jobLines: lines.map((name, i) => ({ uuid: `u${i}`, name, qty: 1 })), ...extra });
   const items = (l) => l.groups.flatMap((g) => g.items);
   let b = items(build(['Roller door 2.4 x 2.4', 'Merlin opener']));
-  assert.deepEqual(b.map((i) => [i.name, i.parts.map((p) => p.name)]), [['Roller door', ['Door (curtain)', 'Tracks', 'Hardware box / bag', 'Brackets']], ['Motor', ['Motor box']]],
+  assert.deepEqual(b.map((i) => [i.name, i.parts.map((p) => p.name)]), [['Roller door', ['Door', 'Tracks', 'Brackets', 'Hardware bag']], ['Motor', ['Motor box']]],
     'a roller door motor has no track');
+  // the business's rules: roller doors by brand and series
+  const parts = (lines, x) => items(build(lines, x)).map((i) => [i.name, i.parts.map((p) => p.name)]);
+  assert.deepEqual(parts(['Taurean roller door AA series']), [['Roller door', ['Door', 'Tracks', 'Hardware box – square (AA)']]]);
+  assert.deepEqual(parts(['Taurean roller door A series']), [['Roller door', ['Door', 'Tracks', 'Hardware box – triangle (A)']]]);
+  assert.deepEqual(parts(['Taurean roller door']), [['Roller door', ['Door', 'Tracks', 'Hardware box (A: triangle · AA: square)']]]);
+  assert.deepEqual(parts(['Gliderol roller door AA']), [['Roller door', ['Door', 'Tracks', 'Brackets', 'Hardware bag']]]);
+  // tilt doors: J70/J90 all in one box; T arm also a pair of tracks
+  assert.deepEqual(parts(['J90 tilt door']), [['Tilt door', ['Door', 'Box – arms, hardware & springs (all in one)']]]);
+  assert.deepEqual(parts(['Tilt door T-arm']), [['Tilt door', ['Door', 'Box – arms, springs & hardware', 'Tracks (pair)']]]);
+  // motors: roller door motors have no rail; Extreme / Platinum only heavy duty chain; Commander Elite, Tempo, Syncro either
+  assert.deepEqual(parts(['ATA Easy Roller']), [['Motor', ['Motor box']]], 'a roller door motor – not a roller door');
+  assert.deepEqual(parts(['ATA Shedmaster']), [['Motor', ['Motor box']]]);
+  assert.deepEqual(parts(['ATA Slientdrive opener']), [['Motor', ['Motor box']]], 'spelt either way');
+  assert.deepEqual(parts(['Sectional door', 'Merlin Extreme']).at(-1), ['Motor', ['Motor box', 'Heavy duty chain track']]);
+  assert.deepEqual(parts(['Sectional door', 'Merlin Platinum motor']).at(-1), ['Motor', ['Motor box', 'Heavy duty chain track']]);
+  assert.deepEqual(parts(['Sectional door', 'Merlin Commander Elite']).at(-1), ['Motor', ['Motor box', 'Track – chain or belt?']]);
+  assert.deepEqual(parts(['Sectional door', 'ATA Tempo belt drive']).at(-1), ['Motor', ['Motor box', 'Belt track']]);
+  assert.deepEqual(parts(['Sectional door', 'ATA Syncro']).at(-1), ['Motor', ['Motor box', 'Track – chain or belt?']]);
+  assert.deepEqual(parts(['Sectional door', 'Merlin Commander Elite'], { settings: { belt_models: ['commander elite'] } }).at(-1)[1][1], 'Track – chain or belt?');
+  // sectional: low headroom and super sneaky
+  assert.deepEqual(parts(['Taurean sectional door', 'Low headroom kit'])[0][1],
+    ['Panels', 'Low headroom tracks', 'Torsion bar', 'Springs', 'Hardware box', 'Hanging brackets', 'Back struts', 'Low headroom roller brackets']);
+  assert.deepEqual(parts(['Gliderol sectional door', 'Super sneaky'])[0][1].at(-1), 'Super sneaky roller brackets');
+  assert.deepEqual(parts(['Low headroom kit']), [['Low headroom kit', ['Low headroom tracks', 'Low headroom roller brackets']]], 'on its own');
   b = items(build(['Sectional door', 'Low headroom kit', 'Merlin MR650 chain drive', 'Safety beams', 'Smart hub']));
   assert.deepEqual(b.map((i) => i.name), ['Sectional door', 'Motor', 'Smart hub', 'Safety beams']);
-  assert.deepEqual(b[0].parts.map((p) => p.name).slice(-1), ['Low headroom kit'], 'low headroom is a part of the door when asked for');
+  assert.deepEqual(b[0].parts.map((p) => p.name).slice(-1), ['Low headroom roller brackets'], 'low headroom is a part of the door when asked for');
+  assert.equal(b[0].parts.find((p) => p.name === 'Back struts').optional, true, 'back struts if applicable');
   assert.deepEqual(b[1].parts.map((p) => [p.name, !!p.optional]), [['Motor box', false], ['Chain track', false]]);
   assert.deepEqual([b[2].parts, b[3].parts], [[], []], 'one box each');
   b = items(build(['Sectional door']));
@@ -1977,12 +2002,12 @@ test('picking list: finds each thing on the job and gives it its own boxes; chai
   assert.deepEqual(Object.keys(byTitle), ['Summit Door Supplies', 'Our stock', 'On the job', 'Not on an invoice yet']);
   const d = byTitle['Summit Door Supplies'].items;
   assert.deepEqual(d.map((i) => [i.name, i.detail]), [['Sectional door', 'Eco Insulated Sectional Door 2300x4830']], 'one door (invoice, job line and notes), no delivery');
-  assert.deepEqual(d[0].parts.map((x) => x.name), ['Door panels', 'Tracks', 'Springs', 'Bar (shaft)', 'Hardware box', 'Back support bar']);
+  assert.deepEqual(d[0].parts.map((x) => x.name), ['Panels', 'Tracks', 'Torsion bar', 'Springs', 'Hardware box', 'Hanging brackets', 'Back struts']);
   const motor = byTitle['Our stock'].items[0];
   assert.deepEqual([motor.name, motor.detail, motor.qty, motor.parts.map((x) => x.name)], ['Motor', 'Bolt 800N opener', 1, ['Motor box', 'Track – chain or belt?']], '1 of the 5 openers, from stock');
   assert.deepEqual(byTitle['On the job'].items.map((i) => [i.name, i.qty]), [['Smart hub', 1], ['Safety beams', 1], ['Remotes', 2]], 'each its own box (labour left out)');
   assert.deepEqual(byTitle['Not on an invoice yet'].items.map((i) => i.name), ['Flashing', 'Posts'], 'the door and motor of the notes are the invoiced ones');
-  assert.deepEqual(p.progress, { picked: 0, total: 6 + 2 + 3 + 2 });
+  assert.deepEqual(p.progress, { picked: 0, total: 6 + 2 + 3 + 2 }, 'back struts only if applicable');
   // chain or belt? picked on the job, and remembered for the model
   const dr = await post(t, '/picklist/drive', { drive: 'belt' }).then((x) => x.json());
   assert.equal(dr.remembered, 'bolt 800n');

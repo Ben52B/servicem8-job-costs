@@ -18,6 +18,7 @@
 const ITEMS = [
   { type: 'post_cover', name: 'Post covers', re: /\bpost\s*(covers?|cladding|caps?)\b/ },
   { type: 'lintel', name: 'Lintel', re: /\blintels?\b|\b(header|steel)\s*beams?\b/ },
+  { type: 'super_sneaky', name: 'Super sneaky kit', re: /\bsupersneaky(\s*(kit|brackets?))?\b/ },
   { type: 'low_headroom', name: 'Low headroom kit', re: /\blow[\s-]*head[\s-]*room(\s*kit)?\b/ },
   { type: 'smart_hub', name: 'Smart hub', re: /\bsmart\s*(hub|phone\s*(control|module)|control|connect|module)\b|\bwi-?fi\s*(hub|module|bridge|connect(ivity)?)?\b|\bmyq\b|\bhub\b/ },
   { type: 'sensor', name: 'Safety beams', re: /\b(safety|sensor|photo(\s*electric)?|p\.?\s?e\.?|infra-?red|ir)\s*beams?\b|\bphoto\s*eyes?\b|\b(safety\s*)?sensors?\b|\bbeams?\b/ },
@@ -31,25 +32,63 @@ const ITEMS = [
   { type: 'seal', name: 'Seals', re: /\b(weather|bottom|side|top|brush|rubber)?\s*seals?\b/ },
   { type: 'spring', name: 'Springs', re: /\bsprings?\b/ },
   { type: 'sectional', name: 'Sectional door', door: true, re: /\bsectional\b|\bpanel[\s-]*lift\b|\binsulated\s*(garage\s*)?door\b|\bpanel\s*door\b/ },
-  { type: 'tilt', name: 'Tilt door', door: true, re: /\btilt(\s*(a\s*)?door)?\b/ },
+  { type: 'tilt', name: 'Tilt door', door: true, re: /\btilt(\s*(a\s*)?door)?\b|\bj(70|90)\b|\btarm\b/ },
   { type: 'roller', name: 'Roller door', door: true, re: /\broller(\s*(door|shutter))?\b|\broll[\s-]*a[\s-]*door\b/ },
   { type: 'door', name: 'Door', door: true, re: /\bdoors?\b/ },
 ];
 const BY_TYPE = Object.fromEntries(ITEMS.map((i) => [i.type, i]));
 // A motor brand on its own ("Merlin MR850") is a motor – but not when the line names something else ("Merlin remote").
-const MOTOR_BRAND = /\b(merlin|chamberlain|liftmaster|controlladoor|ata|axess|grifco|centurion|somfy|boss|glidermatic|dace|sommer|elsema)\b/;
+const MOTOR_BRAND = /\b(merlin|chamberlain|liftmaster|controlladoor|ata|axess|grifco|centurion|somfy|boss|glidermatic|dace|sommer|elsema|easyroller|shedmaster|weatherdrive|silentdrive|tempo|syn(c|ch)ro|commander|extreme|platinum)\b/;
+// What the motor model says about its track.
+const MOTOR_MODELS = [
+  { kind: 'roller', re: /\b(easyroller|shedmaster|weatherdrive|silentdrive)\b/ }, // roller door motors: no rail
+  { kind: 'heavy_chain', re: /\b(extreme|platinum)\b/ }, // heavy duty chain only
+  { kind: 'either', re: /\bcommander(\s*elite)?\b|\btempo\b|\bsyn(c|ch)ro\b/ }, // belt or chain: the job says, or ask
+];
+/** 'roller' | 'heavy_chain' | 'either' | null, from the motor's lines. */
+function motorKind(texts) {
+  const t = normalise(texts.join(' '));
+  return (MOTOR_MODELS.find((m) => m.re.test(t)) || {}).kind || null;
+}
+/** Model names written several ways, as one word (so "Easy Roller" isn't a roller door). */
+function normalise(text) {
+  return String(text || '').toLowerCase()
+    .replace(/supply\s*(and|&|\+)\s*(fit|install(ation)?)/g, ' ').replace(/\bb\s*&\s*d\b/g, 'bnd').replace(/\bcontroll?[\s-]*a[\s-]*door\b/g, 'controlladoor')
+    .replace(/\beasy[\s-]*roller\b/g, 'easyroller').replace(/\bshed[\s-]*master\b/g, 'shedmaster').replace(/\bweather[\s-]*drive\b/g, 'weatherdrive')
+    .replace(/\bs(?:ile|lie|ilie)nt[\s-]*drive\b/g, 'silentdrive').replace(/\bsuper[\s-]*sneaky\b/g, 'supersneaky')
+    .replace(/\bt[\s-]*arms?\b/g, 'tarm').replace(/\bj[\s-]?(70|90)\b/g, 'j$1');
+}
 // Door wording that is a door kind: what tells which door a motor is for, when the door isn't on the job's lines.
-const DOOR_KIND = [['sectional', /\bsectional\b|\bpanel[\s-]*lift\b|\binsulated\b|\bpanel\b/], ['tilt', /\btilt\b/], ['roller', /\broller\b|\broll[\s-]*a[\s-]*door\b/]];
+const DOOR_KIND = [['sectional', /\bsectional\b|\bpanel[\s-]*lift\b|\binsulated\b|\bpanel\b/], ['tilt', /\btilt\b|\bj[\s-]?(70|90)\b|\bt[\s-]*arm\b/], ['roller', /\broller\b|\broll[\s-]*a[\s-]*door\b/]];
 
-// The boxes of each item (the rest are one box each).
-const SECTIONAL_PARTS = [
-  { slug: 'panels', name: 'Door panels' }, { slug: 'tracks', name: 'Tracks' }, { slug: 'springs', name: 'Springs' },
-  { slug: 'bar', name: 'Bar (shaft)' }, { slug: 'hardware', name: 'Hardware box' }, { slug: 'support', name: 'Back support bar' }];
-const PARTS = {
-  sectional: SECTIONAL_PARTS,
-  tilt: [{ slug: 'door', name: 'Door' }, { slug: 'tracks', name: 'Tracks / arms' }, { slug: 'springs', name: 'Springs' }, { slug: 'hardware', name: 'Hardware box' }],
-  roller: [{ slug: 'door', name: 'Door (curtain)' }, { slug: 'tracks', name: 'Tracks', qty: 2 }, { slug: 'hardware', name: 'Hardware box / bag' }, { slug: 'brackets', name: 'Brackets', qty: 2 }],
-};
+// The boxes of each door – by its kind, brand and series (the rest are one box each).
+function doorParts(type, text, extras) {
+  const t = normalise(text);
+  if (type === 'sectional') {
+    const lh = extras.has('low_headroom');
+    return [{ slug: 'panels', name: 'Panels' }, { slug: 'tracks', name: lh ? 'Low headroom tracks' : 'Tracks' }, { slug: 'bar', name: 'Torsion bar' },
+      { slug: 'springs', name: 'Springs' }, { slug: 'hardware', name: 'Hardware box' }, { slug: 'hanging', name: 'Hanging brackets' },
+      { slug: 'struts', name: 'Back struts', optional: true, note: 'if applicable' },
+      ...(lh ? [{ slug: 'lh-brackets', name: 'Low headroom roller brackets' }] : []),
+      ...(extras.has('super_sneaky') ? [{ slug: 'ss-brackets', name: 'Super sneaky roller brackets' }] : [])];
+  }
+  if (type === 'roller') {
+    if (/\btaurean\b/.test(t)) {
+      const series = /\baa\b/.test(t) ? 'AA' : /\ba[\s-]*(series|class)\b|\(a\)/.test(t) ? 'A' : null;
+      return [{ slug: 'door', name: 'Door' }, { slug: 'tracks', name: 'Tracks' },
+        { slug: 'hardware', name: series === 'AA' ? 'Hardware box – square (AA)' : series === 'A' ? 'Hardware box – triangle (A)' : 'Hardware box (A: triangle · AA: square)' }];
+    }
+    return [{ slug: 'door', name: 'Door' }, { slug: 'tracks', name: 'Tracks' }, { slug: 'brackets', name: 'Brackets' }, { slug: 'hardware', name: 'Hardware bag' }];
+  }
+  if (type === 'tilt') {
+    if (/\bj(70|90)\b/.test(t)) return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, hardware & springs (all in one)' }];
+    if (/\btarm\b/.test(t)) return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)' }];
+    return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)', optional: true, note: 'T arm only' }];
+  }
+  if (type === 'low_headroom') return [{ slug: 'tracks', name: 'Low headroom tracks' }, { slug: 'brackets', name: 'Low headroom roller brackets' }];
+  if (type === 'super_sneaky') return [{ slug: 'brackets', name: 'Super sneaky roller brackets' }];
+  return null;
+}
 
 // Invoice lines that are things to collect (not freight, labour, a subcontractor's work or fees).
 const PICKABLE = new Set(['materials', 'other']);
@@ -104,8 +143,7 @@ function matchKit(kits, text) {
  * "Merlin opener for roller door" → a motor (for a roller door), not a door.
  */
 function thingsIn(text, lineQty, kits) {
-  let t = String(text || '').toLowerCase()
-    .replace(/supply\s*(and|&|\+)\s*(fit|install(ation)?)/g, ' ').replace(/\bb\s*&\s*d\b/g, 'bnd').replace(/\bcontroll?[\s-]*a[\s-]*door\b/g, 'controlladoor');
+  const t = normalise(text);
   const out = [];
   const segments = t.split(/\s*(?:\+|&|,|;|\/|\band\b|\bwith\b|\bplus\b|\bincl(?:uding|udes|\.)?\b|\binc\b)\s*/).filter((s) => s.trim());
   const many = segments.length > 1;
@@ -213,6 +251,8 @@ function buildPickList({ summary, notes, kits = [], ticks, extra, jobLines = nul
   // Which door this job is: a door kind named anywhere, else what the motor line or the notes say.
   const kinds = ['sectional', 'tilt', 'roller'];
   let doorKind = kinds.find((k) => mentions.some((m) => m.type === k)) || mentions.map((m) => m.doorContext).find(Boolean) || null;
+  const mKind = motorKind(mentions.filter((m) => m.type === 'motor').map((m) => `${m.name} ${m.text}`));
+  if (!doorKind && mKind === 'roller') doorKind = 'roller';
   if (!doorKind) for (const [k, re] of DOOR_KIND) if (re.test(noteDoorWords.toLowerCase())) { doorKind = k; break; }
   // a plain "Door" is that door
   for (const m of mentions) if (m.type === 'door' && doorKind) m.type = doorKind;
@@ -220,12 +260,12 @@ function buildPickList({ summary, notes, kits = [], ticks, extra, jobLines = nul
   // the same thing from several places is one item: the invoice says where to get it, else the job line, else the notes
   const byType = new Map();
   for (const m of mentions) { if (!byType.has(m.type)) byType.set(m.type, []); byType.get(m.type).push(m); }
-  const lowHeadroom = byType.has('low_headroom');
+  const extras = new Set(['low_headroom', 'super_sneaky'].filter((x) => byType.has(x)));
   const choice = ticks.has('o:drive-belt') ? 'belt' : ticks.has('o:drive-chain') ? 'chain' : null;
   const items = [];
   let drive = null;
   for (const [type, ms] of byType) {
-    if (type === 'low_headroom' && (byType.has('sectional'))) continue; // a part of the sectional door
+    if ((type === 'low_headroom' || type === 'super_sneaky') && byType.has('sectional')) continue; // parts of the sectional door
     const best = Math.min(...ms.map((m) => SRC[m.source]));
     const use = ms.filter((m) => SRC[m.source] === best);
     const qs = use.map((m) => m.qty).filter((q) => q != null);
@@ -237,19 +277,21 @@ function buildPickList({ summary, notes, kits = [], ticks, extra, jobLines = nul
     const detail = [...new Set(use.map((m) => m.name).filter((n) => n && words(n).trim() !== words(def?.name || kit?.name).trim()))];
     let parts = [];
     if (kit) parts = (kit.parts || []).map((p, i) => ({ key: `${key}:${i}`, ...p }));
-    else if (PARTS[type]) {
-      parts = PARTS[type].map((p) => ({ key: `${key}:${p.slug}`, name: p.name, ...(p.qty ? { qty: p.qty } : {}) }));
-      if (type === 'sectional' && lowHeadroom) parts.push({ key: `${key}:low-headroom`, name: 'Low headroom kit' });
+    else if (doorParts(type, '', extras)) {
+      const text = `${ms.map((m) => `${m.name} ${m.text}`).join(' ')} ${noteDoorWords}`;
+      parts = doorParts(type, text, extras).map((p) => ({ key: `${key}:${p.slug}`, name: p.name, ...(p.optional ? { optional: true, note: p.note } : {}) }));
     } else if (type === 'motor') {
       parts = [{ key: `${key}:box`, name: 'Motor box' }];
-      if (doorKind !== 'roller') {
-        drive = choice || driveOf(ms.map((m) => `${m.name} ${m.text}`), settings);
+      if (mKind === 'heavy_chain') { drive = 'chain'; parts.push({ key: `${key}:track`, name: 'Heavy duty chain track' }); }
+      else if (doorKind !== 'roller' && mKind !== 'roller') {
+        drive = choice || driveOf(ms.map((m) => `${m.name} ${m.text}`), mKind === 'either' ? {} : settings); // either way: only the job's words say
         parts.push({ key: `${key}:track`, name: drive ? `${drive === 'belt' ? 'Belt' : 'Chain'} track` : 'Track – chain or belt?', drive: drive || null, chooseDrive: true,
           ...(doorKind ? {} : { optional: true, note: 'not for a roller door' }) });
       }
     }
     items.push({ key, type, name: kit ? kit.name : def.name, detail: detail.join(' · ') || null, qty, unit: first.unit || null, where: first.where,
-      source: first.source, invoice: first.invoice || null, kit: kit ? kit.name : null, parts, model: type === 'motor' ? modelOf(ms.map((m) => m.name).join(' ')) : undefined });
+      source: first.source, invoice: first.invoice || null, kit: kit ? kit.name : null, parts,
+      ...(type === 'motor' ? { model: modelOf(ms.map((m) => m.name).join(' ')), motorKind: mKind } : {}) });
   }
   // the built-in order (doors, then the motor and its bits, then the rest), then what we don't know, then by hand
   const rank = (it) => { const i = ['sectional', 'tilt', 'roller', 'door', 'motor'].indexOf(it.type); return i >= 0 ? i : 10 + ITEMS.findIndex((x) => x.type === it.type); };
@@ -295,9 +337,20 @@ function allKeys(list) {
 
 /** The built-in items and their boxes, for the settings page. */
 function catalogue() {
-  return ITEMS.filter((i) => i.type !== 'door').map((i) => ({ type: i.type, name: i.name,
-    parts: i.type === 'motor' ? ['Motor box', 'Track – chain or belt (sectional / tilt doors)'] : (PARTS[i.type] || []).map((p) => `${p.qty ? p.qty + ' × ' : ''}${p.name}`)
-      .concat(i.type === 'sectional' ? ['Low headroom kit (when the job asks for one)'] : []) }));
+  const show = (type, text, ex = []) => doorParts(type, text, new Set(ex)).map((p) => p.name + (p.optional ? ` (${p.note})` : '')).join(' · ');
+  return [
+    { name: 'Sectional door (Taurean, Gliderol)', parts: [show('sectional', '')] },
+    { name: 'Sectional door – low headroom', parts: [show('sectional', '', ['low_headroom'])] },
+    { name: 'Sectional door – super sneaky', parts: [show('sectional', '', ['super_sneaky'])] },
+    { name: 'Roller door – Gliderol (A, AA)', parts: [show('roller', 'gliderol')] },
+    { name: 'Roller door – Taurean', parts: [show('roller', 'taurean a series'), show('roller', 'taurean aa')] },
+    { name: 'Tilt door – J70 / J90', parts: [show('tilt', 'j90')] },
+    { name: 'Tilt door – T arm', parts: [show('tilt', 't arm')] },
+    { name: 'Motor – Merlin Commander Elite, ATA Tempo, ATA Syncro', parts: ['Motor box · Chain or belt track (from the job, or pick it)'] },
+    { name: 'Motor – Merlin Extreme, Merlin Platinum', parts: ['Motor box · Heavy duty chain track'] },
+    { name: 'Motor – ATA Shedmaster, Easy Roller, Weatherdrive, Silentdrive', parts: ['Motor box (roller door: no rail)'] },
+    ...ITEMS.filter((i) => !i.door && !['motor', 'low_headroom', 'super_sneaky'].includes(i.type)).map((i) => ({ name: i.name, parts: [] })),
+  ];
 }
 
-module.exports = { ITEMS, buildPickList, matchKit, parsePart, itemsFromNotes, thingsIn, driveOf, modelOf, allKeys, catalogue };
+module.exports = { ITEMS, motorKind, doorParts, normalise, buildPickList, matchKit, parsePart, itemsFromNotes, thingsIn, driveOf, modelOf, allKeys, catalogue };

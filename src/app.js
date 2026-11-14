@@ -1075,7 +1075,7 @@ window.addEventListener('message', function (e) {
     repo.setPickTick(req.job.job_uuid, 'o:drive-belt', drive === 'belt');
     const motor = pickListOf(req.job, req.account).groups.flatMap((g) => g.items).find((i) => i.type === 'motor');
     let remembered = null;
-    if (motor && motor.model && req.body?.remember !== false) {
+    if (motor && motor.model && motor.motorKind !== 'either' && req.body?.remember !== false) { // a model that comes either way isn't remembered
       const st = settingsFor(req.account);
       const other = drive === 'belt' ? 'chain_models' : 'belt_models'; const mine = `${drive}_models`;
       repo.saveSettings(req.account, { [other]: (st[other] || []).filter((m) => m !== motor.model), [mine]: [...new Set([...(st[mine] || []), motor.model])].slice(-200) });
