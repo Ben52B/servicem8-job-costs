@@ -252,6 +252,8 @@ function buildPickList({ summary, notes, kits = [], ticks, extra, jobLines = nul
   const kinds = ['sectional', 'tilt', 'roller'];
   let doorKind = kinds.find((k) => mentions.some((m) => m.type === k)) || mentions.map((m) => m.doorContext).find(Boolean) || null;
   const mKind = motorKind(mentions.filter((m) => m.type === 'motor').map((m) => `${m.name} ${m.text}`));
+  // a low headroom kit or super sneaky always comes with a sectional door
+  if (!doorKind && mentions.some((m) => m.type === 'low_headroom' || m.type === 'super_sneaky')) doorKind = 'sectional';
   if (!doorKind && mKind === 'roller') doorKind = 'roller';
   if (!doorKind) for (const [k, re] of DOOR_KIND) if (re.test(noteDoorWords.toLowerCase())) { doorKind = k; break; }
   // a plain "Door" is that door

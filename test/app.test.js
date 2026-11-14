@@ -1969,6 +1969,12 @@ test('picking list: finds each thing on the job and gives it its own boxes; chai
     ['Panels', 'Low headroom tracks', 'Torsion bar', 'Springs', 'Hardware box', 'Hanging brackets', 'Back struts', 'Low headroom roller brackets']);
   assert.deepEqual(parts(['Gliderol sectional door', 'Super sneaky'])[0][1].at(-1), 'Super sneaky roller brackets');
   assert.deepEqual(parts(['Low headroom kit']), [['Low headroom kit', ['Low headroom tracks', 'Low headroom roller brackets']]], 'on its own');
+  // …and always comes with a sectional door: a plain "Door" is a sectional one, and its motor has a track
+  b = items(build(['Door', 'Super sneaky', 'Merlin Extreme']));
+  assert.deepEqual(b.map((i) => [i.name, i.parts.map((p) => p.name).at(-1)]), [['Sectional door', 'Super sneaky roller brackets'], ['Motor', 'Heavy duty chain track']]);
+  b = items(build(['Door', 'Low headroom', 'Merlin Commander Elite']));
+  assert.deepEqual(b.map((i) => i.name), ['Sectional door', 'Motor']);
+  assert.equal(b[1].parts[1].optional, undefined, 'the track is needed: it is a sectional door');
   b = items(build(['Sectional door', 'Low headroom kit', 'Merlin MR650 chain drive', 'Safety beams', 'Smart hub']));
   assert.deepEqual(b.map((i) => i.name), ['Sectional door', 'Motor', 'Smart hub', 'Safety beams']);
   assert.deepEqual(b[0].parts.map((p) => p.name).slice(-1), ['Low headroom roller brackets'], 'low headroom is a part of the door when asked for');
