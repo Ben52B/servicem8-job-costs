@@ -32,7 +32,7 @@ const ITEMS = [
   { type: 'seal', name: 'Seals', re: /\b(weather|bottom|side|top|brush|rubber)?\s*seals?\b/ },
   { type: 'spring', name: 'Springs', re: /\bsprings?\b/ },
   { type: 'sectional', name: 'Sectional door', door: true, re: /\bsectional\b|\bpanel[\s-]*lift\b|\binsulated\s*(garage\s*)?door\b|\bpanel\s*door\b/ },
-  { type: 'tilt', name: 'Tilt door', door: true, re: /\btilt(\s*(a\s*)?door)?\b|\bj(70|90)\b|\btarm\b/ },
+  { type: 'tilt', name: 'Tilt door arms & springs', door: true, re: /\btilt(\s*(a\s*)?door)?\b|\bj(70|90)\b|\btarm\b/ },
   { type: 'roller', name: 'Roller door', door: true, re: /\broller(\s*(door|shutter))?\b|\broll[\s-]*a[\s-]*door\b/ },
   { type: 'door', name: 'Door', door: true, re: /\bdoors?\b/ },
 ];
@@ -81,9 +81,9 @@ function doorParts(type, text, extras) {
     return [{ slug: 'door', name: 'Door' }, { slug: 'tracks', name: 'Tracks' }, { slug: 'brackets', name: 'Brackets' }, { slug: 'hardware', name: 'Hardware bag' }];
   }
   if (type === 'tilt') {
-    if (/\bj(70|90)\b/.test(t)) return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, hardware & springs (all in one)' }];
-    if (/\btarm\b/.test(t)) return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)' }];
-    return [{ slug: 'door', name: 'Door' }, { slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)', optional: true, note: 'T arm only' }];
+    if (/\bj(70|90)\b/.test(t)) return [{ slug: 'box', name: 'Box – arms, hardware & springs (all in one)' }];
+    if (/\btarm\b/.test(t)) return [{ slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)' }];
+    return [{ slug: 'box', name: 'Box – arms, springs & hardware' }, { slug: 'tracks', name: 'Tracks (pair)', optional: true, note: 'T arm only' }];
   }
   if (type === 'low_headroom') return [{ slug: 'tracks', name: 'Low headroom tracks' }, { slug: 'brackets', name: 'Low headroom roller brackets' }];
   if (type === 'super_sneaky') return [{ slug: 'brackets', name: 'Super sneaky roller brackets' }];
@@ -344,8 +344,8 @@ function catalogue() {
     { name: 'Sectional door – super sneaky', parts: [show('sectional', '', ['super_sneaky'])] },
     { name: 'Roller door – Gliderol (A, AA)', parts: [show('roller', 'gliderol')] },
     { name: 'Roller door – Taurean', parts: [show('roller', 'taurean a series'), show('roller', 'taurean aa')] },
-    { name: 'Tilt door – J70 / J90', parts: [show('tilt', 'j90')] },
-    { name: 'Tilt door – T arm', parts: [show('tilt', 't arm')] },
+    { name: 'Tilt door arms & springs – J70 / J90 (we don’t supply the door)', parts: [show('tilt', 'j90')] },
+    { name: 'Tilt door arms & springs – T arm', parts: [show('tilt', 't arm')] },
     { name: 'Motor – Merlin Commander Elite, ATA Tempo, ATA Syncro', parts: ['Motor box · Chain or belt track (from the job, or pick it)'] },
     { name: 'Motor – Merlin Extreme, Merlin Platinum', parts: ['Motor box · Heavy duty chain track'] },
     { name: 'Motor – ATA Shedmaster, Easy Roller, Weatherdrive, Silentdrive', parts: ['Motor box (roller door: no rail)'] },

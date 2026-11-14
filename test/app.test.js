@@ -1952,8 +1952,8 @@ test('picking list: finds each thing on the job and gives it its own boxes; chai
   assert.deepEqual(parts(['Taurean roller door']), [['Roller door', ['Door', 'Tracks', 'Hardware box (A: triangle · AA: square)']]]);
   assert.deepEqual(parts(['Gliderol roller door AA']), [['Roller door', ['Door', 'Tracks', 'Brackets', 'Hardware bag']]]);
   // tilt doors: J70/J90 all in one box; T arm also a pair of tracks
-  assert.deepEqual(parts(['J90 tilt door']), [['Tilt door', ['Door', 'Box – arms, hardware & springs (all in one)']]]);
-  assert.deepEqual(parts(['Tilt door T-arm']), [['Tilt door', ['Door', 'Box – arms, springs & hardware', 'Tracks (pair)']]]);
+  assert.deepEqual(parts(['J90 tilt door']), [['Tilt door arms & springs', ['Box – arms, hardware & springs (all in one)']]], 'no door: just the arms and springs');
+  assert.deepEqual(parts(['Tilt door T-arm']), [['Tilt door arms & springs', ['Box – arms, springs & hardware', 'Tracks (pair)']]]);
   // motors: roller door motors have no rail; Extreme / Platinum only heavy duty chain; Commander Elite, Tempo, Syncro either
   assert.deepEqual(parts(['ATA Easy Roller']), [['Motor', ['Motor box']]], 'a roller door motor – not a roller door');
   assert.deepEqual(parts(['ATA Shedmaster']), [['Motor', ['Motor box']]]);
