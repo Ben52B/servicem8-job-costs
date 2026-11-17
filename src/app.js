@@ -1058,7 +1058,7 @@ window.addEventListener('message', function (e) {
   const hasJobCosts = (accountUUID) => !!repo.getTokens(accountUUID) || !!repo.db.prepare('SELECT 1 FROM invoices WHERE account_uuid IS ? LIMIT 1').get(accountUUID);
   api.get('/picklist', (req, res) => {
     const j = repo.getJob(req.job.job_uuid);
-    res.json({ jobCosts: hasJobCosts(req.account), job: { job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
+    res.json({ jobCosts: hasJobCosts(req.account), job: { job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
       kits: kitsFor(req.account).length });
   });
   api.post('/picklist/tick', (req, res) => {

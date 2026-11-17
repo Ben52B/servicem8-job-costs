@@ -154,7 +154,8 @@ function render() {
   const d = data, pr = d.progress;
   $('#toJobCosts').hidden = !d.jobCosts; // only for businesses that also have Job Costs
   const pct = pr.total ? Math.round(pr.picked / pr.total * 100) : 0;
-  let h = `<div class="sub" style="margin-top:2px">Job #${esc(d.job.job_number || '')}${d.job.client_name ? ' · ' + esc(d.job.client_name) : ''}${d.job.job_title ? ' · ' + esc(String(d.job.job_title).split(',')[0]) : ''}</div>
+  let h = `<div class="sub" style="margin-top:2px">Job #${esc(d.job.job_number || '')}${d.job.client_name ? ' · ' + esc(d.job.client_name) : ''}${d.job.job_title ? ' · ' + esc(String(d.job.job_title).split(',')[0]) : ''}
+    ${d.job.job_uuid ? ` · <a href="https://go.servicem8.com/openjob/${encodeURIComponent(d.job.job_uuid)}" target="_blank" rel="noopener">↗ Open job in ServiceM8</a>` : ''}</div>
     <div class="prog"><b>${pr.total && pr.picked === pr.total ? '✅ Everything picked up' : `${pr.picked} of ${pr.total} picked up`}</b><div class="bar"><span style="width:${pct}%"></span></div></div>`;
   if (!d.groups.length) h += `<div class="empty">Nothing to pick up yet.<br>Items show up here from the job's lines in ServiceM8${d.jobCosts ? ', its invoices' : ''} and its notes – or add them below.</div>`;
   for (const g of d.groups) {
