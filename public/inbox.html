@@ -42,6 +42,9 @@
   .irow.done { opacity: .6; } .irow .folder { font-weight: 700; text-decoration: none; color: var(--ink); }
   .lnk, .acts .lnk { background: none; border: 0; padding: 4px 6px; color: var(--brand-dark); text-decoration: underline; box-shadow: none; }
   .recent .item { background: #fbfdfc; }
+  .item.doneline { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; background: #f3fbf7; border-color: #c8eedd; padding: 9px 12px; }
+  .doneline .what { flex: 1; min-width: 0; font-size: 13.5px; }
+  .doneline .acts { display: flex; gap: 6px; }
   .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
   .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -140,6 +143,10 @@ const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title :
 const fileLink = (i) => (!i.file_path ? '' : `<a class="btn" href="${i.mime_type === 'application/pdf'
   ? `/viewer.html?id=${i.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(i.supplier || 'Invoice')}`
   : `/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}${/^text\//.test(i.mime_type || '') ? '&view=html' : ''}`}" target="_blank" rel="noopener">View</a>`);
+// Invoices added (or sent to stock) since the page opened: a slim line in their place, with "Open job" and "Undo"
+const done = new Map(); // id → { inv, job_uuid, job_number, to_stock, paid }
+let shownOrder = [];
+function markDone(id, info) { const inv = data.invoices.find((x) => String(x.id) === String(id)); if (inv) done.set(Number(id), { inv, ...info }); }
 const openJob = (uuid, num) => (uuid ? `<button class="lnk" data-open-job="${esc(uuid)}" title="Open this job's Job Costs">Open job #${esc(num || '?')} ↗</button>` : '');
 // Where the possible duplicate is, with a button to go and look.
 function dupNote(d, skipJob) {
@@ -211,7 +218,15 @@ function render() {
     ? `<span>Send or forward every supplier invoice to</span><code id="addr">${esc(data.inboxAddress)}</code><button data-copy>Copy</button><span class="muted">Tip: put the job number on your orders (e.g. “PO 208126”) and invoices get matched automatically.</span>`
     : (outlookStatus && outlookStatus.connected ? '' : '<span class="muted">Email-in is not set up on the server yet.</span>');
   $('#address').style.display = $('#address').innerHTML ? '' : 'none';
-  const fresh = data.invoices.filter((i) => i.untouched && !i.kept_as_stock);
+  const waiting = data.invoices.filter((i) => i.untouched && !i.kept_as_stock && !done.has(i.id));
+  // the done ones stay where they were in the list
+  const fresh = waiting.slice();
+  for (const [id, x] of done) {
+    if (fresh.some((i) => i.id === id)) continue;
+    const at = shownOrder.indexOf(id);
+    fresh.splice(at < 0 ? fresh.length : Math.min(at, fresh.length), 0, { ...x.inv, _done: x });
+  }
+  shownOrder = fresh.map((i) => i.id);
   const stock = data.invoices.filter((i) => !(i.untouched && !i.kept_as_stock) && !i.duplicate_of);
   // Type a job number; the browser suggests matching jobs as you type.
   const jobBox = (id, other) => `<span style="display:inline-flex;gap:4px"><input id="j-${id}" list="jobList" data-job-input="${id}" placeholder="${other ? 'Other job #' : 'Job #'}" autocomplete="off"
@@ -221,14 +236,21 @@ function render() {
     style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button class="primary" data-move-pick="${id}" data-key="${key}">${label}</button>${stock ? `<button data-move-stock="${id}" data-key="${key}" title="Not for one job">📦 To stock</button>` : ''}</span>`;
   let h = data.statementsWaiting ? `<div class="item" style="background:#eef2ff;border-color:#c7d2fe"><div>📄 <b>${data.statementsWaiting} supplier statement${data.statementsWaiting === 1 ? '' : 's'}</b> came in and ${data.statementsWaiting === 1 ? 'was' : 'were'} moved to Statement check, ready to run.</div>
     <div class="acts"><a class="btn" href="/checks?t=${encodeURIComponent(BOOT.token)}">🔎 Open Statement check</a></div></div>` : '';
-  h += `<h2>Needs a job <span class="badge">${fresh.length + data.pending.length}</span></h2>`;
-  if (!fresh.length && !data.pending.length) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
+  h += `<h2>Needs a job <span class="badge">${waiting.length + data.pending.length}</span></h2>`;
+  if (!waiting.length && !data.pending.length && !done.size) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {
     h += `<div class="item"><div><div class="t">${esc(p.file_name || 'Invoice')} ${p.status === 'processing' ? '<span class="chip c-proc"><span class="spin"></span> Reading</span>' : '<span class="chip c-err">Couldn’t read</span>'}</div>
       <div class="sub">${esc([p.email_from, p.email_subject && '“' + p.email_subject + '”'].filter(Boolean).join(' · '))}${p.error ? ' · ' + esc(p.error) : ''}</div></div>
       <div class="acts">${p.status === 'error' ? `<button class="danger" data-del="${p.id}">Delete</button>` : ''}</div></div>`;
   }
   for (const i of fresh) {
+    if (i._done) {
+      const x = i._done;
+      h += `<div class="item doneline"><span class="what">✓ <b>${esc(i.supplier || 'Invoice')}</b>${i.invoice_number ? ' #' + esc(i.invoice_number) : ''} <span class="muted">${money(i.total_ex ?? i.total)}</span>
+        → ${x.to_stock && !x.job_number ? '<b>sent to stock</b>' : `${x.to_stock ? 'stock order' : 'added to'} <b>#${esc(x.job_number || '?')}</b>`}${x.paid ? ' <span class="muted">· marked paid</span>' : ''}</span>
+        <span class="acts">${x.to_stock ? `<a class="btn" href="/stock?t=${encodeURIComponent(BOOT.token)}">Open stock →</a>` : `<button class="primary" data-open-job="${esc(x.job_uuid)}">Open job →</button>`}<button data-undo-done="${i.id}">↶ Undo</button></span></div>`;
+      continue;
+    }
     const s = i.suggestion;
     // the invoice across the full width; the suggested job with its button under it; the other choices in one row below
     const paidBox = `<label class="paidbox" title="Tick to mark it paid when you add it"><input type="checkbox" id="pd-${i.id}"> Paid</label>`;
@@ -247,7 +269,7 @@ function render() {
         ${i.looks_like_stock ? '' : `<button data-stock="${i.id}" title="Not for one job – keep it to take items from later">📦 Send to stock</button>`}
         <span style="flex:1"></span><button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
   }
-  const recent = data.recent || [];
+  const recent = (data.recent || []).filter((r) => !done.has(r.id));
   if (recent.length) {
     h += `<h2>Recently approved <span class="muted" style="font-weight:600;font-size:12px">last 14 days – approved the wrong one? Undo puts it back above</span></h2><div class="recent">`;
     for (const r of recent) {
@@ -330,14 +352,18 @@ document.addEventListener('click', async (e) => {
   try {
     if (d.copy !== undefined) { await navigator.clipboard.writeText($('#addr').textContent).catch(() => {}); return toast('Email address copied'); }
     const paidTick = (id) => !!($('#pd-' + id) && $('#pd-' + id).checked);
-    const andPaid = (id) => (paidTick(id) ? ' and marked paid' : '');
-    if (d.assign) { await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job, paid: paidTick(d.assign) }) }); toast('Added to the job' + andPaid(d.assign)); return load(); }
+    if (d.assign) {
+      const paid = paidTick(d.assign); b.disabled = true;
+      const r = await api(`/inbox/${d.assign}/assign`, { method: 'POST', body: JSON.stringify({ job_uuid: d.job, paid }) });
+      markDone(d.assign, { job_uuid: r.job_uuid || d.job, job_number: r.job_number, to_stock: !!r.is_stock, paid }); return load();
+    }
     if (d.assignPick) {
       const n = $('#j-' + d.assignPick).value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
       if (!n) { $('#j-' + d.assignPick).focus(); return toast('Type a job number'); }
       b.disabled = true;
-      const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n, paid: paidTick(d.assignPick) }) });
-      toast('Added to #' + (r.job_number || n) + andPaid(d.assignPick)); return load();
+      const paid = paidTick(d.assignPick);
+      const r = await api(`/inbox/${d.assignPick}/assign`, { method: 'POST', body: JSON.stringify({ job_number: n, paid }) });
+      markDone(d.assignPick, { job_uuid: r.job_uuid, job_number: r.job_number || n, to_stock: !!r.is_stock, paid }); return load();
     }
     if (d.change) { const k = d.change; changing.has(k) ? changing.delete(k) : changing.add(k); render(); const el = $('#m-' + k); if (el) el.focus(); return; }
     if (d.movePick || d.moveStock) {
@@ -351,7 +377,11 @@ document.addEventListener('click', async (e) => {
       if (r.diaryWarning) toast(r.diaryWarning);
       return load();
     }
-    if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid: paidTick(d.stock) }) }); toast('Sent to stock' + andPaid(d.stock) + ' – take items from it on any job'); return load(); }
+    if (d.stock) {
+      const paid = paidTick(d.stock); b.disabled = true;
+      await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid }) });
+      markDone(d.stock, { to_stock: true, paid }); return load();
+    }
     if (d.del) {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
       if (!(await deleteFromInbox(d.del))) { delete b.dataset.sure; b.textContent = '🗑 Delete'; return; }
@@ -376,6 +406,12 @@ document.addEventListener('click', async (e) => {
         toast(`${r.emails} email${r.emails === 1 ? '' : 's'} found: ${r.files} file${r.files === 1 ? '' : 's'} being read${r.skipped ? ` · ${r.skipped} already imported` : ''}${r.notInvoices ? ` · ${r.notInvoices} without an invoice` : ''}`);
       } finally { b.disabled = false; b.textContent = '📂 Import ticked'; }
       return load();
+    }
+    if (d.undoDone) {
+      const id = Number(d.undoDone), x = done.get(id);
+      b.disabled = true;
+      const r = await api(`/inbox/${id}/undo`, { method: 'POST', body: JSON.stringify({ job_uuid: x && x.job_uuid, unpaid: !!(x && x.paid) }) });
+      done.delete(id); toast(r.diaryWarning || 'Back in the Inbox'); return load();
     }
     if (d.undo) { const r = await api(`/inbox/${d.undo}/undo`, { method: 'POST' }); toast(r.diaryWarning || 'Back in the Inbox'); return load(); }
     if (d.openJob) { const r = await api(`/jobs/${encodeURIComponent(d.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); return; }

@@ -1637,7 +1637,7 @@ window.addEventListener('message', function (e) {
     repo.assignWhole(inv.id, job.job_uuid, { category: c.category || inv.category });
     repo.markApproved(inv.id, job.is_stock ? null : job.job_uuid);
     if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
-    res.json({ ok: true, job_number: job.job_number });
+    res.json({ ok: true, job_number: job.job_number, job_uuid: job.job_uuid, is_stock: !!job.is_stock });
   });
   // Upload invoices straight into the Inbox (read, then a job is suggested for each).
   api.post('/inbox/upload', upload.array('files', 30), (req, res) => {
@@ -1660,6 +1660,10 @@ window.addEventListener('message', function (e) {
     if (!inv) return;
     if (!inv.approved_at) return res.status(400).json({ error: 'This invoice wasn\u2019t approved from the Inbox' });
     const diaryWarning = inv.sm8_link === 'pushed' ? await removeFromDiary(inv, req.account) : null;
+    // straight after adding it: also off the job it was added to (a stock order job too), and not paid if that was ticked with it
+    const jobUUID = req.body?.job_uuid ? String(req.body.job_uuid) : null;
+    if (jobUUID && repo.jobsOnInvoice(inv.id).some((j) => j.job_uuid === jobUUID)) repo.removeFromJob(inv.id, jobUUID);
+    if (req.body?.unpaid === true) repo.setInvoicePaid(inv.id, false);
     repo.undoApproval(inv.id);
     repo.suggestJob(inv.id);
     res.json({ ok: true, diaryWarning });

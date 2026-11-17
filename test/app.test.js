@@ -1896,6 +1896,32 @@ test('deleting from the Inbox: "ignore it if it comes in again" drops the same b
   assert.equal((await json(t, '/settings')).settings.ask_ignore_on_delete, false);
 });
 
+test('Inbox: added to a job (marked paid) – the answer says which job; Undo straight after takes it off and unmarks paid; a stock order job too', async () => {
+  JOBS['undo-job'] = { jobNumber: '209220', jobTitle: '6 Undo St' };
+  const t = await openCard('undo-job', 'acc-undo');
+  const bill = (n) => { const inv = repo.createInvoice({ accountUUID: 'acc-undo', source: 'email' });
+    repo.saveExtraction(inv.id, { supplier_name: 'Smart hire', invoice_number: n, total: 110, tax: 10, subtotal: 100, items: [{ description: 'Saw', line_total: 110 }] }); return inv.id; };
+  const a = bill('U-1');
+  const r = await post(t, `/inbox/${a}/assign`, { job_number: '209220', paid: true }).then((x) => x.json());
+  assert.deepEqual([r.job_number, r.job_uuid, r.is_stock], ['209220', 'undo-job', false]);
+  assert.equal((await summary(t)).invoices.find((i) => i.id === a).payment_state, 'paid');
+  await post(t, `/inbox/${a}/undo`, { job_uuid: r.job_uuid, unpaid: true });
+  assert.equal((await summary(t)).invoices.some((i) => i.id === a), false, 'off the job');
+  assert.equal(repo.getInvoice(a).paid ? 1 : 0, 0, 'not paid');
+  assert.ok((await json(t, '/inbox')).invoices.some((i) => i.id === a), 'back in the Inbox');
+  // a stock order job
+  JOBS['undo-stock'] = { jobNumber: '209221', jobTitle: 'Stock order', clientName: 'Stock' };
+  const ts = await openCard('undo-stock', 'acc-undo');
+  assert.ok(ts);
+  repo.db.prepare('UPDATE jobs SET stock_manual = 1 WHERE job_uuid = ?').run('undo-stock');
+  const b = bill('U-2');
+  const rs = await post(t, `/inbox/${b}/assign`, { job_uuid: 'undo-stock' }).then((x) => x.json());
+  assert.equal(rs.is_stock, true);
+  await post(t, `/inbox/${b}/undo`, { job_uuid: rs.job_uuid });
+  assert.deepEqual(repo.jobsOnInvoice(b), [], 'off the stock order job too');
+  assert.ok((await json(t, '/inbox')).invoices.some((i) => i.id === b && i.untouched && !i.kept_as_stock));
+});
+
 test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {
   JOBS['sup-job'] = { jobNumber: '209210', jobTitle: '4 Ignore St' };
   const t = await openCard('sup-job', 'acc-sup');
