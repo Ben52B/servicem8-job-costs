@@ -136,9 +136,9 @@
   .actions .spacer { flex: 1; }
   .confirm-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; background: var(--bad-soft); color: var(--bad); border-radius: 12px; font-weight: 600; }
   .confirm-bar .spacer { flex: 1; }
-  .edit-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 12px; background: var(--line2); border-radius: 12px; }
+  .edit-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px; align-items: end; margin-top: 10px; padding: 12px; background: var(--line2); border-radius: 12px; }
   .edit-form label, .manual label.f { font-size: 12px; color: var(--muted); display: grid; gap: 3px; font-weight: 600; }
-  .edit-form input, .manual input[type=text], .manual input[type=date], .manual select, .modal select, .modal input[type=text] { font: inherit; border: 1px solid #d6e2de; border-radius: 8px; padding: 6px 8px; width: 100%; background: #fff; color: var(--ink); }
+  .edit-form input, .edit-form select, .manual input[type=text], .manual input[type=date], .manual select, .modal select, .modal input[type=text] { font: inherit; border: 1px solid #d6e2de; border-radius: 8px; padding: 6px 8px; width: 100%; background: #fff; color: var(--ink); }
   .edit-form .btns { display: flex; gap: 6px; }
   .empty { text-align: center; color: var(--muted); padding: 40px 14px; }
 
@@ -598,7 +598,8 @@ function renderStockDetail(inv, el) {
     h += `<form class="edit-form" data-edit-form="${inv.id}">
       <label>Supplier<input name="supplier" value="${esc(dr.supplier ?? inv.supplier ?? '')}"></label>
       <label>Invoice number<input name="invoice_number" value="${esc(dr.invoice_number ?? inv.invoice_number ?? '')}"></label>
-      <label>Invoice total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <label>Invoice total<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <label>GST<select name="gst">${gstChoices(inv, dr.gst)}</select></label>
       <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
     </form>`;
   }
@@ -652,7 +653,8 @@ function renderDetail() {
         <td class="num"><b>${money(it.cost)}</b></td></tr>`;
     }
     h += '</tbody></table>';
-    h += `<div class="d-total">${inv.tax != null ? 'Invoice GST ' + money(inv.tax) + ' · ' : ''}Invoice total ${money(inv.total)} incl. GST · <b>This job ${money(inv.job_total)} ex GST</b></div>`;
+    h += `<div class="d-total">${Number(inv.tax) === 0 ? `No GST · Invoice total ${money(inv.total)} · <b>This job ${money(inv.job_total)}</b>`
+      : `${inv.tax != null ? 'Invoice GST ' + money(inv.tax) + ' · ' : ''}Invoice total ${money(inv.total)} incl. GST · <b>This job ${money(inv.job_total)} ex GST</b>`}</div>`;
   }
   if (inv.other_lines.length) {
     h += `<div class="others"><b>Other lines on this invoice</b>${inv.other_lines.map((o) => `<div class="o"><div>${esc(o.description)} <span class="muted">${money(o.line_cost)}</span>${traceChips(o.trace)}</div>
@@ -678,7 +680,8 @@ function renderDetail() {
     h += `<form class="edit-form" data-edit-form="${inv.id}">
       <label>Supplier<input name="supplier" value="${esc(dr.supplier ?? inv.supplier ?? '')}"></label>
       <label>Invoice number<input name="invoice_number" value="${esc(dr.invoice_number ?? inv.invoice_number ?? '')}"></label>
-      <label>Invoice total incl. GST<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <label>Invoice total<input name="total" inputmode="decimal" value="${esc(dr.total ?? (inv.total != null ? Number(inv.total).toFixed(2) : ''))}"></label>
+      <label>GST<select name="gst">${gstChoices(inv, dr.gst)}</select></label>
       <div class="btns"><button type="submit" class="primary">Save</button><button type="button" data-cancel>Cancel</button></div>
     </form>`;
   }
@@ -863,14 +866,31 @@ function renderPick() {
 }
 
 // Typed-in invoice (lost paperwork)
-const newManual = () => ({ supplier: '', invoice_number: '', invoice_date: new Date().toLocaleDateString('en-CA'), category: 'materials', mistake_reason: '', total: '', includes_gst: true, paid: false, items: [] });
+const newManual = () => ({ supplier: '', invoice_number: '', invoice_date: new Date().toLocaleDateString('en-CA'), category: 'materials', mistake_reason: '', total: '', gst: 'incl', paid: false, items: [] });
+// The GST choice when editing an invoice: as it is now (unless that's simply "includes GST" or "no GST"), includes GST, or none.
+function gstChoices(inv, chosen) {
+  const tax = Number(inv.tax), total = Number(inv.total);
+  const now = inv.tax == null ? '' : tax === 0 ? 'none' : Math.abs(tax - total / 11) < 0.02 ? 'incl' : '';
+  const sel = chosen ?? now;
+  return (now ? '' : `<option value="" ${sel === '' ? 'selected' : ''}>As read from the invoice${inv.tax != null ? ' (GST ' + money(tax) + ')' : ''}</option>`)
+    + `<option value="incl" ${sel === 'incl' ? 'selected' : ''}>Total includes GST</option><option value="none" ${sel === 'none' ? 'selected' : ''}>No GST on it</option>`;
+}
 function readManual() {
   const f = $('#manualForm'); if (!f) return;
   const m = state.modal.manual;
   for (const k of ['supplier', 'invoice_number', 'invoice_date', 'category', 'mistake_reason', 'total']) m[k] = f.elements[k].value;
-  m.includes_gst = f.elements.includes_gst.checked;
+  m.gst = f.elements.gst.value;
   m.paid = f.elements.paid.checked;
   m.items = $$('#manualForm .lines .row').map((r) => ({ description: $('[name=description]', r).value, amount: $('[name=amount]', r).value }));
+}
+// What it costs the job, ex GST, as it's typed
+function manualCost() {
+  const m = state.modal.manual;
+  const total = num(m.total) ?? m.items.reduce((s, l) => s + (num(l.amount) || 0), 0);
+  if (!total) return '';
+  if (m.gst === 'none') return `No GST · costs the job ${money(total)}`;
+  if (m.gst === 'ex') return `GST ${money(total * 0.1)} on top · invoice ${money(total * 1.1)} · costs the job ${money(total)} ex GST`;
+  return `GST ${money(total / 11)} · costs the job ${money(total - total / 11)} ex GST`;
 }
 function manualHint() {
   const m = state.modal.manual;
@@ -893,10 +913,12 @@ function renderManual() {
       <label class="f">Date<input type="date" name="invoice_date" value="${esc(m.invoice_date)}"></label>
       <label class="f">Type<select name="category">${catOptions(m.category)}</select></label>
       <label class="f">Screw-up?<select name="mistake_reason">${reasonOptions(m.mistake_reason)}</select></label>
-      <label class="f">Total incl. GST *<input type="text" name="total" inputmode="decimal" value="${esc(m.total)}" placeholder="e.g. 1100.00"></label>
+      <label class="f">Total *<input type="text" name="total" inputmode="decimal" value="${esc(m.total)}" placeholder="e.g. 1100.00"></label>
+      <label class="f">GST<select name="gst"><option value="incl" ${m.gst === 'incl' ? 'selected' : ''}>The total includes GST</option><option value="ex" ${m.gst === 'ex' ? 'selected' : ''}>The total is ex GST (add GST)</option><option value="none" ${m.gst === 'none' ? 'selected' : ''}>No GST on it</option></select></label>
     </div>
-    <div class="checks"><label><input type="checkbox" name="includes_gst" ${m.includes_gst ? 'checked' : ''}> Includes GST</label><label><input type="checkbox" name="paid" ${m.paid ? 'checked' : ''}> Already paid</label></div>
-    <div class="lines" style="margin-top:14px"><b>Lines</b> <span class="muted">(optional, amounts incl. GST)</span>
+    <div class="hint" id="manualCost" style="margin-top:6px;font-weight:700">${esc(manualCost())}</div>
+    <div class="checks"><label><input type="checkbox" name="paid" ${m.paid ? 'checked' : ''}> Already paid</label></div>
+    <div class="lines" style="margin-top:14px"><b>Lines</b> <span class="muted">(optional, amounts the same way as the total)</span>
       ${m.items.map((l, i) => `<div class="row"><input type="text" name="description" value="${esc(l.description)}" placeholder="e.g. Gate 3.6m"><input type="text" class="amt" name="amount" inputmode="decimal" value="${esc(l.amount)}" placeholder="0.00"><button type="button" class="link" data-remove-line="${i}" title="Remove line">✕</button></div>`).join('')}
       <div style="margin-top:8px"><button type="button" class="small" data-add-line>＋ Add line</button></div>
       <div class="hint ${hint.bad ? 'bad' : ''}" id="manualHint">${esc(hint.text)}</div>
@@ -1025,6 +1047,7 @@ document.addEventListener('input', (e) => {
     readManual();
     const h = manualHint(); const el = $('#manualHint');
     if (el) { el.textContent = h.text; el.classList.toggle('bad', !!h.bad); }
+    const mc = $('#manualCost'); if (mc) mc.textContent = manualCost();
   }
   if (e.target.closest('form[data-edit-form]')) state.draft[e.target.name] = e.target.value;
 });
@@ -1043,7 +1066,7 @@ document.addEventListener('submit', async (e) => {
   const f = e.target.closest('form[data-edit-form]');
   if (f) {
     const v = Object.fromEntries(new FormData(f));
-    try { await patch(`/invoices/${f.dataset.editForm}`, { supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, '') }); state.editing = null; state.draft = {}; toast('Saved'); }
+    try { await patch(`/invoices/${f.dataset.editForm}`, { supplier: v.supplier, invoice_number: v.invoice_number, total: String(v.total).replace(/[$,\s]/g, ''), ...(state.draft.gst ? { gst: state.draft.gst } : {}) }); state.editing = null; state.draft = {}; toast('Saved'); }
     catch (x) { toast(x.message); }
     document.activeElement?.blur(); state.forceDetail = true; load();
   }

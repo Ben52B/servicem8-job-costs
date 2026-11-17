@@ -383,6 +383,44 @@ test('typed-in invoice goes on the job; attaching the file later keeps job, paid
   assert.equal(inv2.job_total, 454.55, 'typed $500 incl. GST');
 });
 
+test('typed-in costs: the total includes GST, is ex GST, or has none; editing the total or the GST keeps the job cost right', async () => {
+  const t = await openCard('job-gst');
+  const add = async (b) => { const { id } = await (await post(t, '/invoices/manual', b)).json(); return id; };
+  const get = async (id) => (await summary(t)).invoices.find((i) => i.id === id);
+  // $310 hire, no GST (e.g. a supplier not registered for GST): the job costs $310
+  const hire = await add({ supplier: 'Smart hire', invoice_number: 'demolition saw', total: 310, gst: 'none' });
+  let i = await get(hire);
+  assert.deepEqual([i.total, i.tax, i.job_total], [310, 0, 310]);
+  // the old form's "Includes GST" unticked means the same
+  i = await get(await add({ supplier: 'Old form', total: 310, includes_gst: false }));
+  assert.deepEqual([i.tax, i.job_total], [0, 310]);
+  // $310 including GST: GST $28.18, the job $281.82
+  i = await get(await add({ supplier: 'Incl', total: 310, gst: 'incl' }));
+  assert.deepEqual([i.total, i.tax, i.job_total], [310, 28.18, 281.82]);
+  // $310 ex GST: the invoice is $341 (GST $31), the job $310; lines get their GST too
+  const ex = await add({ supplier: 'Ex', total: 310, gst: 'ex', items: [{ description: 'Saw', amount: 200 }] });
+  i = await get(ex);
+  assert.deepEqual([i.total, i.tax, i.job_total], [341, 31, 310]);
+  assert.deepEqual(i.items.map((l) => [l.description, l.cost]), [['Saw', 200], ['Other items (not listed)', 110]]);
+  assert.equal((await post(t, '/invoices/manual', { supplier: 'X', total: 10, gst: 'maybe' })).status, 400);
+  // editing the total keeps GST's share: $1,100 (GST $100) → $2,200 is GST $200, the job $2,000
+  const ed = await add({ supplier: 'Edit', total: 1100 });
+  await api(t, `/invoices/${ed}`, { method: 'PATCH', json: { total: 2200 } });
+  i = await get(ed);
+  assert.deepEqual([i.total, i.tax, i.job_total], [2200, 200, 2000]);
+  // …and a no-GST one stays no GST
+  await api(t, `/invoices/${hire}`, { method: 'PATCH', json: { total: 320 } });
+  i = await get(hire);
+  assert.deepEqual([i.tax, i.job_total], [0, 320]);
+  // changing the GST on its own
+  await api(t, `/invoices/${hire}`, { method: 'PATCH', json: { gst: 'incl' } });
+  i = await get(hire);
+  assert.deepEqual([i.total, i.tax, i.job_total], [320, 29.09, 290.91]);
+  await api(t, `/invoices/${hire}`, { method: 'PATCH', json: { gst: 'none' } });
+  assert.equal((await get(hire)).job_total, 320);
+  assert.equal((await api(t, `/invoices/${hire}`, { method: 'PATCH', json: { gst: 'half' } })).status, 400);
+});
+
 test('quoted price comes from ServiceM8 and can be overridden', async () => {
   const t = await openCard('job-quote');
   assert.equal((await summary(t)).totals.quote, 5000);

@@ -1059,10 +1059,17 @@ function createRepo(db, dataDir) {
       repo.reallocate(item.invoice_id);
     },
 
-    updateInvoice(id, { supplier, invoice_number, total }) {
+    /** gst: 'incl' (the total includes GST: 1/11 of it), 'none' (no GST), or left out: GST keeps its share of the total. */
+    updateInvoice(id, { supplier, invoice_number, total, gst }) {
+      const old = repo.getInvoice(id);
+      const t = total == null ? old.total : round2(total);
+      let tax = old.tax;
+      if (gst === 'none') tax = 0;
+      else if (gst === 'incl') tax = t == null ? null : round2(t / 11);
+      else if (total != null && old.tax != null) tax = old.total ? round2(old.tax * (t / old.total)) : round2(t / 11);
       db.prepare(`UPDATE invoices SET supplier = COALESCE(?, supplier), invoice_number = COALESCE(?, invoice_number),
-          total = COALESCE(?, total) WHERE id = ?`)
-        .run(supplier ?? null, invoice_number ?? null, total == null ? null : round2(total), id);
+          total = COALESCE(?, total), tax = ?, subtotal = CASE WHEN ? IS NULL OR ? IS NULL THEN subtotal ELSE ? END WHERE id = ?`)
+        .run(supplier ?? null, invoice_number ?? null, total == null ? null : t, tax, t, tax, t == null || tax == null ? null : round2(t - tax), id);
       repo.reallocate(id);
     },
 

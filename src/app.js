@@ -1332,7 +1332,8 @@ window.addEventListener('message', function (e) {
   api.patch('/invoices/:id', (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
-    const { paid, supplier, invoice_number, total, mistake_reason, category } = req.body || {};
+    const { paid, supplier, invoice_number, total, mistake_reason, category, gst } = req.body || {};
+    if (gst !== undefined && !['incl', 'none'].includes(gst)) return res.status(400).json({ error: 'GST: incl or none' });
     const m = parseReason(mistake_reason);
     const c = parseCategory(category);
     if (m.error || c.error) return res.status(400).json({ error: m.error || c.error });
@@ -1349,7 +1350,7 @@ window.addEventListener('message', function (e) {
       repo.setInvoiceShareFields(inv.id, req.job.job_uuid, { category: c.category });
       repo.setInvoiceCategory(inv.id, c.category);
     }
-    if (supplier !== undefined || invoice_number !== undefined || t !== undefined) repo.updateInvoice(inv.id, { supplier, invoice_number, total: t });
+    if (supplier !== undefined || invoice_number !== undefined || t !== undefined || gst !== undefined) repo.updateInvoice(inv.id, { supplier, invoice_number, total: t, gst });
     res.json({ ok: true });
   });
 
@@ -1533,6 +1534,9 @@ window.addEventListener('message', function (e) {
       if (amount == null || !isFinite(amount)) return res.status(400).json({ error: `Enter an amount for "${description}"` });
       lines.push({ description, category: c.category, line_total: amount });
     }
+    // GST: the amounts include it (default), there's none, or they are ex GST and it goes on top
+    const gstMode = b.gst || (b.includes_gst === false ? 'none' : 'incl');
+    if (!['incl', 'none', 'ex'].includes(gstMode)) return res.status(400).json({ error: 'GST: incl, none or ex' });
     const listed = lines.reduce((sum, l) => sum + l.line_total, 0);
     let total = money(b.total);
     if (total != null && !isFinite(total)) return res.status(400).json({ error: 'Total must be a number' });
@@ -1541,7 +1545,17 @@ window.addEventListener('message', function (e) {
     if (listed - total > 0.005) return res.status(400).json({ error: 'The lines add up to more than the total' });
     if (total - listed > 0.005) lines.push({ description: lines.length ? 'Other items (not listed)' : `Invoice from ${supplier}`, category: c.category, line_total: Math.round((total - listed) * 100) / 100 });
 
-    const gst = b.includes_gst === false ? 0 : Math.round(total / 11 * 100) / 100;
+    let gst;
+    if (gstMode === 'ex') {
+      // amounts typed ex GST: the invoice is them + 10%
+      const r2 = (n) => Math.round(n * 100) / 100;
+      gst = r2(total * 0.1);
+      for (const l of lines) l.line_total = r2(l.line_total * 1.1);
+      const newTotal = r2(total + gst);
+      const diff = r2(newTotal - lines.reduce((s, l) => s + l.line_total, 0));
+      if (lines.length && diff) lines[lines.length - 1].line_total = r2(lines[lines.length - 1].line_total + diff);
+      total = newTotal;
+    } else gst = gstMode === 'none' ? 0 : Math.round(total / 11 * 100) / 100;
     const inv = repo.createInvoice({ accountUUID: req.account, originJobUUID: req.job.job_uuid, source: 'manual' });
     repo.saveExtraction(inv.id, {
       document_type: 'manual', supplier_name: supplier, invoice_number: String(b.invoice_number || '').trim().slice(0, 100) || null,
