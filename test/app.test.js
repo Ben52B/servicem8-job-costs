@@ -1896,6 +1896,59 @@ test('deleting from the Inbox: "ignore it if it comes in again" drops the same b
   assert.equal((await json(t, '/settings')).settings.ask_ignore_on_delete, false);
 });
 
+test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {
+  JOBS['sup-job'] = { jobNumber: '209210', jobTitle: '4 Ignore St' };
+  const t = await openCard('sup-job', 'acc-sup');
+  const bill = (supplier, number, total, file_hash = null) => {
+    const inv = repo.createInvoice({ accountUUID: 'acc-sup', source: 'email' });
+    repo.saveExtraction(inv.id, { supplier_name: supplier, invoice_number: number, total, tax: Math.round(total / 11 * 100) / 100, subtotal: total, items: [{ description: 'Stuff', line_total: total }] });
+    if (file_hash) repo.db.prepare('UPDATE invoices SET file_hash = ? WHERE id = ?').run(file_hash, inv.id);
+    return inv.id;
+  };
+  const j1 = bill('Jacksyl', 'J-1', 100); const j2 = bill('Jacksyl Pty Ltd', 'J-2', 200); const j3 = bill('JACKSYL', 'J-3', 300);
+  const other = bill('Door Supplies Pty Ltd', 'D-1', 500);
+  // one of Jacksyl's is on a job: never deleted with the rest
+  const onJob = bill('Jacksyl', 'J-4', 400); repo.assignWhole(onJob, 'sup-job', {});
+  let c = await json(t, `/inbox/${j1}/delete-check`);
+  assert.deepEqual(c, { ask: true, already: false, supplier: 'Jacksyl', sameSupplier: 2, sameBill: 0 });
+  // ignore everything from Jacksyl: the other two in the Inbox are offered
+  const del = await api(t, `/inbox/${j1}?ignore=supplier`, { method: 'DELETE' }).then((x) => x.json());
+  assert.deepEqual([del.scope, del.others.sort()], ['supplier', [j2, j3].sort()]);
+  assert.deepEqual((await json(t, '/ignored')).ignored.map((x) => [x.label, x.scope]), [['Everything from Jacksyl', 'supplier']]);
+  // said "keep them": deleting one later doesn't ask again
+  c = await json(t, `/inbox/${j2}/delete-check`);
+  assert.deepEqual([c.ask, c.already], [false, true]);
+  // delete the rest in one go – the one on a job and another business's stay
+  JOBS['sup-job2'] = { jobNumber: '209211', jobTitle: '5 Ignore St' };
+  const t2 = await openCard('sup-job2', 'acc-sup2');
+  assert.deepEqual(await post(t2, '/inbox/delete-many', { ids: [j2] }).then((x) => x.json()), { ok: true, deleted: 0 });
+  assert.deepEqual(await post(t, '/inbox/delete-many', { ids: [j2, j3, onJob] }).then((x) => x.json()), { ok: true, deleted: 2 });
+  assert.ok(repo.getInvoice(onJob));
+  // ignoring the supplier twice doesn't list it twice
+  const j5 = bill('Jacksyl', 'J-5', 50);
+  await api(t, `/inbox/${j5}?ignore=supplier`, { method: 'DELETE' });
+  assert.equal((await json(t, '/ignored')).ignored.length, 1);
+  // anything new from Jacksyl that's emailed is dropped; others still come in
+  assert.equal(repo.isIgnored({ account_uuid: 'acc-sup', supplier: 'Jacksyl Pty. Ltd.', invoice_number: 'J-99', total: 1 }), true);
+  assert.equal(repo.isIgnored({ account_uuid: 'acc-sup', supplier: 'Door Supplies Pty Ltd', invoice_number: 'D-9', total: 1 }), false);
+  assert.equal(repo.isIgnored({ account_uuid: 'acc-sup2', supplier: 'Jacksyl', invoice_number: 'J-99', total: 1 }), false, 'only this business');
+  // just this invoice: the other copies of the same bill are offered, not the supplier's other bills
+  const d2 = bill('Door Supplies Pty Ltd', 'D-1', 500); const d3 = bill('Door Supplies Pty Ltd', 'D-2', 700);
+  c = await json(t, `/inbox/${other}/delete-check`);
+  assert.deepEqual([c.ask, c.sameSupplier, c.sameBill], [true, 2, 1]);
+  const delB = await api(t, `/inbox/${other}?ignore=bill`, { method: 'DELETE' }).then((x) => x.json());
+  assert.deepEqual(delB.others, [d2]);
+  c = await json(t, `/inbox/${d2}/delete-check`);
+  assert.deepEqual([c.ask, c.already], [false, true], 'that bill is ignored already');
+  assert.equal((await json(t, `/inbox/${d3}/delete-check`)).ask, true, 'their other bills still ask');
+  // "keep bringing it in": nothing ignored, nothing offered
+  const delK = await api(t, `/inbox/${d3}`, { method: 'DELETE' }).then((x) => x.json());
+  assert.deepEqual([delK.ignored, delK.others], [false, []]);
+  // "don't ask me again" (whatever the answer): no more asking
+  await api(t, '/settings', { method: 'PUT', json: { ask_ignore_on_delete: false } });
+  assert.equal((await json(t, `/inbox/${bill('Bunnings', 'B-1', 10)}/delete-check`)).ask, false);
+});
+
 test('ServiceM8 job lines: each line shows the cost that covers it; a line without one is pulled from a stock invoice you choose', async () => {
   const jl = require('../src/joblines');
   // matching by kind of thing

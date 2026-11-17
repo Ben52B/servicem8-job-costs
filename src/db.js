@@ -377,6 +377,8 @@ function migrateColumns(db) {
   // Invoices a business deleted and asked to ignore: if the same bill is emailed again, it's dropped quietly.
   db.exec(`CREATE TABLE IF NOT EXISTS ignored_bills (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT, invoice_number TEXT,
     total REAL, file_hash TEXT, label TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  // scope 'supplier': everything from that supplier is ignored (not just the one bill)
+  if (!db.prepare('PRAGMA table_info(ignored_bills)').all().some((c) => c.name === 'scope')) db.exec('ALTER TABLE ignored_bills ADD COLUMN scope TEXT');
   // ServiceM8 job lines marked "no cost needed" (e.g. the customer supplies it).
   db.exec('CREATE TABLE IF NOT EXISTS job_line_flags (job_uuid TEXT NOT NULL, line_uuid TEXT NOT NULL, PRIMARY KEY (job_uuid, line_uuid))');
   // Pick list: kits (what an item is made of), ticks, and items added by hand.
@@ -1639,17 +1641,47 @@ function createRepo(db, dataDir) {
     removeImap(accountUUID) { db.prepare('DELETE FROM imap_connections WHERE account_key = ?').run(accountUUID ?? ''); },
 
     // ---------- invoices to ignore if they come in again ----------
-    addIgnored(inv) {
+    /** scope 'bill': this invoice if it comes again; 'supplier': everything from its supplier. */
+    addIgnored(inv, scope = 'bill') {
+      if (scope === 'supplier' && inv.supplier) {
+        if (repo.supplierIgnored(inv.account_uuid, inv.supplier)) return;
+        db.prepare("INSERT INTO ignored_bills (account_key, supplier, label, scope) VALUES (?, ?, ?, 'supplier')").run(inv.account_uuid ?? '', inv.supplier, `Everything from ${inv.supplier}`);
+        return;
+      }
+      if (repo.isIgnored(inv)) return;
       const label = [inv.supplier || inv.file_name || 'Invoice', inv.invoice_number ? '#' + inv.invoice_number : null].filter(Boolean).join(' ');
       db.prepare('INSERT INTO ignored_bills (account_key, supplier, invoice_number, total, file_hash, label) VALUES (?, ?, ?, ?, ?, ?)')
         .run(inv.account_uuid ?? '', inv.supplier || null, inv.invoice_number || null, inv.total ?? null, inv.file_hash || null, label);
     },
-    listIgnored(accountUUID) { return db.prepare('SELECT id, supplier, invoice_number, total, label, created_at FROM ignored_bills WHERE account_key = ? ORDER BY id DESC').all(accountUUID ?? ''); },
+    supplierIgnored(accountUUID, supplier) {
+      if (!supplier) return false;
+      return db.prepare("SELECT supplier FROM ignored_bills WHERE account_key = ? AND scope = 'supplier'").all(accountUUID ?? '')
+        .some((r) => sameSupplier(supplierKey(r.supplier), supplierKey(supplier)));
+    },
+    /** The same bill: the same file, or the same supplier, number and amount. */
+    sameBill(a, b) {
+      return (a.file_hash && b.file_hash && a.file_hash === b.file_hash)
+        || (a.invoice_number && b.invoice_number && a.supplier && b.supplier && a.total != null && b.total != null
+          && invoiceNumberKey(a.invoice_number) === invoiceNumberKey(b.invoice_number)
+          && sameSupplier(supplierKey(a.supplier), supplierKey(b.supplier))
+          && Math.abs(Math.round(a.total * 100) - Math.round(b.total * 100)) <= 1);
+    },
+    /** Invoices in the Inbox (not on a job, not stock), other than this one, from the same supplier / of the same bill. */
+    inboxLike(inv) {
+      const rows = db.prepare(`SELECT * FROM invoices WHERE account_uuid IS ? AND id != ? AND kept_as_stock = 0
+        AND NOT EXISTS (SELECT 1 FROM allocations JOIN items ON items.id = allocations.item_id WHERE items.invoice_id = invoices.id)`).all(inv.account_uuid ?? null, inv.id);
+      return {
+        supplier: inv.supplier ? rows.filter((r) => r.supplier && sameSupplier(supplierKey(r.supplier), supplierKey(inv.supplier))).map((r) => r.id) : [],
+        bill: rows.filter((r) => repo.sameBill(r, inv)).map((r) => r.id),
+      };
+    },
+    listIgnored(accountUUID) { return db.prepare('SELECT id, supplier, invoice_number, total, label, scope, created_at FROM ignored_bills WHERE account_key = ? ORDER BY id DESC').all(accountUUID ?? ''); },
     removeIgnored(accountUUID, id) { return db.prepare('DELETE FROM ignored_bills WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
     /** Is this invoice one the business asked to ignore? (the same file, or the same supplier, number and amount) */
     isIgnored(inv) {
       const rows = db.prepare('SELECT * FROM ignored_bills WHERE account_key = ?').all(inv.account_uuid ?? '');
-      return rows.some((r) => (r.file_hash && inv.file_hash && r.file_hash === inv.file_hash)
+      return rows.some((r) => (r.scope === 'supplier' && r.supplier && inv.supplier && sameSupplier(supplierKey(r.supplier), supplierKey(inv.supplier)))
+        || (r.file_hash && inv.file_hash && r.file_hash === inv.file_hash)
         || (r.invoice_number && inv.invoice_number && r.supplier && inv.supplier && r.total != null && inv.total != null
           && invoiceNumberKey(r.invoice_number) === invoiceNumberKey(inv.invoice_number)
           && sameSupplier(supplierKey(r.supplier), supplierKey(inv.supplier))

@@ -281,27 +281,47 @@ document.addEventListener('change', async (e) => {
   if (t.dataset.pickFolder) { t.checked ? imp.whole.set(t.dataset.pickFolder, t.dataset.name) : imp.whole.delete(t.dataset.pickFolder); return renderImport(); }
   if (t.dataset.pickAll !== undefined) { for (const m of imp.messages) if (!m.status || m.status === 'new') t.checked ? imp.emails.set(m.id, true) : imp.emails.delete(m.id); return renderImport(); }
 });
-// "Ignore this invoice if it comes in again?" – resolves true (ignore), false (don't), or null (closed)
-function askIgnore() {
+// A question box: resolves { a: the button picked, never: "don't ask me again" ticked } – a is null if closed
+function ask({ title, text, buttons, never = false }) {
   return new Promise((resolve) => {
     const box = document.createElement('div');
     box.className = 'ask';
     box.innerHTML = `<div class="ask-card" role="dialog" aria-modal="true" aria-labelledby="askT">
-      <b id="askT" style="font-size:16px">Ignore this invoice if it comes in again?</b>
-      <div class="muted" style="margin:6px 0 12px;font-size:13px">If the same bill is emailed again (or forwarded), Job Costs won\u2019t bring it back into the Inbox. You can undo this in ⚙ Settings.</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" data-a="yes">Yes, ignore it</button><button data-a="no">No</button></div>
-      <label style="display:flex;gap:6px;align-items:center;margin-top:12px;font-size:13px"><input type="checkbox" id="askNever"> Don\u2019t ask me again</label></div>`;
-    const done = async (v) => {
-      if (v === false && box.querySelector('#askNever').checked) {
-        try { await api('/settings', { method: 'PUT', body: JSON.stringify({ ask_ignore_on_delete: false }) }); data.askIgnore = false; } catch (x) { /* asks next time */ }
-      }
-      box.remove(); resolve(v);
-    };
-    box.addEventListener('click', (ev) => { const a = ev.target.closest('[data-a]'); if (a) done(a.dataset.a === 'yes'); else if (ev.target === box) done(null); });
-    document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { document.removeEventListener('keydown', esc); done(null); } });
+      <b id="askT" style="font-size:16px">${esc(title)}</b>
+      <div class="muted" style="margin:6px 0 12px;font-size:13px">${esc(text)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${buttons.map((x, i) => `<button ${i === 0 ? 'class="primary"' : ''} data-a="${esc(x.a)}">${esc(x.label)}</button>`).join('')}</div>
+      ${never ? '<label style="display:flex;gap:6px;align-items:center;margin-top:12px;font-size:13px"><input type="checkbox" id="askNever"> Don\u2019t ask me again</label>' : ''}</div>`;
+    const esc2 = (ev) => { if (ev.key === 'Escape') done(null); };
+    const done = (a) => { document.removeEventListener('keydown', esc2); const nv = !!(box.querySelector('#askNever') || {}).checked; box.remove(); resolve({ a, never: nv }); };
+    box.addEventListener('click', (ev) => { const x = ev.target.closest('[data-a]'); if (x) done(x.dataset.a); else if (ev.target === box) done(null); });
+    document.addEventListener('keydown', esc2);
     document.body.appendChild(box);
-    box.querySelector('[data-a="yes"]').focus();
+    box.querySelector('[data-a]').focus();
   });
+}
+// Delete from the Inbox: ask once whether to ignore it (or its supplier) in the future, then offer to clear the rest like it
+async function deleteFromInbox(id) {
+  const chk = await api(`/inbox/${id}/delete-check`);
+  let scope = '';
+  if (chk.ask) {
+    const sup = chk.supplier;
+    const r = await ask({ title: 'Bring it in again if it\u2019s emailed?', never: true,
+      text: `You can undo this in \u2699 Settings.${sup && chk.sameSupplier ? ` There ${chk.sameSupplier === 1 ? 'is 1 more invoice' : `are ${chk.sameSupplier} more invoices`} from ${sup} in the Inbox.` : ''}`,
+      buttons: [...(sup ? [{ a: 'supplier', label: `Ignore everything from ${sup}` }] : []), { a: 'bill', label: 'Ignore just this invoice' }, { a: 'keep', label: 'Keep bringing it in' }] });
+    if (r.a === null) return false; // closed: nothing deleted
+    if (r.never) { try { await api('/settings', { method: 'PUT', body: JSON.stringify({ ask_ignore_on_delete: false }) }); } catch (x) { /* asks next time */ } }
+    scope = r.a === 'keep' ? '' : r.a;
+  }
+  const res = await api(`/inbox/${id}${scope ? '?ignore=' + scope : ''}`, { method: 'DELETE' });
+  toast(scope === 'supplier' ? `Deleted \u2013 nothing from ${chk.supplier} will be brought in again` : scope ? 'Deleted \u2013 it won\u2019t be brought in again' : chk.already ? 'Deleted (already ignored)' : 'Deleted');
+  if ((res.others || []).length) {
+    const n = res.others.length;
+    const r = await ask({ title: scope === 'supplier' ? `Delete the other ${n} from ${chk.supplier} too?` : `Delete the other ${n === 1 ? 'copy' : n + ' copies'} of this invoice too?`,
+      text: scope === 'supplier' ? `${n === 1 ? 'It\u2019s' : 'They\u2019re'} still in the Inbox. Ones already on a job aren\u2019t touched.` : 'The same invoice came in more than once.',
+      buttons: [{ a: 'yes', label: `Delete ${n === 1 ? 'it' : 'all ' + n}` }, { a: 'no', label: 'Keep them' }] });
+    if (r.a === 'yes') { const d = await api('/inbox/delete-many', { method: 'POST', body: JSON.stringify({ ids: res.others }) }); toast(`Deleted ${d.deleted} more`); }
+  }
+  return true;
 }
 document.addEventListener('click', async (e) => {
   if (e.target.closest('.ask')) return; // the question box handles its own clicks
@@ -334,11 +354,8 @@ document.addEventListener('click', async (e) => {
     if (d.stock) { await api(`/inbox/${d.stock}/stock`, { method: 'POST', body: JSON.stringify({ paid: paidTick(d.stock) }) }); toast('Sent to stock' + andPaid(d.stock) + ' – take items from it on any job'); return load(); }
     if (d.del) {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Sure? Delete'; setTimeout(() => { delete b.dataset.sure; b.textContent = '🗑 Delete'; }, 4000); return; }
-      // ask whether to ignore this bill if it's emailed again (unless "don't ask me again" was ticked)
-      const ignore = data.askIgnore ? await askIgnore() : false;
-      if (ignore === null) { delete b.dataset.sure; b.textContent = '🗑 Delete'; return; } // closed: nothing deleted
-      await api(`/inbox/${d.del}${ignore ? '?ignore=1' : ''}`, { method: 'DELETE' });
-      toast(ignore ? 'Deleted – it won\u2019t be brought in again' : 'Deleted'); return load();
+      if (!(await deleteFromInbox(d.del))) { delete b.dataset.sure; b.textContent = '🗑 Delete'; return; }
+      return load();
     }
     if (d.importOpen !== undefined) return openImport();
     if (d.importClose !== undefined) { $('#importBox').hidden = true; return; }

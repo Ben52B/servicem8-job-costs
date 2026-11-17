@@ -1696,10 +1696,32 @@ window.addEventListener('message', function (e) {
     if (!inv) return;
     const jobs = repo.jobsOnInvoice(inv.id);
     if (jobs.length) return res.status(409).json({ error: `Part of this invoice is on ${jobList(jobs)}. Take it off those jobs first.` });
-    // "Ignore it in the future": the same bill emailed again is dropped quietly
-    if (req.query.ignore === '1' || req.body?.ignore === true) repo.addIgnored(inv);
+    // "Ignore it in the future": this bill (?ignore=1 or bill), or everything from its supplier (?ignore=supplier), dropped quietly if it comes again
+    const scope = req.query.ignore === 'supplier' ? 'supplier' : (req.query.ignore === '1' || req.query.ignore === 'bill' || req.body?.ignore === true) ? 'bill' : null;
+    const like = repo.inboxLike(inv); // the others still in the Inbox: offered to delete too
+    if (scope) repo.addIgnored(inv, scope);
     repo.deleteInvoice(inv.id);
-    res.json({ ok: true, ignored: req.query.ignore === '1' || req.body?.ignore === true });
+    res.json({ ok: true, ignored: !!scope, scope, others: scope === 'supplier' ? like.supplier : scope === 'bill' ? like.bill : [] });
+  });
+  // Before deleting: should we ask "ignore it in the future?" Not when the business said don't ask, or when it's ignored already.
+  api.get('/inbox/:id/delete-check', (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    const already = repo.supplierIgnored(req.account, inv.supplier) || repo.isIgnored(inv);
+    const like = repo.inboxLike(inv);
+    res.json({ ask: settingsFor(req.account).ask_ignore_on_delete !== false && !already, already, supplier: inv.supplier || null,
+      sameSupplier: like.supplier.length, sameBill: like.bill.length });
+  });
+  // Delete several Inbox invoices (e.g. the rest from a supplier just ignored); ones on a job are left alone.
+  api.post('/inbox/delete-many', (req, res) => {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isInteger).slice(0, 500);
+    let deleted = 0;
+    for (const id of ids) {
+      const inv = repo.getInvoice(id);
+      if (!inv || (inv.account_uuid ?? null) !== req.account || inv.kept_as_stock || repo.jobsOnInvoice(id).length) continue;
+      repo.deleteInvoice(id); deleted++;
+    }
+    res.json({ ok: true, deleted });
   });
   api.get('/ignored', (req, res) => res.json({ ignored: repo.listIgnored(req.account) }));
   api.delete('/ignored/:id', (req, res) => (repo.removeIgnored(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
