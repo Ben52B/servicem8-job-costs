@@ -841,6 +841,22 @@ window.addEventListener('message', function (e) {
   });
 
   const LOADING = '__loading__'; // details still coming from ServiceM8 (the card checks again shortly)
+  // When each job's details (price, lines) were last read from ServiceM8. A job opened any other way than its
+  // ServiceM8 button (the Inbox's "Open job", Bills, Stock, the home page) is read again so its profit is right.
+  const fetchedAt = new Map();
+  const REFRESH_MS = 5 * 60 * 1000;
+  function refreshJob(job, accountUUID) {
+    if (!job || Date.now() - (fetchedAt.get(job.job_uuid) || 0) < REFRESH_MS || sm8Notes.get(job.job_uuid) === LOADING) return;
+    fetchedAt.set(job.job_uuid, Date.now());
+    sm8Notes.set(job.job_uuid, LOADING);
+    (async () => {
+      const token = await accessTokenFor(accountUUID, eventTokens.get(accountUUID ?? null));
+      const info = await fetchJobImpl(job.job_uuid, token);
+      if (info) repo.ensureJob({ jobUUID: job.job_uuid, accountUUID, ...(withStockFlag(info, accountUUID) || {}) });
+      sm8Notes.set(job.job_uuid, info ? info.linesError || null : null);
+      if (!info) fetchedAt.delete(job.job_uuid); // try again next time
+    })().catch((e) => { console.error(`Job refresh: ${e.message}`); sm8Notes.delete(job.job_uuid); fetchedAt.delete(job.job_uuid); });
+  }
 
   /** Everything a click needs from ServiceM8: the job, its price, split parts, the job list. Returns the job to show. */
   async function prepareClick(event) {
@@ -871,6 +887,7 @@ window.addEventListener('message', function (e) {
       }
     }
     repo.ensureAccount(job.account_uuid);
+    if (info) fetchedAt.set(job.job_uuid, Date.now());
     if (event.accessToken) eventTokens.set(job.account_uuid ?? null, event.accessToken);
     // Remember what ServiceM8 said, so the window can explain a missing price.
     sm8Notes.set(job.job_uuid, partNote || (!token ? 'Job Costs isn\u2019t approved in ServiceM8 yet: open the add-on\u2019s install link and approve it.'
@@ -1057,6 +1074,7 @@ window.addEventListener('message', function (e) {
   });
   const hasJobCosts = (accountUUID) => !!repo.getTokens(accountUUID) || !!repo.db.prepare('SELECT 1 FROM invoices WHERE account_uuid IS ? LIMIT 1').get(accountUUID);
   api.get('/picklist', (req, res) => {
+    refreshJob(req.job, req.account);
     const j = repo.getJob(req.job.job_uuid);
     res.json({ jobCosts: hasJobCosts(req.account), job: { job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title, client_name: j.client_name, has_notes: !!j.notes }, ...pickListOf(req.job, req.account),
       kits: kitsFor(req.account).length });
@@ -1214,6 +1232,7 @@ window.addEventListener('message', function (e) {
     return joblines.matchLines(lines, costs, repo.jobLineFlags(job.job_uuid));
   }
   api.get('/job', (req, res) => {
+    refreshJob(req.job, req.account);
     const summary = repo.getJobSummary(req.job.job_uuid);
     summary.jobLines = repo.isStockJob(req.job.job_uuid) ? null : linesCheck(req.job, summary);
     if (checker) priceCheckUnchecked(req.account, summary.invoices || []);

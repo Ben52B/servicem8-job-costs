@@ -1922,6 +1922,28 @@ test('Inbox: added to a job (marked paid) – the answer says which job; Undo st
   assert.ok((await json(t, '/inbox')).invoices.some((i) => i.id === b && i.untouched && !i.kept_as_stock));
 });
 
+test('a job opened from the Inbox (not its ServiceM8 button) gets its price from ServiceM8, so the profit is right', async () => {
+  JOBS['rf-a'] = { jobNumber: '209230', jobTitle: '8 Fresh St' };
+  const t = await openCard('rf-a', 'acc-rf');
+  // a job Job Costs only knows from the job list: no price yet
+  JOBS['rf-b'] = { jobNumber: '209231', jobTitle: '9 Fresh St', quoteAmount: 8000 };
+  repo.ensureJob({ jobUUID: 'rf-b', accountUUID: 'acc-rf', jobNumber: '209231', jobTitle: '9 Fresh St' });
+  const inv = repo.createInvoice({ accountUUID: 'acc-rf', source: 'email' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Summit', invoice_number: 'S-1', total: 3300, tax: 300, subtotal: 3000, items: [{ description: 'Door', line_total: 3300 }] });
+  await post(t, `/inbox/${inv.id}/assign`, { job_number: '209231' });
+  const { token } = await json(t, '/jobs/rf-b/open');
+  let j = await json(token, '/job');
+  assert.equal(j.sm8Loading, true, 'reading it from ServiceM8');
+  await new Promise((r) => setTimeout(r, 30));
+  j = await json(token, '/job');
+  assert.equal(j.sm8Loading, false);
+  assert.equal(j.job.quote_amount, 8000);
+  assert.equal(j.totals.total, 3000, 'the invoice, ex GST');
+  // read again only after a while, not on every refresh of the card
+  JOBS['rf-b'].quoteAmount = 9000;
+  assert.equal((await json(token, '/job')).sm8Loading, false);
+});
+
 test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {
   JOBS['sup-job'] = { jobNumber: '209210', jobTitle: '4 Ignore St' };
   const t = await openCard('sup-job', 'acc-sup');
