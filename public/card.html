@@ -32,6 +32,7 @@
   button.solid-danger { background: var(--bad); border-color: var(--bad); color: #fff; }
   button.small, .btn.small { padding: 4px 9px; font-size: 12px; border-radius: 8px; }
   .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 6px; border-radius: 10px; background: var(--sun); color: #fff; font-size: 11px; font-weight: 800; }
+  .due-over { background: #fde8e8; color: #b42318; } .due-soon { background: #fef3c7; color: #92400e; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
   .c-materials { background: #e0f2fe; color: #0369a1; } .c-subcontractor { background: #ede9fe; color: #6d28d9; } .c-labour { background: #ccfbf1; color: #0f766e; }
   .c-equipment_hire { background: #ffedd5; color: #c2410c; } .c-freight { background: #cffafe; color: #0e7490; } .c-fees, .c-other, .c-mixed { background: #f1f5f9; color: #475569; }
@@ -341,6 +342,15 @@ async function load() {
   if (state.data && (state.data.totals.processing > 0 || state.data.sm8Loading || state.data.invoices.some((i) => i.price_check_status === 'checking'))) state.pollTimer = setTimeout(load, 3000);
 }
 
+// Due date: overdue, due today, or due within a week (unpaid invoices only)
+const DUE_SOON_DAYS = 7;
+function dueDays(due) { if (!due) return null; const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(String(due).slice(0, 10) + 'T00:00:00'); return isNaN(d) ? null : Math.round((d - t) / 864e5); }
+function dueChip(due, unpaid) {
+  const n = unpaid ? dueDays(due) : null;
+  if (n == null || n > DUE_SOON_DAYS) return '';
+  if (n < 0) return `<span class="chip due-over" title="Due ${esc(fmtDate(due))}">⚠ Overdue ${-n} day${n === -1 ? '' : 's'}</span>`;
+  return `<span class="chip due-soon" title="Due ${esc(fmtDate(due))}">${n === 0 ? 'Due today' : `Due in ${n} day${n === 1 ? '' : 's'}`}</span>`;
+}
 const selectedInvoice = () => state.data?.invoices.find((i) => i.id === state.selected) || null;
 
 function render() {
@@ -531,7 +541,7 @@ function renderList() {
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
-      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${statusChip(inv)}</span></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${ready && !state.data.stock ? dueChip(inv.due_date, inv.payment_state !== 'paid') : ''}${statusChip(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   const o = state.outlook;

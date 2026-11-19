@@ -1571,7 +1571,8 @@ function createRepo(db, dataDir) {
         const dupOf = key && firstSeen.get(key) !== inv.id ? firstSeen.get(key) : null;
         const sj = inv.suggested_job_uuid ? jobsById.get(inv.suggested_job_uuid) : null;
         out.push({
-          id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, total: inv.total,
+          id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date, total: inv.total,
+          paid: lines.length > 0 && lines.every((l) => l.paid), created_at: inv.created_at,
           total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
           untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
           price_check: parseJson(inv.price_check, null), price_check_status: inv.price_check_status || null, possible_duplicate: untouched ? repo.possibleDuplicate(inv) : null,

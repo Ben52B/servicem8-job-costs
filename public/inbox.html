@@ -30,6 +30,7 @@
   .item .t { font-weight: 700; font-size: 14px; }
   .item .sub { font-size: 12px; color: var(--muted); }
   .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .due-over { background: #fde8e8; color: #b42318; } .due-soon { background: #fef3c7; color: #92400e; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
   .c-sugg { background: var(--warn-soft); color: #92400e; } .c-dup { background: #f1f5f9; color: #64748b; } .c-err { background: var(--bad-soft); color: var(--bad); } .c-proc { background: var(--brand-soft); color: var(--brand-dark); }
   .trace { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; font-size: 11.5px; }
@@ -143,6 +144,25 @@ const jobLabel = (j) => `#${j.job_number}${j.job_title ? ' – ' + j.job_title :
 const fileLink = (i) => (!i.file_path ? '' : `<a class="btn" href="${i.mime_type === 'application/pdf'
   ? `/viewer.html?id=${i.id}&t=${encodeURIComponent(BOOT.token)}&name=${encodeURIComponent(i.supplier || 'Invoice')}`
   : `/api/invoices/${i.id}/file?t=${encodeURIComponent(BOOT.token)}${/^text\//.test(i.mime_type || '') ? '&view=html' : ''}`}" target="_blank" rel="noopener">View</a>`);
+// Due date: overdue, due today, or due within a week (unpaid invoices only)
+const DUE_SOON_DAYS = 7;
+function dueDays(due) { if (!due) return null; const t = new Date(); t.setHours(0, 0, 0, 0); const d = new Date(String(due).slice(0, 10) + 'T00:00:00'); return isNaN(d) ? null : Math.round((d - t) / 864e5); }
+function dueChip(due, unpaid) {
+  const n = unpaid ? dueDays(due) : null;
+  if (n == null || n > DUE_SOON_DAYS) return '';
+  if (n < 0) return `<span class="chip due-over" title="Due ${esc(fmtDate(due))}">⚠ Overdue ${-n} day${n === -1 ? '' : 's'}</span>`;
+  return `<span class="chip due-soon" title="Due ${esc(fmtDate(due))}">${n === 0 ? 'Due today' : `Due in ${n} day${n === 1 ? '' : 's'}`}</span>`;
+}
+let sortBy = 'new';
+try { sortBy = localStorage.getItem('inboxSort') || 'new'; } catch (e) { /* fine */ }
+const SORTS = {
+  new: null, // as they came in
+  supplier: (a, b) => String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
+  amount_desc: (a, b) => (Number(b.total) || 0) - (Number(a.total) || 0),
+  amount_asc: (a, b) => (Number(a.total) || 0) - (Number(b.total) || 0),
+  due: (a, b) => (a.due_date ? 0 : 1) - (b.due_date ? 0 : 1) || String(a.due_date || '').localeCompare(String(b.due_date || '')),
+  date: (a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')),
+};
 // Invoices added (or sent to stock) since the page opened: a slim line in their place, with "Open job" and "Undo"
 const done = new Map(); // id → { inv, job_uuid, job_number, to_stock, paid }
 let shownOrder = [];
@@ -219,6 +239,7 @@ function render() {
     : (outlookStatus && outlookStatus.connected ? '' : '<span class="muted">Email-in is not set up on the server yet.</span>');
   $('#address').style.display = $('#address').innerHTML ? '' : 'none';
   const waiting = data.invoices.filter((i) => i.untouched && !i.kept_as_stock && !done.has(i.id));
+  if (SORTS[sortBy]) waiting.sort(SORTS[sortBy]);
   // the done ones stay where they were in the list
   const fresh = waiting.slice();
   for (const [id, x] of done) {
@@ -236,7 +257,10 @@ function render() {
     style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:6px 8px"><button class="primary" data-move-pick="${id}" data-key="${key}">${label}</button>${stock ? `<button data-move-stock="${id}" data-key="${key}" title="Not for one job">📦 To stock</button>` : ''}</span>`;
   let h = data.statementsWaiting ? `<div class="item" style="background:#eef2ff;border-color:#c7d2fe"><div>📄 <b>${data.statementsWaiting} supplier statement${data.statementsWaiting === 1 ? '' : 's'}</b> came in and ${data.statementsWaiting === 1 ? 'was' : 'were'} moved to Statement check, ready to run.</div>
     <div class="acts"><a class="btn" href="/checks?t=${encodeURIComponent(BOOT.token)}">🔎 Open Statement check</a></div></div>` : '';
-  h += `<h2>Needs a job <span class="badge">${waiting.length + data.pending.length}</span></h2>`;
+  h += `<h2 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Needs a job <span class="badge">${waiting.length + data.pending.length}</span>
+    ${waiting.length > 1 ? `<span style="flex:1"></span><select id="sort" title="Sort" style="font:inherit;font-size:13px;font-weight:600;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px;background:#fff">
+      ${[['new', 'Newest in'], ['due', 'Due date (soonest)'], ['supplier', 'Supplier A–Z'], ['amount_desc', 'Amount (high to low)'], ['amount_asc', 'Amount (low to high)'], ['date', 'Invoice date (newest)']]
+        .map(([v, l]) => `<option value="${v}" ${sortBy === v ? 'selected' : ''}>Sort: ${l}</option>`).join('')}</select>` : ''}</h2>`;
   if (!waiting.length && !data.pending.length && !done.size) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {
     h += `<div class="item"><div><div class="t">${esc(p.file_name || 'Invoice')} ${p.status === 'processing' ? '<span class="chip c-proc"><span class="spin"></span> Reading</span>' : '<span class="chip c-err">Couldn’t read</span>'}</div>
@@ -258,7 +282,7 @@ function render() {
     h += `<div class="item wide">
       <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</span>
         <span class="amt">${money(i.total_ex ?? i.total)} <span class="muted">ex GST</span></span></div>
-      <div class="sub">${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
+      <div class="sub">${dueChip(i.due_date, !i.paid)} ${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.due_date && 'due ' + fmtDate(i.due_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
       ${pcChip(i) ? `<div class="pcline">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
       ${dupNote(i.possible_duplicate, s && s.job_uuid)}
       ${s ? `<div class="sugg"><span class="why">💡 Looks like <b>${esc(jobLabel(s))}</b><span class="muted"> – ${esc(s.reason || '')}</span></span>
@@ -298,6 +322,7 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('change', async (e) => {
   if (e.target.id === 'inboxUpload') return uploadToInbox(e.target.files);
+  if (e.target.id === 'sort') { sortBy = e.target.value; try { localStorage.setItem('inboxSort', sortBy); } catch (x) { /* fine */ } shownOrder = []; return render(); }
   const t = e.target;
   if (t.dataset.pickMail) { t.checked ? imp.emails.set(t.dataset.pickMail, true) : imp.emails.delete(t.dataset.pickMail); return renderImport(); }
   if (t.dataset.pickFolder) { t.checked ? imp.whole.set(t.dataset.pickFolder, t.dataset.name) : imp.whole.delete(t.dataset.pickFolder); return renderImport(); }
