@@ -2083,6 +2083,15 @@ test('an email imported on purpose stays in the Inbox to approve, even when it r
   const r2 = app.locals.processMail(mail('notinvoice-ch'), { accountUUID: 'acc-ch', source: 'outlook', chosen: true }); await processor.idle();
   assert.ok(repo.getInvoice(r2.ids[0]), 'not deleted');
   assert.ok((await json(t, '/inbox')).pending.some((p) => p.id === r2.ids[0]));
+  // reads like a statement: stays in the Inbox too (not sent to Statement check)
+  const r3 = app.locals.processMail(mail('statement-ch'), { accountUUID: 'acc-ch', source: 'outlook', chosen: true }); await processor.idle();
+  assert.equal((await json(t, '/inbox')).invoices.find((i) => i.id === r3.ids[0]).document_type, 'statement');
+  assert.match(repo.getInvoice(r3.ids[0]).notes, /STATEMENT/);
+  // the import box says where an email already is
+  repo.recordImport('import:<where@x>', [r.ids[0]]);
+  assert.match(repo.importStatus('acc-ch', 'import:<where@x>', 's').where, /in the Inbox$/);
+  repo.assignWhole(r.ids[0], 'ch-job', {});
+  assert.match(repo.importStatus('acc-ch', 'import:<where@x>', 's').where, /on job #209250$/);
 });
 
 test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {

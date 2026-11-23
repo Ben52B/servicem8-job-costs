@@ -1809,7 +1809,7 @@ window.addEventListener('message', function (e) {
       ]);
       res.json({ folders, next: page.next, messages: page.messages.map((m) => {
         const st = repo.importStatus(req.account, outlook.importKey(m), m.subject);
-        return { ...m, status: st.state, why: st.why || null, imported: st.state === 'imported' };
+        return { ...m, status: st.state, why: st.why || null, where: st.where || null, imported: st.state === 'imported' };
       }) });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });

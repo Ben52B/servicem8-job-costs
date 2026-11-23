@@ -67,7 +67,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       });
       if (onUsage || api.onUsage) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', result && result.usage);
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
-      if (result.document_type === 'statement' && api.onStatement) {
+      if (result.document_type === 'statement' && api.onStatement && !chosen) {
         let check;
         try { check = api.onStatement(inv, result); } catch (e) { log.error(`Statement ${id}: ${e.message}`); return repo.setInvoiceError(id, 'This is a statement. Upload it in 🔎 Statement check.'); }
         repo.setImportOutcome?.(id, 'statement', check && check.id);
@@ -86,6 +86,9 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       // chosen by hand but it reads like a quote: kept (you decide), with a note
       if (chosen && result.document_type === 'quote') {
         result.notes = ['Read as a QUOTE, not a bill – check it before adding it to a job.', result.notes].filter(Boolean).join(' ');
+      }
+      if (chosen && result.document_type === 'statement') {
+        result.notes = ['Read as a supplier STATEMENT, not a bill. If it is one, delete it here and upload it in 🔎 Statement check.', result.notes].filter(Boolean).join(' ');
       }
       repo.saveExtraction(id, result);
       if (ignored(repo.getInvoice(id))) return;

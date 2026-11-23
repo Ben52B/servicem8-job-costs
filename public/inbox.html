@@ -211,7 +211,7 @@ function renderImport() {
   // What became of each email: only ones really in Job Costs are greyed out
   const WHY = { quote: 'a quote', statement: 'a statement', remittance: 'a remittance', not_invoice: 'not an invoice', nothing: 'no PDF or invoice in it', not_kept: 'nothing kept from it', duplicate: 'already in Job Costs', ignored: 'an invoice you asked to ignore' };
   const badge = (m) => ({
-    imported: '<span class="chip c-proc">✓ in Job Costs</span>',
+    imported: `<span class="chip c-proc" title="${esc(m.where || '')}">✓ in Job Costs${m.where ? ': ' + esc(m.where) : ''}</span>`,
     statement: '<span class="chip" style="background:#eef2ff;color:#3730a3">📄 in Statement check</span>',
     deleted: '<span class="chip c-dup">imported, then deleted</span>',
     skipped: `<span class="chip c-sugg" title="Job Costs read it and didn't keep it">read: ${esc(WHY[m.why] || 'not kept')}</span>`,
@@ -280,7 +280,7 @@ function render() {
     const paidBox = `<label class="paidbox" title="Tick to mark it paid when you add it"><input type="checkbox" id="pd-${i.id}"> Paid</label>`;
     const from = String(i.email_from || '').replace(/\s*<[^>]*>\s*$/, '').replace(/^"|"$/g, '') || String(i.email_from || '').replace(/[<>]/g, '');
     h += `<div class="item wide">
-      <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}${i.document_type === 'quote' ? ' <span class="chip c-dup" title="It reads like a quote, not a bill – check it before adding it to a job">Reads like a quote</span>' : ''}</span>
+      <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}${i.document_type === 'quote' ? ' <span class="chip c-dup" title="It reads like a quote, not a bill – check it before adding it to a job">Reads like a quote</span>' : ''}${i.document_type === 'statement' ? ' <span class="chip c-dup" title="It reads like a supplier statement – if it is one, delete it and upload it in Statement check">Reads like a statement</span>' : ''}</span>
         <span class="amt">${money(i.total_ex ?? i.total)} <span class="muted">ex GST</span></span></div>
       <div class="sub">${dueChip(i.due_date, !i.paid)} ${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.due_date && 'due ' + fmtDate(i.due_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
       ${pcChip(i) ? `<div class="pcline">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
@@ -421,8 +421,8 @@ document.addEventListener('click', async (e) => {
     if (d.importGo !== undefined) {
       const wholeNames = [...imp.whole.values()];
       if (wholeNames.length && !confirm(`Import every email in: ${wholeNames.join(', ')}?`)) return;
-      const repeats = imp.messages.filter((m) => ['imported', 'statement'].includes(m.status) && imp.emails.has(m.id)).length;
-      if (repeats && !confirm(`${repeats} of the ticked emails ${repeats === 1 ? 'is' : 'are'} already in Job Costs. Bring ${repeats === 1 ? 'it' : 'them'} in again?`)) return;
+      const repeats = imp.messages.filter((m) => ['imported', 'statement'].includes(m.status) && imp.emails.has(m.id));
+      if (repeats.length && !confirm(`Already in Job Costs:\n${repeats.map((m) => `• “${m.subject}” – ${m.where || 'Job Costs'}`).join('\n')}\n\nBring ${repeats.length === 1 ? 'it' : 'them'} in again anyway? (${repeats.length === 1 ? 'It goes' : 'They go'} to the Inbox for you to approve.)`)) return;
       b.disabled = true; b.textContent = 'Importing… (this can take a minute)';
       try {
         const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()], again: true }) });
