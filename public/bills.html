@@ -96,6 +96,7 @@
   <div class="foot" id="foot"></div>
 </div>
 <div class="toast" id="toast"></div>
+<script src="/pay.js"></script>
 <script>
 const BOOT = /*__BOOT__*/null;
 // Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
@@ -200,7 +201,7 @@ function render() {
   $('#foot').innerHTML = `<span><b>${list.length}</b> shown · ${money(sum(list, 'total'))} inc GST</span><span class="spacer"></span>
     <a class="btn" href="/api/export?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener" title="One zip: spreadsheets of every invoice (paid or not, which job), every job's costs and profit, and all the original files">⬇ Export everything</a>
     ${sel.length ? `<span><b>${sel.length} selected</b> · ${money(sum(sel, 'total'))} inc GST</span>
-      <button class="primary" data-mark="paid">✓ Mark as paid</button><button data-mark="unpaid">Mark as unpaid</button>` : '<span class="muted">Tick invoices (or the box at the top to select all shown)</span>'}`;
+      ${sel.some((b) => b.payment_state !== 'paid') ? '<button class="primary" data-pay-sel>💳 Pay selected</button>' : ''}<button data-mark="paid">✓ Mark as paid</button><button data-mark="unpaid">Mark as unpaid</button>` : '<span class="muted">Tick invoices (or the box at the top to select all shown)</span>'}`;
 }
 
 async function load() {
@@ -218,6 +219,10 @@ document.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
   try {
     if (b.dataset.show) { show = b.dataset.show; document.querySelectorAll('#seg button').forEach((x) => x.classList.toggle('on', x === b)); selected.clear(); return render(); }
+    if (b.dataset.paySel !== undefined) {
+      const ids = bills.filter((x) => selected.has(x.id) && x.payment_state !== 'paid').map((x) => x.id);
+      return openPay(ids, { onDone: () => { selected.clear(); load(); } });
+    }
     if (b.dataset.mark) {
       const ids = [...selected];
       const r = await api('/bills/paid', { method: 'POST', body: JSON.stringify({ ids, paid: b.dataset.mark === 'paid' }) });

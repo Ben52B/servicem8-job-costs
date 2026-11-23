@@ -5,30 +5,32 @@
  */
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 const SCOPES = 'offline_access User.Read Mail.Read';
+// Asked for only when the business wants paid invoice emails marked read and filed (the Pay button).
+const SCOPES_WRITE = 'offline_access User.Read Mail.ReadWrite';
 const FIRST_LOOK_BACK_DAYS = 3;
 
 const loginBase = (tenant) => `https://login.microsoftonline.com/${encodeURIComponent(tenant || 'organizations')}/oauth2/v2.0`;
 
-function authorizeUrl({ clientId, tenant, redirectUri, state }) {
+function authorizeUrl({ clientId, tenant, redirectUri, state, write = false }) {
   const q = new URLSearchParams({
-    client_id: clientId, response_type: 'code', redirect_uri: redirectUri, response_mode: 'query', scope: SCOPES, state, prompt: 'select_account',
+    client_id: clientId, response_type: 'code', redirect_uri: redirectUri, response_mode: 'query', scope: write ? SCOPES_WRITE : SCOPES, state, prompt: 'select_account',
   });
   return `${loginBase(tenant)}/authorize?${q}`;
 }
 
-async function tokenRequest({ clientId, clientSecret, tenant }, fields) {
+async function tokenRequest({ clientId, clientSecret, tenant }, fields, scope = SCOPES) {
   const res = await fetch(`${loginBase(tenant)}/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, scope: SCOPES, ...fields }),
+    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, scope, ...fields }),
     signal: AbortSignal.timeout(20000),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.access_token) throw new Error(`Microsoft said ${res.status}: ${data.error_description || data.error || 'no access token'}`.slice(0, 300));
   return { accessToken: data.access_token, refreshToken: data.refresh_token || fields.refresh_token || null, expiresAt: new Date(Date.now() + (Number(data.expires_in) || 3600) * 1000).toISOString() };
 }
-const exchangeCode = (app, { code, redirectUri }) => tokenRequest(app, { grant_type: 'authorization_code', code, redirect_uri: redirectUri });
-const refreshTokens = (app, refreshToken) => tokenRequest(app, { grant_type: 'refresh_token', refresh_token: refreshToken });
+const exchangeCode = (app, { code, redirectUri, write = false }) => tokenRequest(app, { grant_type: 'authorization_code', code, redirect_uri: redirectUri }, write ? SCOPES_WRITE : SCOPES);
+const refreshTokens = (app, refreshToken, write = false) => tokenRequest(app, { grant_type: 'refresh_token', refresh_token: refreshToken }, write ? SCOPES_WRITE : SCOPES);
 
 async function graph(path, accessToken) {
   const res = await fetch(path.startsWith('http') ? path : GRAPH + path, {
@@ -188,7 +190,7 @@ function pickFiles(mail) {
 /** A working access token for this Outlook connection (refreshed when due). */
 async function tokenFor(conn, { repo, config, api = graphApi }) {
   if (conn.access_token && Date.parse(conn.expires_at) - Date.now() > 120000) return conn.access_token;
-  const fresh = await api.refreshTokens({ clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId }, conn.refresh_token);
+  const fresh = await api.refreshTokens({ clientId: config.msClientId, clientSecret: config.msClientSecret, tenant: config.msTenantId }, conn.refresh_token, !!conn.can_write);
   repo.saveOutlook(conn.account_key, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt });
   return fresh.accessToken;
 }

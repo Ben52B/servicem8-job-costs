@@ -15,6 +15,10 @@ const { exportEverything } = require('./export');
 const mailbox = require('./mailbox');
 const joblines = require('./joblines');
 const picklist = require('./picklist');
+const aba = require('./aba');
+const mailfile = require('./mailfile');
+// Banks whose payment file (ABA) can be uploaded; the code goes in the file.
+const PAY_BANKS = { WBC: 'Westpac', ANZ: 'ANZ', CBA: 'CommBank', NAB: 'NAB', BQL: 'Bank of Queensland', BEN: 'Bendigo Bank', STG: 'St.George', SUN: 'Suncorp', MBL: 'Macquarie' };
 const { MISTAKE_REASONS, REASON_CODES } = require('./mistakes');
 const { mainJobNumber } = require('./db');
 
@@ -44,7 +48,7 @@ function safeName(name) {
 }
 
 function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActiveJobsImpl = fetchActiveJobs, oauth = sm8,
-  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null, imapClient = mailbox.makeClient }) {
+  findJobByNumberImpl = sm8.findJobByNumber, diaryApi = sm8, outlookApi = outlook.graphApi, checker = null, imapClient = mailbox.makeClient, mailFiler = mailfile }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -63,10 +67,10 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const folderFor = (accountUUID) => (accountUUID ? safeName(accountUUID) : '_local');
 
   /** Store a file as a new invoice and queue it for reading. */
-  function addInvoiceFile({ accountUUID, originJobUUID = null, source, name, contentType, buffer, emailFrom, emailSubject, emailText }) {
+  function addInvoiceFile({ accountUUID, originJobUUID = null, source, name, contentType, buffer, emailFrom, emailSubject, emailText, emailMessageId }) {
     const mimeType = guessMime(name, contentType);
     const inv = repo.createInvoice({
-      accountUUID, originJobUUID, source, fileName: name, filePath: saveFile(folderFor(accountUUID), name, buffer), mimeType, emailFrom, emailSubject, emailText,
+      accountUUID, originJobUUID, source, fileName: name, filePath: saveFile(folderFor(accountUUID), name, buffer), mimeType, emailFrom, emailSubject, emailText, emailMessageId,
     });
     if (isSupported(name, mimeType)) processor.enqueue(inv.id);
     else repo.setInvoiceError(inv.id, 'Unsupported file type. Send a PDF or a photo (JPG/PNG).');
@@ -1165,7 +1169,8 @@ window.addEventListener('message', function (e) {
     res.json({ settings: settingsFor(req.account), days: DAYS, used, inboxAddress: inboxAddress(accRow.inbox_code, config), ignored: repo.listIgnored(req.account),
       priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       imap: im ? { email: im.email, host: im.host, error: im.error, last_check: im.last_check } : null,
-      outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null } });
+      outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null, canWrite: !!(o && o.can_write) },
+      payBanks: PAY_BANKS, payees: repo.listPayees(req.account) });
   });
   api.put('/settings', (req, res) => {
     const b = req.body || {};
@@ -1188,6 +1193,17 @@ window.addEventListener('message', function (e) {
     if (b.diary_summary !== undefined) ch.diary_summary = !!b.diary_summary;
     if (b.ask_ignore_on_delete !== undefined) ch.ask_ignore_on_delete = !!b.ask_ignore_on_delete;
     if (b.onboarded !== undefined) ch.onboarded = !!b.onboarded;
+    // paying suppliers
+    if (b.pay_bank !== undefined) { if (!PAY_BANKS[b.pay_bank]) return res.status(400).json({ error: 'Choose your bank' }); ch.pay_bank = b.pay_bank; }
+    if (b.pay_bsb !== undefined) { const v = String(b.pay_bsb).trim(); if (v && !aba.normBsb(v)) return res.status(400).json({ error: 'Your BSB is 6 digits' }); ch.pay_bsb = v ? aba.normBsb(v) : ''; }
+    if (b.pay_account !== undefined) { const v = String(b.pay_account).trim(); if (v && !aba.normAccount(v)) return res.status(400).json({ error: 'Your account number is 5 to 9 digits' }); ch.pay_account = v ? aba.normAccount(v) : ''; }
+    if (b.pay_account_name !== undefined) ch.pay_account_name = aba.clean(b.pay_account_name).slice(0, 26);
+    if (b.pay_apca_id !== undefined) { const v = String(b.pay_apca_id).trim(); if (v && !/^\d{6}$/.test(v)) return res.status(400).json({ error: 'The Direct Entry user ID is 6 digits' }); ch.pay_apca_id = v; }
+    if (b.pay_remitter !== undefined) ch.pay_remitter = aba.clean(b.pay_remitter).slice(0, 16);
+    if (b.pay_reference !== undefined) ch.pay_reference = String(b.pay_reference).trim().slice(0, 60) || repo.settingDefaults.pay_reference;
+    if (b.pay_folder !== undefined) ch.pay_folder = String(b.pay_folder).trim().slice(0, 100) || 'Paid';
+    if (b.pay_balance !== undefined) ch.pay_balance = !!b.pay_balance;
+    if (b.pay_move_email !== undefined) ch.pay_move_email = !!b.pay_move_email;
     const wasOn = settingsFor(req.account).diary_summary;
     const saved = repo.saveSettings(req.account, ch);
     if (saved.diary_summary && !wasOn) { repo.markSummaryDirty(repo.jobsWithCosts(req.account)); kickDiary(); }
@@ -1837,6 +1853,144 @@ window.addEventListener('message', function (e) {
   });
 
   // Bills: every invoice of the business, to find them and mark several paid at once.
+  // ---------- Paying suppliers ----------
+  // "Pay" makes the bank's payment file (ABA) for the chosen invoices, after a confirm box that shows every detail.
+  // The bank details are checked against what's printed on the invoice; the amount is always the invoice's total.
+  const payerOf = (st) => ({ bank: st.pay_bank, bsb: st.pay_bsb, account: st.pay_account, name: st.pay_account_name || st.business_name, apcaId: st.pay_apca_id,
+    remitter: st.pay_remitter || st.business_name, balance: !!st.pay_balance, description: 'CREDITORS' });
+  const payerMissing = (st) => [!aba.normBsb(st.pay_bsb) && 'your BSB', !aba.normAccount(st.pay_account) && 'your account number', !(st.pay_account_name || st.business_name) && 'your account name',
+    !/^\d{6}$/.test(String(st.pay_apca_id || '')) && 'your bank’s Direct Entry user ID'].filter(Boolean);
+  const sameBank = (a, b) => !!a && !!b && aba.normBsb(a.bsb) === aba.normBsb(b.bsb) && aba.normAccount(a.account_number) === aba.normAccount(b.account_number);
+  /** Everything about paying one invoice: amount, reference, where the money goes, and anything that stops it. */
+  function payPlan(inv, accountUUID, st) {
+    const jobs = repo.jobsOnInvoice(inv.id);
+    const items = repo.db.prepare('SELECT paid FROM items WHERE invoice_id = ?').all(inv.id);
+    const paidState = !items.length ? 'unpaid' : items.every((i) => i.paid) ? 'paid' : items.some((i) => i.paid) ? 'part' : 'unpaid';
+    const printed = inv.pay_bsb || inv.pay_account ? { bsb: aba.normBsb(inv.pay_bsb) || inv.pay_bsb, account_number: aba.normAccount(inv.pay_account) || inv.pay_account, account_name: inv.pay_account_name || '' } : null;
+    const saved = repo.getPayee(accountUUID, inv.supplier);
+    const payee = saved ? { bsb: saved.bsb, account_number: saved.account_number, account_name: saved.account_name, from: 'saved' }
+      : printed && aba.normBsb(printed.bsb) && aba.normAccount(printed.account_number) ? { ...printed, account_name: printed.account_name || inv.supplier || '', from: 'invoice' } : null;
+    const jobNumbers = jobs.filter((j) => !repo.isStockJob(j.job_uuid)).map((j) => j.job_number).filter(Boolean);
+    const plan = {
+      id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date,
+      amount: inv.total, amount_cents: aba.toCents(inv.total), jobs: jobNumbers,
+      reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers[0] || '' }),
+      payee, printed, bpay: inv.bpay_biller ? { biller: inv.bpay_biller, ref: inv.bpay_ref } : null,
+      check: !printed ? 'not_printed' : !payee ? 'no_payee' : sameBank(payee, printed) ? 'match' : 'mismatch',
+      email: !!inv.email_message_id || !!inv.email_subject, blocked: null, warnings: [],
+    };
+    const twin = repo.twinOf(inv);
+    if (inv.status !== 'ready') plan.blocked = 'It hasn’t been read yet';
+    else if (inv.duplicate_of) plan.blocked = 'It’s a duplicate';
+    else if (paidState === 'paid') plan.blocked = 'Already paid';
+    else if (paidState === 'part') plan.blocked = 'Part of it is marked paid already – pay this one in your banking';
+    else if (twin && twin.paid) plan.blocked = 'The same invoice was already paid (another copy)';
+    else if (!(inv.total > 0)) plan.blocked = inv.total < 0 ? 'It’s a credit note – nothing to pay' : 'No amount to pay';
+    else if (plan.check === 'mismatch') plan.blocked = 'The bank details on this invoice are DIFFERENT from the ones you paid this supplier before';
+    else if (!payee) plan.blocked = inv.bpay_biller ? 'It’s paid by BPAY – pay it in your banking' : 'No bank details for this supplier yet – enter them';
+    if (!plan.blocked && plan.check === 'not_printed') plan.warnings.push('The invoice doesn’t print bank details, so they couldn’t be checked against it');
+    if (!plan.blocked && payee && payee.from === 'invoice') plan.warnings.push('First payment to this supplier: the bank details come from the invoice');
+    if (!inv.invoice_number) plan.warnings.push('No invoice number on it');
+    return plan;
+  }
+  const payInvoices = (req, ids) => ids.map(Number).filter(Number.isInteger).slice(0, 200).map((id) => repo.getInvoice(id))
+    .filter((inv) => inv && (inv.account_uuid ?? null) === req.account);
+  api.get('/pay/preview', (req, res) => {
+    const st = settingsFor(req.account);
+    const invs = payInvoices(req, String(req.query.ids || '').split(','));
+    if (!invs.length) return res.status(404).json({ error: 'Invoice not found' });
+    const plans = invs.map((inv) => payPlan(inv, req.account, st));
+    const ok = plans.filter((p) => !p.blocked);
+    res.json({ payer: { ...payerOf(st), missing: payerMissing(st), bankName: PAY_BANKS[st.pay_bank] }, folder: st.pay_folder, moveEmail: st.pay_move_email,
+      plans, total: ok.reduce((s, p) => s + p.amount_cents, 0) / 100, count: ok.length });
+  });
+  // Enter (or, on purpose, change) a supplier's bank details
+  api.put('/pay/payee', (req, res) => {
+    const inv = payInvoices(req, [req.body?.invoice_id])[0];
+    if (!inv || !inv.supplier) return res.status(404).json({ error: 'Invoice not found' });
+    const bsb = aba.normBsb(req.body?.bsb); const acc = aba.normAccount(req.body?.account_number); const name = aba.clean(req.body?.account_name).slice(0, 32);
+    if (!bsb) return res.status(400).json({ error: 'The BSB is 6 digits' });
+    if (!acc) return res.status(400).json({ error: 'The account number is 5 to 9 digits' });
+    if (!name) return res.status(400).json({ error: 'Enter the account name' });
+    const old = repo.getPayee(req.account, inv.supplier);
+    if (old && !sameBank(old, { bsb, account_number: acc }) && req.body?.confirm_change !== true) {
+      return res.status(409).json({ error: `${inv.supplier} is already paid to ${old.bsb} ${old.account_number}. Changing it needs confirming – call the supplier on a number you trust first.`, needsConfirm: true });
+    }
+    repo.savePayee(req.account, inv.supplier, { bsb, account_number: acc, account_name: name });
+    res.json({ ok: true });
+  });
+  // Pay: the confirmed invoices go in one bank file and are marked paid; their emails are marked read and filed
+  api.post('/pay', (req, res) => {
+    const st = settingsFor(req.account);
+    const missing = payerMissing(st);
+    if (missing.length) return res.status(400).json({ error: `Fill in ${missing.join(', ')} in Settings → Paying suppliers first` });
+    const invs = payInvoices(req, Array.isArray(req.body?.ids) ? req.body.ids : []);
+    if (!invs.length) return res.status(400).json({ error: 'Nothing to pay' });
+    const plans = invs.map((inv) => payPlan(inv, req.account, st));
+    const stopped = plans.filter((p) => p.blocked);
+    if (stopped.length) return res.status(409).json({ error: `Not paid – ${stopped.map((p) => `${p.supplier || 'invoice'} ${p.invoice_number || ''}: ${p.blocked}`).join('; ')}` });
+    // what was confirmed must still be what gets paid (the amount and the account)
+    const confirmed = req.body?.confirm || {};
+    for (const p of plans) {
+      const c = confirmed[p.id];
+      if (!c || Number(c.amount_cents) !== p.amount_cents || aba.normBsb(c.bsb) !== aba.normBsb(p.payee.bsb) || aba.normAccount(c.account_number) !== aba.normAccount(p.payee.account_number)) {
+        return res.status(409).json({ error: `The details for ${p.supplier} changed since you looked – check them again`, changed: true });
+      }
+    }
+    const lines = plans.map((p) => ({ invoice_id: p.id, amount_cents: p.amount_cents, reference: p.reference, bsb: aba.normBsb(p.payee.bsb),
+      account_number: aba.normAccount(p.payee.account_number), account_name: p.payee.account_name || p.supplier }));
+    let file;
+    try { file = aba.buildAba({ payer: payerOf(st), lines: lines.map((l) => ({ bsb: l.bsb, account: l.account_number, name: l.account_name, amountCents: l.amount_cents, reference: l.reference })) }); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+    // the first payment to a supplier saves their bank details (from then on they're checked against every invoice)
+    for (const p of plans) if (p.payee.from === 'invoice') repo.savePayee(req.account, p.supplier, p.payee);
+    const id = repo.recordPayment(req.account, { aba: file, lines });
+    if (st.pay_move_email) fileEmails(req.account, id).catch((e) => console.error(`Filing paid emails: ${e.message}`));
+    else for (const l of lines) repo.setPaymentEmail(id, l.invoice_id, 'off');
+    res.status(201).json({ ok: true, id, total: lines.reduce((s, l) => s + l.amount_cents, 0) / 100, count: lines.length });
+  });
+  /** After paying: each invoice's email marked read and moved to Paid / <supplier>. Results show in the payment. */
+  async function fileEmails(accountUUID, paymentId) {
+    const p = repo.getPayment(accountUUID, paymentId);
+    if (!p) return;
+    const st = settingsFor(accountUUID);
+    const out = repo.getOutlook(accountUUID); const im = repo.getImap(accountUUID);
+    for (const item of p.items) {
+      const inv = repo.getInvoice(item.invoice_id);
+      const what = { messageId: inv.email_message_id, subject: inv.email_subject, from: inv.email_from, root: st.pay_folder || 'Paid', supplier: inv.supplier };
+      try {
+        if (!inv.email_message_id && !inv.email_subject) { repo.setPaymentEmail(p.id, inv.id, 'no_email', 'Not from an email (uploaded or typed in)'); continue; }
+        let r;
+        if (inv.source === 'outlook' && out) {
+          if (!out.can_write) { repo.setPaymentEmail(p.id, inv.id, 'needs_reconnect', 'Reconnect Outlook in ⚙ Settings and allow Job Costs to file emails'); continue; }
+          r = await mailFiler.fileInOutlook(await outlook.tokenFor(out, { repo, config, api: outlookApi }), what);
+        } else if (inv.source === 'mailbox' && im) {
+          r = await mailFiler.fileInImap(imapClient({ host: im.host, port: im.port, user: im.email, password: unseal(im.password_enc) }), what);
+        } else { repo.setPaymentEmail(p.id, inv.id, 'no_mailbox', inv.source === 'email' ? 'It came to the Job Costs email address – nothing to file' : 'Its mailbox isn\u2019t connected'); continue; }
+        repo.setPaymentEmail(p.id, inv.id, r.status, r.folder || (r.status === 'not_found' ? 'The email wasn\u2019t found (moved or deleted already?)' : null));
+      } catch (e) {
+        repo.setPaymentEmail(p.id, inv.id, 'error', String(e.message).slice(0, 200));
+      }
+    }
+  }
+  app.locals.fileEmails = fileEmails;
+  api.get('/pay/:id', (req, res) => {
+    const p = repo.getPayment(req.account, req.params.id);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    const { aba: _f, ...rest } = p;
+    res.json(rest);
+  });
+  // the bank file, to upload in the bank's "import payments" page
+  api.get('/pay/:id/file', (req, res) => {
+    const p = repo.getPayment(req.account, req.params.id);
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    res.set({ 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="supplier-payments-${p.id}.aba"`, 'Cache-Control': 'no-store' }).send(p.aba);
+  });
+  // didn't use the file: the invoices go back to unpaid
+  api.post('/pay/:id/cancel', (req, res) => (repo.cancelPayment(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found or already cancelled' })));
+  api.get('/payees', (req, res) => res.json({ payees: repo.listPayees(req.account) }));
+  api.delete('/payees/:id', (req, res) => (repo.deletePayee(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
+
   api.get('/bills', (req, res) => res.json({ bills: repo.listBills(req.account) }));
   // "Export everything": one zip (spreadsheets + the original files) for the business's own records.
   api.get('/export', async (req, res) => {
@@ -2083,7 +2237,7 @@ window.addEventListener('message', function (e) {
       for (const f of files) {
         const inv = addInvoiceFile({
           accountUUID: acc.accountUUID, source, name: f.name, contentType: f.contentType, buffer: f.buffer,
-          emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
+          emailFrom: mail.from, emailSubject: mail.subject, emailText: body, emailMessageId: mail.messageId || null,
         });
         ids.push(inv.id);
         created++;
@@ -2116,8 +2270,10 @@ window.addEventListener('message', function (e) {
     if (!config.msClientId || !config.msClientSecret) {
       return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b> and <b>MS_TENANT_ID</b> in Render (see the README), then try again.</p>'));
     }
-    const state = jwt.sign({ purpose: 'outlook', account: job.account_uuid ?? null }, config.sessionSecret, { expiresIn: '15m' });
-    res.redirect(outlookApi.authorizeUrl({ clientId: config.msClientId, tenant: config.msTenantId, redirectUri: outlookRedirect(), state }));
+    // ?write=1: also let Job Costs mark paid invoice emails read and file them (the Pay button)
+    const write = req.query.write === '1';
+    const state = jwt.sign({ purpose: 'outlook', account: job.account_uuid ?? null, write }, config.sessionSecret, { expiresIn: '15m' });
+    res.redirect(outlookApi.authorizeUrl({ clientId: config.msClientId, tenant: config.msTenantId, redirectUri: outlookRedirect(), state, write }));
   });
   app.get('/outlook/callback', async (req, res) => {
     let st;
@@ -2131,13 +2287,15 @@ window.addEventListener('message', function (e) {
       return res.status(400).type('html').send(htmlPage('Job Costs', `<h2>Outlook not connected</h2><p>Microsoft said: ${String(req.query.error_description || req.query.error || 'no approval code').replace(/</g, '&lt;')}</p>`));
     }
     try {
-      const tokens = await outlookApi.exchangeCode(msApp(), { code: String(req.query.code), redirectUri: outlookRedirect() });
+      const tokens = await outlookApi.exchangeCode(msApp(), { code: String(req.query.code), redirectUri: outlookRedirect(), write: !!st.write });
       const me = await outlookApi.fetchMe(tokens.accessToken);
       repo.removeOutlook(st.account);
-      repo.saveOutlook(st.account, { ...tokens, email: me.email, name: me.name, connectedAt: new Date().toISOString() });
+      repo.saveOutlook(st.account, { ...tokens, email: me.email, name: me.name, connectedAt: new Date().toISOString(), canWrite: !!st.write });
       app.locals.checkOutlook().catch(() => {});
       res.type('html').send(htmlPage('Outlook connected', `<div style="font-size:40px">✅</div><h2 style="margin:6px 0">Outlook is connected</h2>
-        <p>Job Costs now checks <b>${String(me.email || 'your inbox').replace(/</g, '&lt;')}</b> every couple of minutes, keeps the invoices and ignores everything else. It only reads – it never changes or deletes your emails.</p>
+        <p>Job Costs now checks <b>${String(me.email || 'your inbox').replace(/</g, '&lt;')}</b> every couple of minutes, keeps the invoices and ignores everything else. ${st.write
+          ? 'When you pay an invoice with Job Costs, it marks that invoice\u2019s email as read and moves it to your Paid folder. It never deletes emails.'
+          : 'It only reads – it never changes or deletes your emails.'}</p>
         <p>New invoices show up in the Job Costs <b>Inbox</b> with a suggested job (or stock), waiting for your OK.</p><p style="color:#6b8a82">You can close this page.</p>`));
     } catch (e) {
       console.error(`Outlook connect failed: ${e.message}`);

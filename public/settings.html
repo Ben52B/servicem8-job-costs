@@ -48,6 +48,7 @@
 .pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
 .dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; } @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
 </style>
 <style>
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
@@ -143,7 +144,9 @@ function mailboxHtml(d) {
   const o = d.outlook, im = d.imap;
   const ago = (t) => { if (!t) return ''; const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
   let h = '';
-  if (o && o.connected) h += `<div class="mb">📥 Reading Outlook <b>${esc(o.email || '')}</b>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}" target="_blank" rel="noopener">Change</a></div>`;
+  if (o && o.connected) h += `<div class="mb">📥 Reading Outlook <b>${esc(o.email || '')}</b>${o.error ? ` <span style="color:var(--bad)">⚠ ${esc(o.error)}</span>` : ''} · <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}${o.canWrite ? '&write=1' : ''}" target="_blank" rel="noopener">Change</a>
+    ${o.canWrite ? '<div class="hint">✓ Paid invoice emails are marked read and filed in your Paid folder.</div>'
+      : `<div class="hint">To have paid invoice emails marked read and moved to your Paid folder: <a href="/outlook/connect?t=${encodeURIComponent(BOOT.token)}&write=1" target="_blank" rel="noopener">reconnect Outlook and allow filing</a>.</div>`}</div>`;
   if (im) h += `<div class="mb">📧 Reading <b>${esc(im.email)}</b> <span class="muted">(${esc(im.host)}${im.last_check ? ' · checked ' + ago(im.last_check) : ''})</span>
       ${im.error ? `<div style="color:var(--bad)">⚠ ${esc(im.error)}</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button data-imap-check>↻ Check now</button><button class="danger" data-imap-off>Disconnect</button></div></div>`;
@@ -208,6 +211,24 @@ function render() {
   <div class="panel"><h2>ServiceM8 job diary</h2>
     <label class="switch"><input type="checkbox" id="ds" ${st.diary_summary ? 'checked' : ''}><span><b>Keep a Job Costs summary in each job's diary</b><br>
       <span class="muted" style="font-size:12.5px">One note per job, kept up to date: costs, paid, still to pay and profit – so everyone sees it in the diary, on the desktop and in the app.</span></span></label></div>
+  <div class="panel"><h2>Paying suppliers</h2><div class="hint">💳 <b>Pay</b> makes your bank's payment file for the invoices you choose. Upload it in your business online banking
+    (Westpac: <i>Payments → Import file</i>; ANZ: <i>Payments → File import</i>) and approve it there – the money only moves once you approve it at the bank.</div>
+    <div class="grid2">
+      <div><label class="f" for="pbank">Your bank</label><select id="pbank">${Object.entries(data.payBanks || {}).map(([k, v]) => `<option value="${k}" ${k === st.pay_bank ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+      <div><label class="f" for="papca">Direct Entry user ID (APCA)</label><input type="text" id="papca" inputmode="numeric" maxlength="6" value="${esc(st.pay_apca_id)}" placeholder="6 digits, from your bank"></div>
+      <div><label class="f" for="pbsb">Your BSB</label><input type="text" id="pbsb" inputmode="numeric" value="${esc(st.pay_bsb)}" placeholder="e.g. 032-000"></div>
+      <div><label class="f" for="pacc">Your account number</label><input type="text" id="pacc" inputmode="numeric" value="${esc(st.pay_account)}"></div>
+      <div><label class="f" for="pname">Account name</label><input type="text" id="pname" maxlength="26" value="${esc(st.pay_account_name)}" placeholder="${esc(st.business_name || 'as the bank has it')}"></div>
+      <div><label class="f" for="prem">From (what the supplier sees)</label><input type="text" id="prem" maxlength="16" value="${esc(st.pay_remitter)}" placeholder="e.g. Alpha GD"></div>
+      <div><label class="f" for="pref">Reference</label><input type="text" id="pref" value="${esc(st.pay_reference)}" placeholder="INV {invoice} PO {job}">
+        <div class="hint">{invoice} = the invoice number, {job} = the ServiceM8 job number. The bank allows 18 characters, so spaces are dropped if needed.</div></div>
+      <div><label class="f" for="pfold">Email folder for paid invoices</label><input type="text" id="pfold" value="${esc(st.pay_folder)}" placeholder="Paid">
+        <div class="hint">Each email goes into the supplier's folder under it (made if it isn't there).</div></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="pmove" ${st.pay_move_email !== false ? 'checked' : ''}><span><b>Mark the invoice email read and file it when I pay</b></span></label>
+    <label class="switch"><input type="checkbox" id="pbal" ${st.pay_balance ? 'checked' : ''}><span><b>Add a balancing line to the file</b><br><span class="muted" style="font-size:12.5px">Only if your bank asks for a "self-balancing" file.</span></span></label>
+    ${(data.payees || []).length ? `<div class="hint" style="margin-top:10px">Suppliers' bank details (every invoice is checked against these):</div>${data.payees.map((p) => `<div class="mb" style="display:flex;gap:8px;align-items:center">
+      <span style="flex:1"><b>${esc(p.supplier)}</b> <span class="muted">${esc(p.bsb)} ${esc(p.account_number)} · ${esc(p.account_name)}</span></span><button data-payee-del="${p.id}">Remove</button></div>`).join('')}` : ''}</div>
   <div class="panel"><h2>This month</h2><div class="hint">How much Job Costs has read and checked for you this month.</div>
     <div class="days" style="gap:14px">${[['invoice_read', 'invoices read'], ['price_check', 'price checks'], ['statement_check', 'statement checks']]
       .map(([k, l]) => `<span><b style="font-size:18px">${(data.used || {})[k] || 0}</b> <span class="muted">${l}</span></span>`).join('')}</div></div>
@@ -218,6 +239,10 @@ async function load() {
 }
 document.addEventListener('click', async (e) => {
   const mb = e.target.closest('button'); if (mb && await mailboxClick(mb, load)) return;
+  if (mb && mb.dataset.payeeDel) {
+    if (!mb.dataset.sure) { mb.dataset.sure = '1'; mb.textContent = 'Sure? Remove'; return; }
+    try { await api('/payees/' + mb.dataset.payeeDel, { method: 'DELETE' }); toast('Removed – the next invoice from them asks for their bank details again'); } catch (x) { toast(x.message); } return load();
+  }
   if (mb && mb.dataset.unignore) { try { await api('/ignored/' + mb.dataset.unignore, { method: 'DELETE' }); toast('It\u2019ll be brought in again if it\u2019s emailed'); } catch (x) { toast(x.message); } return load(); }
   if (e.target.id !== 'save') return;
   const b = e.target; b.disabled = true;
@@ -225,7 +250,9 @@ document.addEventListener('click', async (e) => {
     const r = await api('/settings', { method: 'PUT', body: JSON.stringify({
       business_name: $('#bn').value, business_type: $('#bt').value, stock_clients: $('#sc').value, stock_categories: $('#sk').value,
       check_days: [...document.querySelectorAll('[data-day]')].filter((x) => x.checked).map((x) => x.dataset.day),
-      check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked }) });
+      check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked,
+      pay_bank: $('#pbank').value, pay_apca_id: $('#papca').value, pay_bsb: $('#pbsb').value, pay_account: $('#pacc').value, pay_account_name: $('#pname').value,
+      pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_balance: $('#pbal').checked }) });
     data.settings = r.settings; render(); toast('Saved');
   } catch (x) { toast(x.message); b.disabled = false; }
 });

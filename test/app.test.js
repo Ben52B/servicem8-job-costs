@@ -95,6 +95,12 @@ const fetchJobImpl = async (uuid) => ({ quoteAmount: 5000, ...(JOBS[uuid] || { j
 const findJobByNumberImpl = async (num) => Object.keys(JOBS).find((u) => JOBS[u].jobNumber === num) || null;
 const fetchActiveJobsImpl = async () => [{ jobUUID: 'never-opened', jobNumber: '208999', jobTitle: '5 Pine Rd, Coburg', status: 'Work Order' }];
 
+// A pretend mailbox for filing paid invoice emails.
+const filed = [];
+const fakeMailFiler = {
+  async fileInOutlook(token, what) { filed.push({ via: 'outlook', token, ...what }); return what.subject === 'gone' ? { status: 'not_found' } : { status: 'done', folder: `${what.root} / ${what.supplier}` }; },
+  async fileInImap(client, what) { filed.push({ via: 'imap', ...what }); return { status: 'done', folder: `${what.root} / ${what.supplier}` }; },
+};
 // A pretend ServiceM8 job diary.
 const diary = { files: [], notes: [], calls: [] };
 let diaryN = 0;
@@ -113,7 +119,7 @@ before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobcosts-'));
   repo = openDb(dataDir);
   processor = createProcessor({ repo, analyzer: fakeAnalyzer, log: { error() {} } });
-  app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary });
+  app = createApp({ config, repo, processor, fetchJobImpl, fetchActiveJobsImpl, findJobByNumberImpl, diaryApi: fakeDiary, mailFiler: fakeMailFiler });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -1942,6 +1948,122 @@ test('a job opened from the Inbox (not its ServiceM8 button) gets its price from
   // read again only after a while, not on every refresh of the card
   JOBS['rf-b'].quoteAmount = 9000;
   assert.equal((await json(token, '/job')).sm8Loading, false);
+});
+
+test('paying: the confirm details, bank details checked against the invoice, the bank file, marked paid, the email filed; cancel', async () => {
+  const aba = require('../src/aba');
+  JOBS['pay-job'] = { jobNumber: '209240', jobTitle: '10 Pay St' };
+  const t = await openCard('pay-job', 'acc-pay');
+  const bill = (supplier, number, total, pay = {}, extra = {}) => {
+    const inv = repo.createInvoice({ accountUUID: 'acc-pay', source: extra.source || 'outlook', emailSubject: extra.subject || `Invoice ${number}`, emailFrom: 'accounts <acc@supplier.au>', emailMessageId: `<${number}@supplier.au>` });
+    repo.saveExtraction(inv.id, { supplier_name: supplier, invoice_number: number, total, tax: Math.round(total / 11 * 100) / 100, subtotal: total, items: [{ description: 'Stuff', line_total: total }], ...pay });
+    return inv.id;
+  };
+  const a = bill('Jacksyl Pty Ltd', 'J-1001', 341, { payment_bsb: '033 123', payment_account_number: '9876 5432', payment_account_name: 'JACKSYL PTY LTD' });
+  repo.assignWhole(a, 'pay-job', {});
+  // the business's own bank details first
+  let pv = await json(t, `/pay/preview?ids=${a}`);
+  assert.deepEqual(pv.payer.missing, ['your BSB', 'your account number', 'your account name', 'your bank’s Direct Entry user ID']);
+  assert.equal((await post(t, '/pay', { ids: [a] })).status, 400);
+  assert.equal((await api(t, '/settings', { method: 'PUT', json: { pay_bsb: '12345' } })).status, 400);
+  await api(t, '/settings', { method: 'PUT', json: { pay_bank: 'WBC', pay_bsb: '032000', pay_account: '123456', pay_account_name: 'Alpha Garage Doors', pay_apca_id: '301500', pay_remitter: 'Alpha GD' } });
+  // the plan: amount from the invoice, reference from the template, the account from the invoice (first time)
+  pv = await json(t, `/pay/preview?ids=${a}`);
+  assert.deepEqual(pv.payer.missing, []);
+  const p = pv.plans[0];
+  assert.deepEqual([p.amount, p.amount_cents, p.reference, p.jobs, p.blocked, p.check], [341, 34100, 'INVJ-1001 PO209240', ['209240'], null, 'match']);
+  assert.deepEqual([p.payee.bsb, p.payee.account_number, p.payee.from], ['033-123', '98765432', 'invoice']);
+  assert.match(p.warnings.join(' '), /First payment/);
+  repo.saveOutlook('acc-pay', { accessToken: 'tok', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), email: 'a@b.au' }); // read-only
+  // paying needs what was confirmed – a different amount or account is refused
+  assert.equal((await post(t, '/pay', { ids: [a] })).status, 409);
+  assert.equal((await post(t, '/pay', { ids: [a], confirm: { [a]: { amount_cents: 34000, bsb: '033-123', account_number: '98765432' } } })).status, 409);
+  const ok = await post(t, '/pay', { ids: [a], confirm: { [a]: { amount_cents: 34100, bsb: '033-123', account_number: '98765432' } } }).then((x) => x.json());
+  assert.deepEqual([ok.total, ok.count], [341, 1]);
+  assert.equal((await summary(t)).invoices.find((i) => i.id === a).payment_state, 'paid', 'marked paid');
+  // the bank file
+  const file = await (await api(t, `/pay/${ok.id}/file`)).text();
+  const rows = file.split('\r\n').filter(Boolean);
+  assert.ok(rows.every((r) => r.length === 120));
+  assert.equal(rows[1].slice(1, 8), '033-123');
+  assert.equal(rows[1].slice(8, 17), ' 98765432');
+  assert.equal(rows[1].slice(20, 30), '0000034100', '$341.00');
+  assert.equal(rows[1].slice(62, 80).trim(), 'INVJ-1001 PO209240');
+  assert.equal(rows[1].slice(96, 112).trim(), 'Alpha GD', 'from: the business');
+  assert.equal(rows.at(-1).slice(20, 30), '0000034100');
+  // the email: marked read and filed under Paid / the supplier
+  await new Promise((r) => setTimeout(r, 30));
+  let pay = await json(t, `/pay/${ok.id}`);
+  assert.equal(pay.items[0].email_status, 'needs_reconnect', 'Outlook only reads until it is reconnected with filing allowed');
+  repo.saveOutlook('acc-pay', { canWrite: true }); // reconnected with filing allowed
+  await app.locals.fileEmails('acc-pay', ok.id);
+  pay = await json(t, `/pay/${ok.id}`);
+  assert.deepEqual([pay.items[0].email_status, pay.items[0].email_note], ['done', 'Paid / Jacksyl Pty Ltd']);
+  assert.deepEqual(filed.at(-1), { via: 'outlook', token: 'tok', messageId: '<J-1001@supplier.au>', subject: 'Invoice J-1001', from: 'accounts <acc@supplier.au>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' });
+  // paid already: can't be paid twice
+  assert.equal((await json(t, `/pay/preview?ids=${a}`)).plans[0].blocked, 'Already paid');
+  // the same supplier, but this invoice says to pay a DIFFERENT account: stopped
+  const b = bill('JACKSYL', 'J-1002', 110, { payment_bsb: '063-000', payment_account_number: '11112222' });
+  pv = await json(t, `/pay/preview?ids=${b}`);
+  assert.equal(pv.plans[0].check, 'mismatch');
+  assert.match(pv.plans[0].blocked, /DIFFERENT/);
+  assert.equal((await post(t, '/pay', { ids: [b], confirm: { [b]: { amount_cents: 11000, bsb: '033-123', account_number: '98765432' } } })).status, 409);
+  // the same account printed: matches what was paid before
+  const c = bill('Jacksyl', 'J-1003', 55, { payment_bsb: '033-123', payment_account_number: '98765432' });
+  assert.deepEqual([(await json(t, `/pay/preview?ids=${c}`)).plans[0].check, (await json(t, `/pay/preview?ids=${c}`)).plans[0].blocked], ['match', null]);
+  // changing a supplier's saved account needs confirming
+  assert.equal((await api(t, '/pay/payee', { method: 'PUT', json: { invoice_id: b, bsb: '063-000', account_number: '11112222', account_name: 'Jacksyl' } })).status, 409);
+  // a supplier with no bank details anywhere: enter them, then it can be paid (with a warning it couldn't be checked)
+  const d = bill('Smart Hire', 'SH-9', 310, {}, { source: 'mailbox' });
+  assert.match((await json(t, `/pay/preview?ids=${d}`)).plans[0].blocked, /No bank details/);
+  assert.equal((await api(t, '/pay/payee', { method: 'PUT', json: { invoice_id: d, bsb: '12', account_number: '1', account_name: 'x' } })).status, 400);
+  await api(t, '/pay/payee', { method: 'PUT', json: { invoice_id: d, bsb: '062-001', account_number: '10203040', account_name: 'Smart Hire' } });
+  const pd = (await json(t, `/pay/preview?ids=${d}`)).plans[0];
+  assert.deepEqual([pd.blocked, pd.check, pd.reference], [null, 'not_printed', 'INV SH-9']);
+  assert.match(pd.warnings.join(' '), /doesn’t print bank details/);
+  // two at once: one file, both lines, the total
+  const both = await post(t, '/pay', { ids: [c, d], confirm: { [c]: { amount_cents: 5500, bsb: '033-123', account_number: '98765432' }, [d]: { amount_cents: 31000, bsb: '062-001', account_number: '10203040' } } }).then((x) => x.json());
+  assert.deepEqual([both.total, both.count], [365, 2]);
+  const f2 = (await (await api(t, `/pay/${both.id}/file`)).text()).split('\r\n').filter(Boolean);
+  assert.equal(f2.length, 4);
+  assert.equal(f2.at(-1).slice(20, 30), '0000036500', '$55 + $310');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal((await json(t, `/pay/${both.id}`)).items.find((i) => i.invoice_id === d).email_status, 'no_mailbox', 'no mailbox connected for it');
+  // didn't use the file: cancel puts them back to unpaid
+  assert.equal((await post(t, `/pay/${both.id}/cancel`)).status, 200);
+  assert.equal((await json(t, `/pay/preview?ids=${d}`)).plans[0].blocked, null);
+  assert.equal((await post(t, `/pay/${both.id}/cancel`)).status, 404, 'once');
+  // a credit note, and someone else's invoice
+  const cr = bill('Smart Hire', 'CR-1', -50);
+  assert.match((await json(t, `/pay/preview?ids=${cr}`)).plans[0].blocked, /credit note/);
+  JOBS['pay-job2'] = { jobNumber: '209241', jobTitle: '11 Pay St' };
+  const t2 = await openCard('pay-job2', 'acc-pay2');
+  assert.equal((await api(t2, `/pay/preview?ids=${a}`)).status, 404);
+  assert.equal((await api(t2, `/pay/${ok.id}/file`)).status, 404);
+  // the reference fits the bank's 18 characters
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '12345', job: '208118' }), 'INV12345 PO208118');
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: 'S667', job: '' }), 'INV S667');
+});
+
+test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {
+  const { fileInOutlook, sameName } = require('../src/mailfile');
+  const calls = [];
+  const folders = { root: [{ id: 'in', name: 'Inbox' }], in: [{ id: 'pd', name: 'Paid' }], pd: [{ id: 'j', name: 'JACKSYL' }, { id: 'g', name: 'Gliderol' }] };
+  const fake = {
+    async findMessage(tok, w) { calls.push(['find', w.messageId]); return w.messageId ? 'm1' : null; },
+    async folders(tok, parent) { return folders[parent || 'root'] || []; },
+    async createFolder(tok, parent, name) { calls.push(['create', parent, name]); return { id: 'new', name }; },
+    async markRead(tok, id) { calls.push(['read', id]); },
+    async move(tok, id, f) { calls.push(['move', id, f]); },
+  };
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Paid / JACKSYL' });
+  assert.deepEqual(calls.slice(-2), [['read', 'm1'], ['move', 'm1', 'j']]);
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Paid / Summit Door Supplies' });
+  assert.deepEqual(calls.find((c) => c[0] === 'create'), ['create', 'pd', 'Summit Door Supplies']);
+  assert.deepEqual(await fileInOutlook('t', { messageId: null, root: 'Paid', supplier: 'X' }, fake), { status: 'not_found' });
+  assert.equal(sameName('Gliderol', 'Gliderol Doors Pty Ltd'), true);
+  assert.equal(sameName('Gliderol', 'Glide'), true);
+  assert.equal(sameName('B&D', 'Bunnings'), false);
 });
 
 test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {

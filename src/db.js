@@ -377,6 +377,24 @@ function migrateColumns(db) {
   // Invoices a business deleted and asked to ignore: if the same bill is emailed again, it's dropped quietly.
   db.exec(`CREATE TABLE IF NOT EXISTS ignored_bills (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT, invoice_number TEXT,
     total REAL, file_hash TEXT, label TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  // ---------- paying suppliers ----------
+  // what the invoice says to pay into (as read), and the email it came in
+  for (const [c, t] of [['pay_bsb', 'TEXT'], ['pay_account', 'TEXT'], ['pay_account_name', 'TEXT'], ['bpay_biller', 'TEXT'], ['bpay_ref', 'TEXT'], ['email_message_id', 'TEXT']]) {
+    if (!db.prepare('PRAGMA table_info(invoices)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE invoices ADD COLUMN ${c} ${t}`);
+  }
+  // the bank details each supplier is paid to (saved the first time they're paid, changed only on purpose)
+  db.exec(`CREATE TABLE IF NOT EXISTS payees (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT NOT NULL,
+    bsb TEXT NOT NULL, account_number TEXT NOT NULL, account_name TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  // each "Pay": the bank file made, and what was in it
+  db.exec(`CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    total_cents INTEGER NOT NULL, count INTEGER NOT NULL, aba TEXT NOT NULL, cancelled_at TEXT)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS payment_items (payment_id INTEGER NOT NULL, invoice_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, reference TEXT NOT NULL,
+    bsb TEXT NOT NULL, account_number TEXT NOT NULL, account_name TEXT NOT NULL, email_status TEXT, email_note TEXT, PRIMARY KEY (payment_id, invoice_id))`);
+  // Outlook connections that may also mark emails read and move them (asked for when connecting)
+  if (!db.prepare('PRAGMA table_info(outlook)').all().some((x) => x.name === 'can_write')) db.exec('ALTER TABLE outlook ADD COLUMN can_write INTEGER NOT NULL DEFAULT 0');
+  // the emails already brought in from Outlook: their message id, from what was recorded on import
+  db.exec(`UPDATE invoices SET email_message_id = (SELECT substr(mail_key, 8) FROM mail_imports WHERE mail_imports.invoice_id = invoices.id AND mail_key LIKE 'import:<%' LIMIT 1)
+    WHERE email_message_id IS NULL AND EXISTS (SELECT 1 FROM mail_imports WHERE mail_imports.invoice_id = invoices.id AND mail_key LIKE 'import:<%')`);
   // scope 'supplier': everything from that supplier is ignored (not just the one bill)
   if (!db.prepare('PRAGMA table_info(ignored_bills)').all().some((c) => c.name === 'scope')) db.exec('ALTER TABLE ignored_bills ADD COLUMN scope TEXT');
   // ServiceM8 job lines marked "no cost needed" (e.g. the customer supplies it).
@@ -800,7 +818,7 @@ function createRepo(db, dataDir) {
       const key = accountKey ?? '';
       db.prepare('INSERT INTO outlook (account_key) VALUES (?) ON CONFLICT (account_key) DO NOTHING').run(key);
       const cols = { email: f.email, name: f.name, access_token: f.accessToken, refresh_token: f.refreshToken, expires_at: f.expiresAt,
-        connected_at: f.connectedAt, last_received: f.lastReceived, last_check: f.lastCheck, error: f.error };
+        connected_at: f.connectedAt, last_received: f.lastReceived, last_check: f.lastCheck, error: f.error, can_write: f.canWrite === undefined ? undefined : (f.canWrite ? 1 : 0) };
       const keys = Object.keys(cols).filter((k) => cols[k] !== undefined);
       if (keys.length) db.prepare(`UPDATE outlook SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE account_key = ?`).run(...keys.map((k) => cols[k]), key);
     },
@@ -870,10 +888,10 @@ function createRepo(db, dataDir) {
 
     createInvoice(f) {
       const r = db.prepare(`INSERT INTO invoices
-        (account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, email_text, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
+        (account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, email_text, email_message_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
         f.accountUUID ?? null, f.originJobUUID || null, f.source, f.fileName || null, f.filePath || null, f.mimeType || null,
-        f.emailFrom || null, f.emailSubject || null, f.emailText ? String(f.emailText).slice(0, 5000) : null,
+        f.emailFrom || null, f.emailSubject || null, f.emailText ? String(f.emailText).slice(0, 5000) : null, f.emailMessageId || null,
       );
       return repo.getInvoice(Number(r.lastInsertRowid));
     },
@@ -961,12 +979,15 @@ function createRepo(db, dataDir) {
         db.prepare(`UPDATE invoices SET status = 'ready', error = NULL,
             document_type = ?, supplier = ?, supplier_abn = ?, invoice_number = ?, invoice_date = ?,
             due_date = ?, currency = ?, subtotal = ?, tax = ?, total = ?, notes = ?, refs = ?, site_address = ?, customer_name = ?, purchase_kind = ?,
+            pay_bsb = ?, pay_account = ?, pay_account_name = ?, bpay_biller = ?, bpay_ref = ?,
             category = CASE WHEN category_manual = 1 THEN category ELSE ? END
           WHERE id = ?`).run(
           x.document_type || null, x.supplier_name || null, x.supplier_abn || null, x.invoice_number || null,
           x.invoice_date || null, x.due_date || null, x.currency || null,
           x.subtotal ?? null, x.tax ?? null, round2(total), x.notes || null,
-          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, x.customer_name || null, x.purchase_kind || null, invoiceCategory(items), id,
+          JSON.stringify((x.references || []).filter(Boolean).slice(0, 20)), x.site_address || null, x.customer_name || null, x.purchase_kind || null,
+          x.payment_bsb || null, x.payment_account_number || null, x.payment_account_name || null, x.bpay_biller_code || null, x.bpay_reference || null,
+          invoiceCategory(items), id,
         );
         db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
@@ -1654,6 +1675,49 @@ function createRepo(db, dataDir) {
       db.prepare('INSERT INTO ignored_bills (account_key, supplier, invoice_number, total, file_hash, label) VALUES (?, ?, ?, ?, ?, ?)')
         .run(inv.account_uuid ?? '', inv.supplier || null, inv.invoice_number || null, inv.total ?? null, inv.file_hash || null, label);
     },
+    // ---------- paying suppliers ----------
+    getPayee(accountUUID, supplier) {
+      if (!supplier) return null;
+      return db.prepare('SELECT * FROM payees WHERE account_key = ? ORDER BY id DESC').all(accountUUID ?? '')
+        .find((p) => sameSupplier(supplierKey(p.supplier), supplierKey(supplier))) || null;
+    },
+    savePayee(accountUUID, supplier, { bsb, account_number, account_name }) {
+      const p = repo.getPayee(accountUUID, supplier);
+      if (p) db.prepare("UPDATE payees SET bsb = ?, account_number = ?, account_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(bsb, account_number, account_name, p.id);
+      else db.prepare('INSERT INTO payees (account_key, supplier, bsb, account_number, account_name) VALUES (?, ?, ?, ?, ?)').run(accountUUID ?? '', supplier, bsb, account_number, account_name);
+    },
+    listPayees(accountUUID) { return db.prepare('SELECT * FROM payees WHERE account_key = ? ORDER BY supplier').all(accountUUID ?? ''); },
+    deletePayee(accountUUID, id) { return db.prepare('DELETE FROM payees WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
+    /** Save a payment (the bank file and its lines) and mark its invoices paid – all or nothing. */
+    recordPayment(accountUUID, { aba, lines }) {
+      return tx(() => {
+        const total = lines.reduce((s, l) => s + l.amount_cents, 0);
+        const id = Number(db.prepare('INSERT INTO payments (account_key, total_cents, count, aba) VALUES (?, ?, ?, ?)').run(accountUUID ?? '', total, lines.length, aba).lastInsertRowid);
+        const ins = db.prepare('INSERT INTO payment_items (payment_id, invoice_id, amount_cents, reference, bsb, account_number, account_name, email_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        for (const l of lines) { ins.run(id, l.invoice_id, l.amount_cents, l.reference, l.bsb, l.account_number, l.account_name, 'waiting'); repo.setInvoicePaid(l.invoice_id, true); }
+        return id;
+      });
+    },
+    getPayment(accountUUID, id) {
+      const p = db.prepare('SELECT * FROM payments WHERE id = ? AND account_key = ?').get(Number(id), accountUUID ?? '');
+      if (!p) return null;
+      return { ...p, items: db.prepare(`SELECT payment_items.*, invoices.supplier, invoices.invoice_number FROM payment_items JOIN invoices ON invoices.id = payment_items.invoice_id
+        WHERE payment_id = ? ORDER BY invoices.supplier`).all(p.id) };
+    },
+    listPayments(accountUUID) { return db.prepare('SELECT id, created_at, total_cents, count, cancelled_at FROM payments WHERE account_key = ? ORDER BY id DESC LIMIT 50').all(accountUUID ?? ''); },
+    /** The bank file wasn't used: its invoices go back to unpaid. */
+    cancelPayment(accountUUID, id) {
+      const p = repo.getPayment(accountUUID, id);
+      if (!p || p.cancelled_at) return false;
+      tx(() => {
+        db.prepare("UPDATE payments SET cancelled_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(p.id);
+        for (const i of p.items) repo.setInvoicePaid(i.invoice_id, false);
+      });
+      return true;
+    },
+    setPaymentEmail(paymentId, invoiceId, status, note = null) {
+      db.prepare('UPDATE payment_items SET email_status = ?, email_note = ? WHERE payment_id = ? AND invoice_id = ?').run(status, note, paymentId, invoiceId);
+    },
     supplierIgnored(accountUUID, supplier) {
       if (!supplier) return false;
       return db.prepare("SELECT supplier FROM ignored_bills WHERE account_key = ? AND scope = 'supplier'").all(accountUUID ?? '')
@@ -1780,6 +1844,9 @@ function createRepo(db, dataDir) {
     settingDefaults: {
       business_name: '', business_type: 'trades business', stock_clients: [], stock_categories: ['stock'],
       timezone: 'Australia/Sydney', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18, diary_summary: false, onboarded: false,
+      // paying suppliers: the business's own bank account and how payments are described
+      pay_bank: 'WBC', pay_bsb: '', pay_account: '', pay_account_name: '', pay_apca_id: '', pay_remitter: '', pay_reference: 'INV {invoice} PO {job}',
+      pay_balance: false, pay_folder: 'Paid', pay_move_email: true,
     },
     getSettings(accountUUID) {
       const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(accountUUID ?? '');

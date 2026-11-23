@@ -265,6 +265,7 @@
 <div id="modalRoot"></div>
 <div class="toast" id="toast"></div>
 
+<script src="/pay.js"></script>
 <script>
 const BOOT = /*__BOOT__*/null;
 // Session: the server sends a fresh token while the window is in use; links on the page and the address bar follow it.
@@ -680,6 +681,7 @@ function renderDetail() {
       ${inv.file_path ? `<button data-reread="${inv.id}">↻ Read again</button>` : ready ? `<button class="primary" data-attach="${inv.id}">📎 Attach invoice file</button>` : ''}
       ${ready && inv.items.length ? `<select class="pill-select" data-inv-mk="${inv.id}"><option value="__">⚠ ${inv.mistake_state === 'all' ? 'Change screw-up reason' : 'Whole invoice is a screw-up'}…</option>${BOOT.reasons.map((r) => `<option value="${r.code}">${esc(r.label)}</option>`).join('')}${inv.mistake_state !== 'none' ? '<option value="">✕ Clear screw-up tags</option>' : ''}</select>` : ''}
       ${ready && state.editing !== inv.id ? `<button data-edit="${inv.id}">✎ Edit</button>` : ''}
+      ${ready && inv.payment_state !== 'paid' && Number(inv.total) > 0 ? `<button data-pay="${inv.id}" title="Pay this invoice: check the details, then get the bank file">💳 Pay</button>` : ''}
       <span class="spacer"></span>
       <button class="danger link" data-ask-delete="${inv.id}">Remove from job</button>
     </div>`;
@@ -1047,6 +1049,7 @@ document.addEventListener('click', async (e) => {
       const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
       closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
     }
+    if (ds.pay) return openPay([Number(ds.pay)], { onDone: load });
     if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
     if (ds.mkOpen) { state.mkOpen = Number(ds.mkOpen); renderDetail(); const sel = $('#detail [data-autofocus]'); sel?.focus(); try { sel?.showPicker(); } catch {} return; }
     if (ds.mkCancel !== undefined) { state.mkOpen = null; return renderDetail(); }
