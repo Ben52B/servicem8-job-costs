@@ -377,6 +377,8 @@ function migrateColumns(db) {
   // Invoices a business deleted and asked to ignore: if the same bill is emailed again, it's dropped quietly.
   db.exec(`CREATE TABLE IF NOT EXISTS ignored_bills (id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL, supplier TEXT, invoice_number TEXT,
     total REAL, file_hash TEXT, label TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
+  // brought in on purpose (ticked in "Import from Outlook"): never dropped quietly, always left in the Inbox to approve
+  if (!db.prepare('PRAGMA table_info(invoices)').all().some((x) => x.name === 'chosen')) db.exec('ALTER TABLE invoices ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0');
   // scope 'supplier': everything from that supplier is ignored (not just the one bill)
   if (!db.prepare('PRAGMA table_info(ignored_bills)').all().some((c) => c.name === 'scope')) db.exec('ALTER TABLE ignored_bills ADD COLUMN scope TEXT');
   // ServiceM8 job lines marked "no cost needed" (e.g. the customer supplies it).
@@ -870,10 +872,10 @@ function createRepo(db, dataDir) {
 
     createInvoice(f) {
       const r = db.prepare(`INSERT INTO invoices
-        (account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, email_text, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
+        (account_uuid, origin_job_uuid, source, file_name, file_path, mime_type, email_from, email_subject, email_text, chosen, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing')`).run(
         f.accountUUID ?? null, f.originJobUUID || null, f.source, f.fileName || null, f.filePath || null, f.mimeType || null,
-        f.emailFrom || null, f.emailSubject || null, f.emailText ? String(f.emailText).slice(0, 5000) : null,
+        f.emailFrom || null, f.emailSubject || null, f.emailText ? String(f.emailText).slice(0, 5000) : null, f.chosen ? 1 : 0,
       );
       return repo.getInvoice(Number(r.lastInsertRowid));
     },
@@ -1571,7 +1573,7 @@ function createRepo(db, dataDir) {
         const dupOf = key && firstSeen.get(key) !== inv.id ? firstSeen.get(key) : null;
         const sj = inv.suggested_job_uuid ? jobsById.get(inv.suggested_job_uuid) : null;
         out.push({
-          id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date, total: inv.total,
+          id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date, total: inv.total, document_type: inv.document_type,
           paid: lines.length > 0 && lines.every((l) => l.paid), created_at: inv.created_at,
           total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
           untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,

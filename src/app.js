@@ -63,10 +63,10 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
   const folderFor = (accountUUID) => (accountUUID ? safeName(accountUUID) : '_local');
 
   /** Store a file as a new invoice and queue it for reading. */
-  function addInvoiceFile({ accountUUID, originJobUUID = null, source, name, contentType, buffer, emailFrom, emailSubject, emailText }) {
+  function addInvoiceFile({ accountUUID, originJobUUID = null, source, name, contentType, buffer, emailFrom, emailSubject, emailText, chosen = false }) {
     const mimeType = guessMime(name, contentType);
     const inv = repo.createInvoice({
-      accountUUID, originJobUUID, source, fileName: name, filePath: saveFile(folderFor(accountUUID), name, buffer), mimeType, emailFrom, emailSubject, emailText,
+      accountUUID, originJobUUID, source, fileName: name, filePath: saveFile(folderFor(accountUUID), name, buffer), mimeType, emailFrom, emailSubject, emailText, chosen,
     });
     if (isSupported(name, mimeType)) processor.enqueue(inv.id);
     else repo.setInvoiceError(inv.id, 'Unsupported file type. Send a PDF or a photo (JPG/PNG).');
@@ -1803,8 +1803,8 @@ window.addEventListener('message', function (e) {
     const messageIds = ids(req.body?.message_ids), folderIds = ids(req.body?.folder_ids).slice(0, 20);
     if (!messageIds.length && !folderIds.length) return res.status(400).json({ error: 'Tick the emails or folders to import' });
     try {
-      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds, again: req.body?.again === true,
-        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }) }));
+      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds, again: req.body?.again === true, chosen: true,
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook', chosen: true }) }));
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
   api.post('/outlook/import', async (req, res) => {
@@ -1818,7 +1818,7 @@ window.addEventListener('message', function (e) {
         repo, config, api: outlookApi, accountKey: req.account, folderId: String(b.folder_id),
         // whole days in the business's time zone: from midnight on the first day to midnight after the last
         from: zonedMidnight(from), to: zonedMidnight(nextDay(to)),
-        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook' }),
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook', chosen: true }),
       });
       res.json(r);
     } catch (e) { res.status(502).json({ error: e.message }); }
@@ -2052,7 +2052,8 @@ window.addEventListener('message', function (e) {
    * File an email's invoices for the business it was sent to. The address's code says
    * which business; with no code (a mailbox the app checks), it's the only business.
    */
-  function processMail(mail, { fallbackToOnlyAccount = false, accountUUID, source = 'email' } = {}) {
+  // chosen: brought in on purpose (ticked in "Import from Outlook") – kept in the Inbox whatever it reads as
+  function processMail(mail, { fallbackToOnlyAccount = false, accountUUID, source = 'email', chosen = false } = {}) {
     let accounts = accountUUID !== undefined ? [{ accountUUID }] : [...new Map(codesFromAddresses(mail.recipients || []).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
       .map((a) => [a.accountUUID ?? '', a])).values()];
     if (!accounts.length && fallbackToOnlyAccount) {
@@ -2083,7 +2084,7 @@ window.addEventListener('message', function (e) {
       for (const f of files) {
         const inv = addInvoiceFile({
           accountUUID: acc.accountUUID, source, name: f.name, contentType: f.contentType, buffer: f.buffer,
-          emailFrom: mail.from, emailSubject: mail.subject, emailText: body,
+          emailFrom: mail.from, emailSubject: mail.subject, emailText: body, chosen,
         });
         ids.push(inv.id);
         created++;

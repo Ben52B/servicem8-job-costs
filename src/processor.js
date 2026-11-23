@@ -28,7 +28,9 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     if (!inv) return;
     // The same bill already in Job Costs isn't added twice (and a second copy could get paid twice).
     // Came in by itself (email / Outlook / a connected mailbox) and the business asked to ignore this bill: drop it quietly.
-    const automatic = ['email', 'outlook', 'mailbox'].includes(inv.source);
+    // Brought in on purpose (ticked in "Import from Outlook"): never dropped quietly – it stays in the Inbox to approve.
+    const chosen = !!inv.chosen;
+    const automatic = ['email', 'outlook', 'mailbox'].includes(inv.source) && !chosen;
     const ignored = (fields) => {
       if (!automatic || !repo.isIgnored || !repo.isIgnored({ ...inv, ...fields })) return false;
       log.log?.(`"${inv.file_name}" is an invoice you asked to ignore, not kept`);
@@ -40,7 +42,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     const isNew = !inv.kept_as_stock && !(repo.jobsOnInvoice ? repo.jobsOnInvoice(id).length : 0);
     const blocked = (twin) => {
       if (!twin || !isNew) return false;
-      if (['outlook', 'mailbox'].includes(inv.source)) { // the same invoice emailed again: dropped quietly
+      if (['outlook', 'mailbox'].includes(inv.source) && !chosen) { // the same invoice emailed again: dropped quietly
         log.log?.(`Outlook: "${inv.file_name}" is already in Job Costs (invoice ${twin.id}), not kept`);
         repo.setImportOutcome?.(id, 'duplicate');
         repo.deleteInvoice(id);
@@ -72,7 +74,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
         return repo.deleteInvoice(id);
       }
       // From the Outlook inbox: keep only real bills (quotes and other PDFs are dropped quietly).
-      if (['outlook', 'mailbox'].includes(inv.source) && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
+      if (['outlook', 'mailbox'].includes(inv.source) && !chosen && ['quote', 'statement', 'remittance'].includes(result.document_type)) {
         log.log?.(`Outlook: "${inv.file_name}" is a ${result.document_type}, not kept`);
         repo.setImportOutcome?.(id, result.document_type);
         return repo.deleteInvoice(id);
@@ -80,6 +82,10 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       // A remittance (payment advice) is not a cost, wherever it came from.
       if (result.document_type === 'remittance') {
         return repo.setInvoiceError(id, 'This is a remittance (a payment advice), not a bill, so it isn\u2019t added as a cost. Delete it.');
+      }
+      // chosen by hand but it reads like a quote: kept (you decide), with a note
+      if (chosen && result.document_type === 'quote') {
+        result.notes = ['Read as a QUOTE, not a bill – check it before adding it to a job.', result.notes].filter(Boolean).join(' ');
       }
       repo.saveExtraction(id, result);
       if (ignored(repo.getInvoice(id))) return;
@@ -94,7 +100,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       if (api.afterRead) Promise.resolve().then(() => api.afterRead(id)).catch((e) => log.error(`Price check ${id}: ${e.message}`));
     } catch (e) {
       if (e && e.usage && (onUsage || api.onUsage)) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', e.usage); // read, but not kept
-      if (['outlook', 'mailbox'].includes(inv.source) && /does not look like an invoice/i.test(e.message || '')) {
+      if (['outlook', 'mailbox'].includes(inv.source) && !chosen && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
         repo.setImportOutcome?.(id, 'not_invoice');
         return repo.deleteInvoice(id);
