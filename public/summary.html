@@ -113,7 +113,8 @@ if (BOOT && BOOT.home) document.querySelectorAll('[data-back]').forEach((a) => {
 setInterval(() => { if (BOOT && BOOT.token) fetch('/api/ping', { headers: { Authorization: 'Bearer ' + BOOT.token } }).then(noteToken).catch(() => {}); }, 30 * 60 * 1000);
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money0 = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
+// exact amounts, to the cent (no rounding to whole dollars)
+const money0 = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const money = (n) => (Number(n) || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
 const CAT_COLOR = { materials: '#0ea5e9', subcontractor: '#8b5cf6', labour: '#14b8a6', equipment_hire: '#f97316', freight: '#06b6d4', fees: '#94a3b8', other: '#64748b' };
 let T = encodeURIComponent(BOOT.token);
