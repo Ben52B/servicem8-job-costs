@@ -41,7 +41,7 @@
   .empty { text-align: center; color: var(--muted); padding: 26px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
   .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
+  .toast { z-index: 100; position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 12px; font-weight: 600; opacity: 0; transition: .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
   @media (max-width: 720px) { .item { grid-template-columns: minmax(0, 1fr); } .acts { justify-content: flex-start; } }
 .move{display:inline-flex;gap:4px;align-items:center}.move input{width:90px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px}
@@ -232,7 +232,7 @@ function render() {
   <div class="panel"><h2>This month</h2><div class="hint">How much Job Costs has read and checked for you this month.</div>
     <div class="days" style="gap:14px">${[['invoice_read', 'invoices read'], ['price_check', 'price checks'], ['statement_check', 'statement checks']]
       .map(([k, l]) => `<span><b style="font-size:18px">${(data.used || {})[k] || 0}</b> <span class="muted">${l}</span></span>`).join('')}</div></div>
-  <div class="save"><button class="primary" id="save">Save</button></div>`;
+  <div class="save"><button class="primary" id="save">Save</button> <span id="saveMsg" style="font-weight:700;color:var(--brand-dark);margin-left:8px"></span></div>`;
 }
 async function load() {
   try { data = await api('/settings'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -253,7 +253,10 @@ document.addEventListener('click', async (e) => {
       check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked,
       pay_bank: $('#pbank').value, pay_apca_id: $('#papca').value, pay_bsb: $('#pbsb').value, pay_account: $('#pacc').value, pay_account_name: $('#pname').value,
       pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_balance: $('#pbal').checked }) });
-    data.settings = r.settings; render(); toast('Saved');
+    const turnedOn = r.settings.diary_summary && !data.settings.diary_summary;
+    data.settings = r.settings; render();
+    const msg = turnedOn ? '✓ Saved – every open job with costs gets its Job Costs note in the diary within a couple of minutes' : '✓ Saved';
+    $('#saveMsg').textContent = msg;
   } catch (x) { toast(x.message); b.disabled = false; }
 });
 load();
