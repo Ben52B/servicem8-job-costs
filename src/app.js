@@ -274,7 +274,24 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     if (t.mistakes > 0.004) lines.push(`Screw-ups: ${m(t.mistakes)}`);
     const flagged = repo.checkFlagsFor(accountUUID, bills.map((i) => i.id)).size;
     if (flagged) lines.push(`⚠ ${flagged} bill${flagged === 1 ? '' : 's'} flagged by a statement check`);
-    return { text: lines.join('\n').slice(0, 1000), empty: !bills.length && t.quote == null };
+    // each bill: paid or not (this job's part, ex GST), and the due date of unpaid ones
+    if (bills.length) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+      const day = (d) => new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+      lines.push('');
+      const shown = bills.slice(0, 25);
+      for (const i of shown) {
+        const st = i.payment_state === 'paid' ? '✓' : i.payment_state === 'part' ? '◐' : '✗';
+        const what = [i.supplier || 'Unknown supplier', i.invoice_number ? '#' + i.invoice_number : null].filter(Boolean).join(' ');
+        const due = i.payment_state === 'paid' ? 'paid' : `${i.payment_state === 'part' ? 'part paid' : 'unpaid'}${i.due_date
+          ? (String(i.due_date).slice(0, 10) < today ? ` · OVERDUE (due ${day(i.due_date)})` : ` · due ${day(i.due_date)}`) : ''}`;
+        lines.push(`${st} ${what} – ${m(i.job_total)} – ${due}`);
+      }
+      if (bills.length > shown.length) lines.push(`+ ${bills.length - shown.length} more – open Job Costs to see them all`);
+    }
+    let text = lines.join('\n');
+    if (text.length > 3000) text = text.slice(0, 2960).replace(/\n[^\n]*$/, '') + '\n… open Job Costs to see the rest';
+    return { text, empty: !bills.length && t.quote == null };
   }
   async function summaryPass() {
     for (const row of repo.dirtySummaries()) {
@@ -288,16 +305,15 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
       const token = await diaryToken(acc);
       if (!token) continue;
       try {
-        let uuid = row.note_uuid;
-        if (uuid) {
-          try { await diaryApi.updateJobNote(uuid, { text }, token); } catch (e) {
-            if (/\b429\b/.test(e.message)) throw e;
-            // can't change it (deleted in ServiceM8, or not allowed): replace it
-            await diaryApi.removeJobNote(uuid, token).catch(() => {});
-            uuid = null;
+        // a fresh note each time it changes (the old one goes), so the summary is always at the top of the diary
+        if (row.note_uuid) {
+          try { await diaryApi.removeJobNote(row.note_uuid, token); } catch (e) {
+            if (/\b429\b/.test(e.message)) throw e; // busy: try again shortly
+            // already deleted in ServiceM8: fine
           }
+          repo.saveSummaryNote(row.job_uuid, null, null); // gone: written again even if adding the new one fails below
         }
-        if (!uuid) uuid = await diaryApi.addJobNote({ jobUUID: row.job_uuid, text }, token);
+        const uuid = await diaryApi.addJobNote({ jobUUID: row.job_uuid, text }, token);
         repo.saveSummaryNote(row.job_uuid, uuid, text);
         repo.clearSummaryDirty(row.job_uuid);
         diaryRetryAt.delete('s:' + row.job_uuid);

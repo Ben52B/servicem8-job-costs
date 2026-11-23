@@ -1753,24 +1753,27 @@ test('diary summary: one note per job in ServiceM8, kept up to date, only when s
   await app.locals.summaryPass();
   assert.equal(mine().length, 1);
   const text = mine()[0].text;
-  assert.match(text, /^Job Costs summary \(updated .+\)\nCosts: \$3,000\.00 ex GST from 1 bill\nPaid: \$0\.00 · Still to pay: \$3,000\.00\nQuoted: \$5,000\.00 ex GST · Profit so far: \$2,000\.00 \(40%\)$/, text);
-  // marked paid: the same note is changed, not a new one
+  assert.match(text, /^Job Costs summary \(updated .+\)\nCosts: \$3,000\.00 ex GST from 1 bill\nPaid: \$0\.00 · Still to pay: \$3,000\.00\nQuoted: \$5,000\.00 ex GST · Profit so far: \$2,000\.00 \(40%\)\n\n✗ Door Supplies Pty Ltd #INV-100[\w-]* – \$3,000\.00 – unpaid · OVERDUE \(due 31 Oct\)$/, text);
+  // marked paid: a fresh note replaces the old one, so it's at the top of the diary – still only one
+  const firstUuid = mine()[0].uuid;
   await api(t, `/invoices/${id}`, { method: 'PATCH', json: { paid: true } });
   await app.locals.summaryPass();
   assert.equal(mine().length, 1);
+  assert.notEqual(mine()[0].uuid, firstUuid, 'a new note (on top), the old one removed');
   assert.match(mine()[0].text, /Paid: \$3,000\.00 · Still to pay: \$0\.00/);
-  assert.equal(updates.length, 1);
+  assert.match(mine()[0].text, /\n✓ Door Supplies Pty Ltd #INV-100[\w-]* – \$3,000\.00 – paid$/);
   // nothing changed: ServiceM8 isn't touched
+  const adds = diary.notes.length; const uuidNow = mine()[0].uuid;
   repo.markSummaryDirty(['sum-job']);
   await app.locals.summaryPass();
-  assert.equal(updates.length, 1, 'only the time would differ: left alone');
-  // the note can't be changed (e.g. deleted in ServiceM8): a fresh one replaces it
-  fakeDiary.refuseUpdate = true;
+  assert.equal(mine()[0].uuid, uuidNow, 'only the time would differ: left alone');
+  // deleted in ServiceM8 by hand: the next change brings a fresh one
+  diary.notes = diary.notes.filter((n) => n.uuid !== uuidNow);
   await api(t, '/job', { method: 'PATCH', json: { quote_amount: 6000 } });
   await app.locals.summaryPass();
   assert.equal(mine().length, 1);
   assert.match(mine()[0].text, /Quoted: \$6,000\.00 ex GST · Profit so far: \$3,000\.00 \(50%\)/);
-  fakeDiary.refuseUpdate = false;
+  assert.ok(adds >= 1 && updates.length === 0, 'notes are replaced, never edited');
   // switched off: no more changes
   await api(t, '/settings', { method: 'PUT', json: { diary_summary: false } });
   await api(t, `/invoices/${id}`, { method: 'PATCH', json: { paid: false } });
