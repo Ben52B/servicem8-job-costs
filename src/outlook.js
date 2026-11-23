@@ -270,7 +270,7 @@ async function importList({ repo, api, token, accountKey, onMail, messages, forc
     const st = repo.importStatus ? repo.importStatus(accountKey, key, m.subject).state : (repo.isMailProcessed(key) ? 'imported' : 'new');
     if (st !== 'new' && !(force && force.has(m.id))) { result.skipped++; continue; }
     const { mail, worthReading } = await toMail(api, token, m);
-    if (worthReading) {
+    if (worthReading || (force && force.has(m.id))) { // ticked one by one: read it whatever it looks like
       const r = await onMail(mail, accountKey || null);
       result.imported++;
       result.files += (r && r.created) || 0;

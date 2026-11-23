@@ -280,7 +280,7 @@ function render() {
     const paidBox = `<label class="paidbox" title="Tick to mark it paid when you add it"><input type="checkbox" id="pd-${i.id}"> Paid</label>`;
     const from = String(i.email_from || '').replace(/\s*<[^>]*>\s*$/, '').replace(/^"|"$/g, '') || String(i.email_from || '').replace(/[<>]/g, '');
     h += `<div class="item wide">
-      <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}</span>
+      <div class="hd"><span class="t">${esc(i.supplier || 'Unknown supplier')}${i.duplicate_of ? ' <span class="chip c-dup">Looks like a duplicate</span>' : ''}${i.document_type === 'quote' ? ' <span class="chip c-dup" title="It reads like a quote, not a bill – check it before adding it to a job">Reads like a quote</span>' : ''}</span>
         <span class="amt">${money(i.total_ex ?? i.total)} <span class="muted">ex GST</span></span></div>
       <div class="sub">${dueChip(i.due_date, !i.paid)} ${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.due_date && 'due ' + fmtDate(i.due_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
       ${pcChip(i) ? `<div class="pcline">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}

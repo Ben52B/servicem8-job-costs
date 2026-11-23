@@ -2066,6 +2066,25 @@ test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier
   assert.equal(sameName('B&D', 'Bunnings'), false);
 });
 
+test('an email imported on purpose stays in the Inbox to approve, even when it reads like a quote (automatic ones are dropped)', async () => {
+  JOBS['ch-job'] = { jobNumber: '209250', jobTitle: '12 Chosen St' };
+  const t = await openCard('ch-job', 'acc-ch');
+  const mail = (subject) => ({ messageId: `<${subject}@x>`, from: 'Sup <s@x.au>', subject, text: '', recipients: [],
+    attachments: [{ name: `${subject}.pdf`, contentType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 ' + subject + uniq()) }] });
+  // the automatic Outlook check: a quote is dropped quietly
+  app.locals.processMail(mail('quote-auto'), { accountUUID: 'acc-ch', source: 'outlook' }); await processor.idle();
+  assert.equal((await json(t, '/inbox')).invoices.length, 0);
+  // ticked in "Import from Outlook": kept, with a note, waiting for approval
+  const r = app.locals.processMail(mail('quote-chosen'), { accountUUID: 'acc-ch', source: 'outlook', chosen: true }); await processor.idle();
+  const inbox = (await json(t, '/inbox')).invoices;
+  assert.deepEqual(inbox.map((i) => [i.id, i.document_type]), [[r.ids[0], 'quote']]);
+  assert.match(repo.getInvoice(r.ids[0]).notes, /Read as a QUOTE/);
+  // not an invoice at all: stays too (as "couldn't read"), to delete by hand
+  const r2 = app.locals.processMail(mail('notinvoice-ch'), { accountUUID: 'acc-ch', source: 'outlook', chosen: true }); await processor.idle();
+  assert.ok(repo.getInvoice(r2.ids[0]), 'not deleted');
+  assert.ok((await json(t, '/inbox')).pending.some((p) => p.id === r2.ids[0]));
+});
+
 test('deleting from the Inbox: ignore everything from a supplier, offer to delete the rest from them, and don’t ask again about them', async () => {
   JOBS['sup-job'] = { jobNumber: '209210', jobTitle: '4 Ignore St' };
   const t = await openCard('sup-job', 'acc-sup');
