@@ -30,11 +30,12 @@ const InvoiceSchema = z.object({
   site_address: z.string().nullable().describe('Delivery or job-site address if shown (not the supplier\'s address and not the billing address unless it is the only one).'),
   customer_name: z.string().nullable().describe('The end customer the goods or work are for, if printed (e.g. "Deliver to: J Smith", "Attn: Talia", "Customer: Leading Edge", "Site contact"). Not the supplier, and not the business being billed (the buyer).'),
   purchase_kind: z.enum(['job', 'stock', 'unclear']).describe('"job" if it is for one customer job (a customer name, site/delivery address or job number is given). "stock" if it looks like the business restocking its own warehouse/van (several of the same product, "stock" written on it, no customer, site or job reference, delivered to the business itself). Otherwise "unclear".'),
-  payment_bsb: z.string().nullable().describe('The supplier\'s bank BSB for paying this invoice by EFT / direct deposit, exactly as printed (e.g. "033-123"). Null if not printed.'),
-  payment_account_number: z.string().nullable().describe('The supplier\'s bank account number for EFT / direct deposit, exactly as printed. Null if not printed.'),
-  payment_account_name: z.string().nullable().describe('The account name printed with the bank details. Null if not printed.'),
-  bpay_biller_code: z.string().nullable().describe('BPAY biller code if printed.'),
-  bpay_reference: z.string().nullable().describe('BPAY customer reference number (CRN) if printed.'),
+  // Not nullable on purpose: the API allows at most 16 fields that can be empty (null), and the fields above use 15.
+  payment_bsb: z.string().describe('The supplier\'s bank BSB for paying this invoice by EFT / direct deposit, exactly as printed (e.g. "033-123"). Empty string if not printed.'),
+  payment_account_number: z.string().describe('The supplier\'s bank account number for EFT / direct deposit, exactly as printed. Empty string if not printed.'),
+  payment_account_name: z.string().describe('The account name printed with the bank details. Empty string if not printed.'),
+  bpay_biller_code: z.string().describe('BPAY biller code if printed, else empty string.'),
+  bpay_reference: z.string().describe('BPAY customer reference number (CRN) if printed, else empty string.'),
   notes: z.string().nullable().describe('Anything the business owner should notice, e.g. "Deposit only - balance to follow", or unreadable parts.'),
 });
 
@@ -49,7 +50,7 @@ Extract the document's details exactly as printed. Rules:
 - Credit notes: make total and line amounts negative.
 - If the file contains several invoices, extract the first one and say so in notes.
 - Say whether it is for a customer job or for stock (see purchase_kind).
-- Payment details: copy the supplier's EFT bank details (BSB, account number, account name) and any BPAY biller code / reference exactly as printed, digit for digit. Never guess them; null if not printed.
+- Payment details: copy the supplier's EFT bank details (BSB, account number, account name) and any BPAY biller code / reference exactly as printed, digit for digit. Never guess them; empty if not printed.
 - References matter: the customer usually writes their job number on the order (e.g. "PO 208126", "Ref: Alpha GD 208126"). List every such reference.`;
 
 const SUPPORTED_MIME = {

@@ -395,6 +395,9 @@ function migrateColumns(db) {
   // the emails already brought in from Outlook: their message id, from what was recorded on import
   db.exec(`UPDATE invoices SET email_message_id = (SELECT substr(mail_key, 8) FROM mail_imports WHERE mail_imports.invoice_id = invoices.id AND mail_key LIKE 'import:<%' LIMIT 1)
     WHERE email_message_id IS NULL AND EXISTS (SELECT 1 FROM mail_imports WHERE mail_imports.invoice_id = invoices.id AND mail_key LIKE 'import:<%')`);
+  // Invoices that failed to read because of the schema limit (too many fields that may be empty, Nov 2026): read them again.
+  // processor.resumeStuck() picks up every invoice left 'processing' when the server starts.
+  db.prepare("UPDATE invoices SET status = 'processing', error = NULL WHERE error LIKE '%parameters with union types%'").run();
   // brought in on purpose (ticked in "Import from Outlook"): never dropped quietly, always left in the Inbox to approve
   if (!db.prepare('PRAGMA table_info(invoices)').all().some((x) => x.name === 'chosen')) db.exec('ALTER TABLE invoices ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0');
   // scope 'supplier': everything from that supplier is ignored (not just the one bill)

@@ -2066,6 +2066,14 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
   assert.equal(repo.getPayee('acc-man', 'Smart Hire').account_number, '10203040', 'their details are remembered for checking the next invoice');
 });
 
+test('the invoice reader asks for at most 16 fields that may be empty (the Claude API limit)', () => {
+  const { z } = require('zod');
+  const { InvoiceSchema } = require('../src/analyzer');
+  let n = 0;
+  (function walk(o) { if (o && typeof o === 'object') { if (Array.isArray(o.anyOf) || Array.isArray(o.type)) n++; for (const k in o) walk(o[k]); } })(z.toJSONSchema(InvoiceSchema));
+  assert.ok(n <= 16, `${n} fields can be empty – the API refuses more than 16`);
+});
+
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {
   const { fileInOutlook, sameName } = require('../src/mailfile');
   const calls = [];
