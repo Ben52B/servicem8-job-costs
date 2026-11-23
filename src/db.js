@@ -644,9 +644,9 @@ function createRepo(db, dataDir) {
       const rows = db.prepare('SELECT * FROM mail_imports WHERE mail_key = ?').all(mailKey);
       if (rows.length) {
         const kept = rows.filter((r) => r.invoice_id && !r.outcome && repo.getInvoice(r.invoice_id));
-        if (kept.length) return { state: 'imported' };
+        if (kept.length) return { state: 'imported', where: repo.whereIs(repo.getInvoice(kept[0].invoice_id)) };
         // a statement counts only while its check is still there
-        if (rows.some((r) => r.outcome === 'statement' && r.check_id && db.prepare('SELECT 1 FROM statement_checks WHERE id = ?').get(r.check_id))) return { state: 'statement' };
+        if (rows.some((r) => r.outcome === 'statement' && r.check_id && db.prepare('SELECT 1 FROM statement_checks WHERE id = ?').get(r.check_id))) return { state: 'statement', where: 'Statement check (it was read as a supplier statement)' };
         if (rows.some((r) => r.outcome === 'statement')) return { state: 'deleted' };
         if (rows.some((r) => r.invoice_id && !r.outcome)) return { state: 'deleted' }; // imported, then deleted in Job Costs
         const why = rows.map((r) => r.outcome).find(Boolean);
@@ -654,8 +654,16 @@ function createRepo(db, dataDir) {
       }
       if (!repo.isMailProcessed(mailKey)) return { state: 'new' };
       // brought in before this was recorded: imported only if an invoice from that email is still here
-      const found = subject && db.prepare("SELECT 1 FROM invoices WHERE account_uuid IS ? AND email_subject = ? LIMIT 1").get(accountUUID, subject);
-      return found ? { state: 'imported' } : { state: 'skipped', why: 'not_kept' };
+      const found = subject && db.prepare("SELECT * FROM invoices WHERE account_uuid IS ? AND email_subject = ? LIMIT 1").get(accountUUID, subject);
+      return found ? { state: 'imported', where: `${repo.whereIs(found)} (an invoice from an email with the same subject)` } : { state: 'skipped', why: 'not_kept' };
+    },
+    /** Where an invoice is, in words: "job #208118", "the Inbox", "Stock". */
+    whereIs(inv) {
+      if (!inv) return 'Job Costs';
+      const jobs = repo.jobsOnInvoice(inv.id).map((j) => j.job_number).filter(Boolean);
+      const what = [inv.supplier, inv.invoice_number && '#' + inv.invoice_number].filter(Boolean).join(' ');
+      const place = jobs.length ? `job #${jobs.join(', #')}` : inv.kept_as_stock ? 'Stock' : inv.status === 'ready' ? 'the Inbox' : 'the Inbox (still being read)';
+      return what ? `${what}, on ${place}`.replace(', on the Inbox', ', in the Inbox').replace(', on Stock', ', in Stock') : place;
     },
 
     // ----- statement checks -----
