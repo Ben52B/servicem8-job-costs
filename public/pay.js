@@ -18,6 +18,9 @@
   .pay .p-foot .sp { flex: 1; }
   .pay button, .pay .pbtn { font: inherit; font-weight: 700; border: 1px solid #d6e2de; background: #fff; border-radius: 10px; padding: 8px 14px; cursor: pointer; color: inherit; text-decoration: none; display: inline-block; white-space: normal; text-align: left; max-width: 100%; }
   .pay .go { background: #10b981; border-color: #10b981; color: #fff; } .pay .go:disabled { opacity: .5; cursor: default; }
+  .pay .cp { display: flex; gap: 8px; align-items: center; } .pay .cp span { flex: 1; min-width: 0; }
+  .pay .cpb { padding: 3px 10px; font-size: 12px; border-radius: 8px; flex: none; } .pay .cpb.done { background: #e8f8ef; border-color: #a7e3c4; }
+  .pay .p-row.paid { border-color: #a7e3c4; background: #f3fbf7; }
   .pay ol { margin: 8px 0 0 18px; padding: 0; } .pay li { margin: 4px 0; }
   @media (max-width: 560px) { .pay dl { grid-template-columns: 1fr; } .pay dt { margin-top: 4px; } .pay .p-form { grid-template-columns: 1fr; } }`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
@@ -41,6 +44,15 @@
     document.body.appendChild(bg);
     const box = bg.firstChild;
     let data = null; let busy = false; let paid = null;
+    const paidNow = new Map(); // invoice id → payment (marked "I've paid it" in this box)
+    // copy a detail for pasting into the banking app (works inside ServiceM8's window too)
+    async function copy(text) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) {
+        const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+        let ok = false; try { ok = document.execCommand('copy'); } catch (x) { ok = false; } ta.remove(); return ok;
+      }
+    }
+    const cp = (label, value, shown) => `<dt>${label}</dt><dd class="cp"><span>${esc(shown ?? value)}</span><button class="cpb" data-copy="${esc(value)}">Copy</button></dd>`;
     const close = () => { bg.remove(); if (paid && onDone) onDone(); };
     bg.addEventListener('click', (e) => { if (e.target === bg && !busy) close(); });
 
@@ -60,7 +72,9 @@
       return `<div class="p-row ${p.blocked ? 'blocked' : ''}">
         <div class="p-top"><div><b>${esc(p.supplier || 'Unknown supplier')}</b><div class="muted">Invoice ${esc(p.invoice_number || '(no number)')}${p.jobs.length ? ' · job #' + p.jobs.map(esc).join(', #') : ''}${p.due_date ? ' · due ' + esc(p.due_date.split('-').reverse().join('/')) : ''}</div></div>
           <div class="p-amt">${money(p.amount)}</div></div>
-        ${p.payee ? `<dl><dt>Pay to</dt><dd>${esc(p.payee.account_name || p.supplier)}</dd><dt>BSB / account</dt><dd>${acct(p.payee)}</dd><dt>Reference</dt><dd>${esc(p.reference)}</dd>
+        ${p.payee && data.mode === 'manual' && !p.blocked ? `<dl>${cp('Account name', p.payee.account_name || p.supplier || '')}${cp('BSB', String(p.payee.bsb).replace('-', ''), p.payee.bsb)}${cp('Account', p.payee.account_number)}
+          ${cp('Amount', (p.amount_cents / 100).toFixed(2), money(p.amount))}${cp('Reference', p.reference)}${data.payer.remitter ? cp('From', data.payer.remitter) : ''}</dl>`
+          : p.payee ? `<dl><dt>Pay to</dt><dd>${esc(p.payee.account_name || p.supplier)}</dd><dt>BSB / account</dt><dd>${acct(p.payee)}</dd><dt>Reference</dt><dd>${esc(p.reference)}</dd>
           <dt>From</dt><dd>${esc(data.payer.remitter || '')}</dd></dl>` : ''}
         ${p.payee || p.printed ? checkHtml(p) : ''}
         ${p.blocked && !(p.check === 'mismatch') ? `<div class="p-check bad">Not paid: ${esc(p.blocked)}</div>` : ''}
@@ -69,9 +83,45 @@
           <input class="full" name="account_name" placeholder="Account name" value="${esc(p.supplier || '')}"><button class="full" data-save-payee="${p.id}">Save ${esc(p.supplier || '')}'s bank details</button></div>
           <div class="muted" style="font-size:12px;margin-top:4px">Take them from a statement or a call to the supplier – they're checked against every invoice from them after this.</div>` : ''}
         ${p.warnings.filter((w) => !/couldn.t be checked/.test(w)).map((w) => `<div class="warn" style="margin-top:6px;font-size:13px">⚠ ${esc(w)}</div>`).join('')}
+        ${data.mode === 'manual' && !p.blocked ? `<div style="margin-top:10px;display:flex;justify-content:flex-end"><button class="go" data-paid-one="${p.id}">✓ I've paid it</button></div>` : ''}
       </div>`;
     }
+    const EMAIL = { done: (i) => `✓ email moved to ${esc(i.email_note || '')}`, waiting: () => 'filing the email…', not_found: (i) => `⚠ ${esc(i.email_note || 'email not found')}`, needs_reconnect: (i) => `⚠ ${esc(i.email_note)}`,
+      no_email: () => 'no email to file', no_mailbox: (i) => esc(i.email_note || 'no mailbox connected'), off: () => 'email left as it is', error: (i) => `⚠ email: ${esc(i.email_note || 'couldn\u2019t file it')}` };
+    function paidRowHtml(p, pay) {
+      const it = (pay.items || []).find((i) => i.invoice_id === p.id) || {};
+      return `<div class="p-row paid"><div class="p-top"><div><b>✓ ${esc(p.supplier || '')}</b><div class="muted">Invoice ${esc(p.invoice_number || '')} · marked paid in Job Costs · ${(EMAIL[it.email_status] || EMAIL.waiting)(it)}</div></div>
+        <div class="p-amt">${money(p.amount)}</div></div>
+        <div style="margin-top:6px"><button data-undo-one="${pay.id}" data-inv="${p.id}">↶ Undo – not paid</button></div></div>`;
+    }
+    function renderManual() {
+      const open = data.plans.filter((p) => !p.blocked && !paidNow.has(p.id));
+      box.innerHTML = `<h3>💳 Pay ${data.plans.length === 1 ? 'this invoice' : data.plans.length + ' invoices'}</h3>
+        <div class="muted">Check the details, pay ${data.plans.length === 1 ? 'it' : 'each one'} in your own banking app (Copy fills each box), then press <b>✓ I've paid it</b>.
+          Job Costs never connects to your bank.</div>
+        ${data.plans.map((p) => (paidNow.has(p.id) ? paidRowHtml(p, paidNow.get(p.id)) : rowHtml(p))).join('')}
+        ${data.moveEmail ? `<div style="margin-top:10px;font-size:13px" class="muted">When you press ✓ I've paid it: marked paid in Job Costs, and the invoice email is marked read and moved to <b>${esc(data.folder)} / <i>supplier</i></b>.</div>` : ''}
+        <div class="p-foot"><b>${open.length ? `${open.length} to pay · ${money(open.reduce((s, p) => s + p.amount_cents, 0) / 100)}` : paidNow.size ? '✓ All done' : 'Nothing can be paid yet'}</b><span class="sp"></span>
+          ${open.length > 1 ? `<button data-paid-all>✓ I've paid all ${open.length}</button>` : ''}<button ${paidNow.size && !open.length ? 'class="go"' : ''} data-x>${paidNow.size ? 'Done' : 'Close'}</button></div>`;
+      const waiting = [...paidNow.values()].some((pay) => (pay.items || []).some((i) => i.email_status === 'waiting'));
+      if (waiting) setTimeout(async () => {
+        if (!bg.isConnected) return;
+        for (const [id, pay] of paidNow) { try { paidNow.set(id, await call('/pay/' + pay.id)); } catch (e) { /* fine */ } }
+        renderManual();
+      }, 1500);
+    }
+    // each invoice on its own, so "Undo" on one leaves the others paid
+    async function markPaid(plans) {
+      for (const p of plans) {
+        const confirm = { [p.id]: { amount_cents: p.amount_cents, bsb: p.payee.bsb, account_number: p.payee.account_number } };
+        const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: [p.id], confirm }) });
+        paidNow.set(p.id, await call('/pay/' + r.id));
+        paid = r.id;
+      }
+      renderManual();
+    }
     function render() {
+      if (data.mode === 'manual') return renderManual();
       const payer = data.payer; const ok = data.plans.filter((p) => !p.blocked);
       const missing = payer.missing.length;
       box.innerHTML = `<h3>💳 Pay ${data.plans.length === 1 ? 'this invoice' : data.plans.length + ' invoices'}</h3>
@@ -98,6 +148,23 @@
       const d = b.dataset;
       try {
         if (d.x !== undefined) return close();
+        if (d.copy !== undefined) { const ok = await copy(d.copy); b.textContent = ok ? '✓ Copied' : 'Select it'; b.classList.toggle('done', ok); setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500); return; }
+        if (d.paidOne) {
+          const p = data.plans.find((x) => String(x.id) === d.paidOne);
+          if (!d.sure) { d.sure = '1'; b.textContent = `Sure? ${money(p.amount)} to ${p.payee.bsb} ${p.payee.account_number} is paid`; return; }
+          b.disabled = true; return markPaid([p]);
+        }
+        if (d.paidAll !== undefined) {
+          const open = data.plans.filter((p) => !p.blocked && !paidNow.has(p.id));
+          if (!d.sure) { d.sure = '1'; b.textContent = `Sure? All ${open.length} paid (${money(open.reduce((s, p) => s + p.amount_cents, 0) / 100)})`; return; }
+          b.disabled = true; return markPaid(open);
+        }
+        if (d.undoOne) {
+          if (!d.sure) { d.sure = '1'; b.textContent = 'Sure? Mark it unpaid again'; return; }
+          await call(`/pay/${d.undoOne}/cancel`, { method: 'POST' });
+          for (const [id, pay] of [...paidNow]) if (String(pay.id) === d.undoOne) paidNow.delete(id);
+          return load();
+        }
         if (d.savePayee) {
           const f = box.querySelector(`[data-form="${d.savePayee}"]`);
           const v = (n) => f.querySelector(`[name=${n}]`).value;

@@ -1220,6 +1220,7 @@ window.addEventListener('message', function (e) {
     if (b.pay_folder !== undefined) ch.pay_folder = String(b.pay_folder).trim().slice(0, 100) || 'Paid';
     if (b.pay_balance !== undefined) ch.pay_balance = !!b.pay_balance;
     if (b.pay_move_email !== undefined) ch.pay_move_email = !!b.pay_move_email;
+    if (b.pay_mode !== undefined) ch.pay_mode = b.pay_mode === 'file' ? 'file' : 'manual';
     const wasOn = settingsFor(req.account).diary_summary;
     const saved = repo.saveSettings(req.account, ch);
     if (saved.diary_summary && !wasOn) { repo.markSummaryDirty(repo.jobsWithCosts(req.account)); kickDiary(); }
@@ -1917,7 +1918,7 @@ window.addEventListener('message', function (e) {
     if (!invs.length) return res.status(404).json({ error: 'Invoice not found' });
     const plans = invs.map((inv) => payPlan(inv, req.account, st));
     const ok = plans.filter((p) => !p.blocked);
-    res.json({ payer: { ...payerOf(st), missing: payerMissing(st), bankName: PAY_BANKS[st.pay_bank] }, folder: st.pay_folder, moveEmail: st.pay_move_email,
+    res.json({ mode: st.pay_mode === 'file' ? 'file' : 'manual', payer: { ...payerOf(st), missing: st.pay_mode === 'file' ? payerMissing(st) : [], bankName: PAY_BANKS[st.pay_bank] }, folder: st.pay_folder, moveEmail: st.pay_move_email,
       plans, total: ok.reduce((s, p) => s + p.amount_cents, 0) / 100, count: ok.length });
   });
   // Enter (or, on purpose, change) a supplier's bank details
@@ -1936,9 +1937,11 @@ window.addEventListener('message', function (e) {
     res.json({ ok: true });
   });
   // Pay: the confirmed invoices go in one bank file and are marked paid; their emails are marked read and filed
+  // "I've paid it" (manual: paid in the business's own banking) – or, with pay_mode 'file', the bank payment file
   api.post('/pay', (req, res) => {
     const st = settingsFor(req.account);
-    const missing = payerMissing(st);
+    const fileMode = st.pay_mode === 'file';
+    const missing = fileMode ? payerMissing(st) : [];
     if (missing.length) return res.status(400).json({ error: `Fill in ${missing.join(', ')} in Settings → Paying suppliers first` });
     const invs = payInvoices(req, Array.isArray(req.body?.ids) ? req.body.ids : []);
     if (!invs.length) return res.status(400).json({ error: 'Nothing to pay' });
@@ -1955,8 +1958,8 @@ window.addEventListener('message', function (e) {
     }
     const lines = plans.map((p) => ({ invoice_id: p.id, amount_cents: p.amount_cents, reference: p.reference, bsb: aba.normBsb(p.payee.bsb),
       account_number: aba.normAccount(p.payee.account_number), account_name: p.payee.account_name || p.supplier }));
-    let file;
-    try { file = aba.buildAba({ payer: payerOf(st), lines: lines.map((l) => ({ bsb: l.bsb, account: l.account_number, name: l.account_name, amountCents: l.amount_cents, reference: l.reference })) }); }
+    let file = '';
+    if (fileMode) try { file = aba.buildAba({ payer: payerOf(st), lines: lines.map((l) => ({ bsb: l.bsb, account: l.account_number, name: l.account_name, amountCents: l.amount_cents, reference: l.reference })) }); }
     catch (e) { return res.status(400).json({ error: e.message }); }
     // the first payment to a supplier saves their bank details (from then on they're checked against every invoice)
     for (const p of plans) if (p.payee.from === 'invoice') repo.savePayee(req.account, p.supplier, p.payee);
@@ -1994,12 +1997,12 @@ window.addEventListener('message', function (e) {
     const p = repo.getPayment(req.account, req.params.id);
     if (!p) return res.status(404).json({ error: 'Not found' });
     const { aba: _f, ...rest } = p;
-    res.json(rest);
+    res.json({ ...rest, has_file: !!p.aba });
   });
   // the bank file, to upload in the bank's "import payments" page
   api.get('/pay/:id/file', (req, res) => {
     const p = repo.getPayment(req.account, req.params.id);
-    if (!p) return res.status(404).json({ error: 'Not found' });
+    if (!p || !p.aba) return res.status(404).json({ error: 'Not found' });
     res.set({ 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="supplier-payments-${p.id}.aba"`, 'Cache-Control': 'no-store' }).send(p.aba);
   });
   // didn't use the file: the invoices go back to unpaid

@@ -1857,6 +1857,8 @@ function createRepo(db, dataDir) {
       // paying suppliers: the business's own bank account and how payments are described
       pay_bank: 'WBC', pay_bsb: '', pay_account: '', pay_account_name: '', pay_apca_id: '', pay_remitter: '', pay_reference: 'INV {invoice} PO {job}',
       pay_balance: false, pay_folder: 'Paid', pay_move_email: true,
+      // 'manual': you pay in your own banking, then press "I've paid it" (Job Costs never touches the bank); 'file': a bank payment file to upload
+      pay_mode: 'manual',
     },
     getSettings(accountUUID) {
       const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(accountUUID ?? '');

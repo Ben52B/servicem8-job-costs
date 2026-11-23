@@ -211,22 +211,27 @@ function render() {
   <div class="panel"><h2>ServiceM8 job diary</h2>
     <label class="switch"><input type="checkbox" id="ds" ${st.diary_summary ? 'checked' : ''}><span><b>Keep a Job Costs summary in each job's diary</b><br>
       <span class="muted" style="font-size:12.5px">One note per job, kept up to date: costs, paid, still to pay and profit – so everyone sees it in the diary, on the desktop and in the app.</span></span></label></div>
-  <div class="panel"><h2>Paying suppliers</h2><div class="hint">💳 <b>Pay</b> makes your bank's payment file for the invoices you choose. Upload it in your business online banking
-    (Westpac: <i>Payments → Import file</i>; ANZ: <i>Payments → File import</i>) and approve it there – the money only moves once you approve it at the bank.</div>
+  <div class="panel"><h2>Paying suppliers</h2><div class="hint">💳 <b>Pay</b> on an invoice shows everything to pay it in your own banking app – BSB, account, amount and reference, each with a Copy button –
+    after checking the bank details against the invoice and against what you paid that supplier before. Press <b>✓ I've paid it</b> and it's marked paid and its email filed. Job Costs never connects to your bank.</div>
+    <div class="grid2">
+      <div><label class="f" for="pref">Reference</label><input type="text" id="pref" value="${esc(st.pay_reference)}" placeholder="INV {invoice} PO {job}">
+        <div class="hint">{invoice} = the invoice number, {job} = the ServiceM8 job number. Kept to 18 characters (what banks allow), dropping spaces if needed.</div></div>
+      <div><label class="f" for="prem">From (what the supplier sees)</label><input type="text" id="prem" maxlength="16" value="${esc(st.pay_remitter)}" placeholder="e.g. Alpha GD"></div>
+      <div><label class="f" for="pfold">Email folder for paid invoices</label><input type="text" id="pfold" value="${esc(st.pay_folder)}" placeholder="Paid">
+        <div class="hint">Each email goes into the supplier's folder under it (made if it isn't there).</div></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="pmove" ${st.pay_move_email !== false ? 'checked' : ''}><span><b>Mark the invoice email read and file it when I pay</b></span></label>
+    <details style="margin-top:8px"${st.pay_mode === 'file' ? ' open' : ''}><summary class="hint" style="cursor:pointer">Bank payment file (optional – only if you want to upload payments to your bank instead)</summary>
+    <label class="switch"><input type="checkbox" id="pfile" ${st.pay_mode === 'file' ? 'checked' : ''}><span><b>Make a bank payment file (ABA) instead</b><br><span class="muted" style="font-size:12.5px">To upload in business online banking and approve there. Needs the bank's Direct Entry user ID.</span></span></label>
     <div class="grid2">
       <div><label class="f" for="pbank">Your bank</label><select id="pbank">${Object.entries(data.payBanks || {}).map(([k, v]) => `<option value="${k}" ${k === st.pay_bank ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
       <div><label class="f" for="papca">Direct Entry user ID (APCA)</label><input type="text" id="papca" inputmode="numeric" maxlength="6" value="${esc(st.pay_apca_id)}" placeholder="6 digits, from your bank"></div>
       <div><label class="f" for="pbsb">Your BSB</label><input type="text" id="pbsb" inputmode="numeric" value="${esc(st.pay_bsb)}" placeholder="e.g. 032-000"></div>
       <div><label class="f" for="pacc">Your account number</label><input type="text" id="pacc" inputmode="numeric" value="${esc(st.pay_account)}"></div>
       <div><label class="f" for="pname">Account name</label><input type="text" id="pname" maxlength="26" value="${esc(st.pay_account_name)}" placeholder="${esc(st.business_name || 'as the bank has it')}"></div>
-      <div><label class="f" for="prem">From (what the supplier sees)</label><input type="text" id="prem" maxlength="16" value="${esc(st.pay_remitter)}" placeholder="e.g. Alpha GD"></div>
-      <div><label class="f" for="pref">Reference</label><input type="text" id="pref" value="${esc(st.pay_reference)}" placeholder="INV {invoice} PO {job}">
-        <div class="hint">{invoice} = the invoice number, {job} = the ServiceM8 job number. The bank allows 18 characters, so spaces are dropped if needed.</div></div>
-      <div><label class="f" for="pfold">Email folder for paid invoices</label><input type="text" id="pfold" value="${esc(st.pay_folder)}" placeholder="Paid">
-        <div class="hint">Each email goes into the supplier's folder under it (made if it isn't there).</div></div>
     </div>
-    <label class="switch"><input type="checkbox" id="pmove" ${st.pay_move_email !== false ? 'checked' : ''}><span><b>Mark the invoice email read and file it when I pay</b></span></label>
     <label class="switch"><input type="checkbox" id="pbal" ${st.pay_balance ? 'checked' : ''}><span><b>Add a balancing line to the file</b><br><span class="muted" style="font-size:12.5px">Only if your bank asks for a "self-balancing" file.</span></span></label>
+    </details>
     ${(data.payees || []).length ? `<div class="hint" style="margin-top:10px">Suppliers' bank details (every invoice is checked against these):</div>${data.payees.map((p) => `<div class="mb" style="display:flex;gap:8px;align-items:center">
       <span style="flex:1"><b>${esc(p.supplier)}</b> <span class="muted">${esc(p.bsb)} ${esc(p.account_number)} · ${esc(p.account_name)}</span></span><button data-payee-del="${p.id}">Remove</button></div>`).join('')}` : ''}</div>
   <div class="panel"><h2>This month</h2><div class="hint">How much Job Costs has read and checked for you this month.</div>
@@ -252,7 +257,7 @@ document.addEventListener('click', async (e) => {
       check_days: [...document.querySelectorAll('[data-day]')].filter((x) => x.checked).map((x) => x.dataset.day),
       check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked,
       pay_bank: $('#pbank').value, pay_apca_id: $('#papca').value, pay_bsb: $('#pbsb').value, pay_account: $('#pacc').value, pay_account_name: $('#pname').value,
-      pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_balance: $('#pbal').checked }) });
+      pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_balance: $('#pbal').checked, pay_mode: $('#pfile').checked ? 'file' : 'manual' }) });
     const turnedOn = r.settings.diary_summary && !data.settings.diary_summary;
     data.settings = r.settings; render();
     const msg = turnedOn ? '✓ Saved – every open job with costs gets its Job Costs note in the diary within a couple of minutes' : '✓ Saved';

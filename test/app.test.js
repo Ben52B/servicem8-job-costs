@@ -1964,12 +1964,13 @@ test('paying: the confirm details, bank details checked against the invoice, the
   };
   const a = bill('Jacksyl Pty Ltd', 'J-1001', 341, { payment_bsb: '033 123', payment_account_number: '9876 5432', payment_account_name: 'JACKSYL PTY LTD' });
   repo.assignWhole(a, 'pay-job', {});
-  // the business's own bank details first
+  // the bank file needs the business's own bank details first
+  await api(t, '/settings', { method: 'PUT', json: { pay_mode: 'file' } });
   let pv = await json(t, `/pay/preview?ids=${a}`);
   assert.deepEqual(pv.payer.missing, ['your BSB', 'your account number', 'your account name', 'your bank’s Direct Entry user ID']);
   assert.equal((await post(t, '/pay', { ids: [a] })).status, 400);
   assert.equal((await api(t, '/settings', { method: 'PUT', json: { pay_bsb: '12345' } })).status, 400);
-  await api(t, '/settings', { method: 'PUT', json: { pay_bank: 'WBC', pay_bsb: '032000', pay_account: '123456', pay_account_name: 'Alpha Garage Doors', pay_apca_id: '301500', pay_remitter: 'Alpha GD' } });
+  await api(t, '/settings', { method: 'PUT', json: { pay_mode: 'file', pay_bank: 'WBC', pay_bsb: '032000', pay_account: '123456', pay_account_name: 'Alpha Garage Doors', pay_apca_id: '301500', pay_remitter: 'Alpha GD' } });
   // the plan: amount from the invoice, reference from the template, the account from the invoice (first time)
   pv = await json(t, `/pay/preview?ids=${a}`);
   assert.deepEqual(pv.payer.missing, []);
@@ -2046,6 +2047,23 @@ test('paying: the confirm details, bank details checked against the invoice, the
   // the reference fits the bank's 18 characters
   assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '12345', job: '208118' }), 'INV12345 PO208118');
   assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: 'S667', job: '' }), 'INV S667');
+});
+
+test('paying in your own banking (“I’ve paid it”): no bank details of your own needed, no file; the same checks; marked paid; the email filed', async () => {
+  JOBS['man-job'] = { jobNumber: '209260', jobTitle: '14 Manual St' };
+  const t = await openCard('man-job', 'acc-man');
+  const inv = repo.createInvoice({ accountUUID: 'acc-man', source: 'outlook', emailSubject: 'Invoice H-1', emailMessageId: '<H-1@x>' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Smart Hire', invoice_number: 'H-1', total: 310, tax: 0, subtotal: 310, items: [{ description: 'Saw', line_total: 310 }],
+    payment_bsb: '062-001', payment_account_number: '10203040', payment_account_name: 'Smart Hire' });
+  repo.assignWhole(inv.id, 'man-job', {});
+  const pv = await json(t, `/pay/preview?ids=${inv.id}`);
+  assert.deepEqual([pv.mode, pv.payer.missing, pv.plans[0].blocked, pv.plans[0].check, pv.plans[0].reference], ['manual', [], null, 'match', 'INV H-1 PO 209260']);
+  const r = await post(t, '/pay', { ids: [inv.id], confirm: { [inv.id]: { amount_cents: 31000, bsb: '062-001', account_number: '10203040' } } }).then((x) => x.json());
+  assert.equal(r.total, 310);
+  assert.equal((await summary(t)).invoices.find((i) => i.id === inv.id).payment_state, 'paid');
+  assert.equal((await json(t, `/pay/${r.id}`)).has_file, false);
+  assert.equal((await api(t, `/pay/${r.id}/file`)).status, 404, 'no bank file');
+  assert.equal(repo.getPayee('acc-man', 'Smart Hire').account_number, '10203040', 'their details are remembered for checking the next invoice');
 });
 
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {
