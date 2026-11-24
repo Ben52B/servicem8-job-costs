@@ -80,8 +80,12 @@
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
 
   /* columns */
-  .cols { display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(300px, 32%); gap: 14px; align-items: start; }
-  .list-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(420px, 48%); gap: 16px; align-items: start; }
+  /* the breakdown of the chosen invoice opens under its row in the list */
+  #list > .detail { margin: -4px 0 12px; border: 2px solid var(--brand); border-top: 0; border-radius: 0 0 16px 16px; min-height: 0; padding-top: 8px; }
+  #list .inv.sel { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; }
+  .list-head select { font: inherit; font-size: 12.5px; font-weight: 600; border: 1px solid #d6e2de; border-radius: 9px; padding: 4px 6px; background: #fff; color: var(--ink); }
+  .list-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .list-head b { font-size: 14px; }
   .add-btn { width: 100%; justify-content: center; padding: 11px; font-size: 14px; margin-bottom: 12px; }
   .inv { padding: 10px 12px; margin-bottom: 8px; cursor: pointer; border-radius: 14px; border: 1px solid var(--line); background: #fff; box-shadow: var(--shadow); }
@@ -143,7 +147,7 @@
   .edit-form .btns { display: flex; gap: 6px; }
   .empty { text-align: center; color: var(--muted); padding: 40px 14px; }
 
-  .preview { height: calc(100vh - 230px); min-height: 440px; display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 10px; background: #eef3f1; }
+  .preview { height: calc(100vh - 20px); min-height: 520px; display: flex; flex-direction: column; overflow: hidden; position: sticky; top: 10px; background: #eef3f1; }
   .preview .p-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); background: #fff; }
   .preview .p-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .preview iframe { flex: 1; border: 0; width: 100%; background: #525659; }
@@ -187,7 +191,7 @@
   .only-sm { display: none !important; }
 
   @media (max-width: 1150px) {
-    .cols { grid-template-columns: 260px minmax(0, 1fr); }
+    .cols { grid-template-columns: minmax(0, 1fr); }
     .preview { display: none; }
     .only-sm { display: inline-flex !important; }
   }
@@ -252,13 +256,15 @@
   <section class="cols">
     <aside id="aside">
       <button class="primary add-btn" data-add>＋ Add costs</button>
-      <div class="list-head"><b id="listTitle">Costs on this job</b><span class="muted" id="listToPay"></span></div>
+      <div class="list-head"><b id="listTitle">Costs on this job</b><span class="muted" id="listToPay"></span><span style="flex:1"></span>
+        <select id="listSort" title="Sort the list"><option value="added">Sort: as added</option><option value="date">Newest invoice first</option><option value="date_asc">Oldest invoice first</option>
+          <option value="supplier">Supplier A–Z</option><option value="amount">Amount (high to low)</option><option value="unpaid">Unpaid first</option><option value="due">Due date (soonest)</option></select></div>
       <div id="list"></div>
+      <main class="card detail" id="detail"></main>
       <div class="dropzone-hint">or drop invoice files here</div>
       <div class="emailbox" id="emailBox"></div>
       <input type="file" id="attachInput" accept="application/pdf,image/*" hidden>
     </aside>
-    <main class="card detail" id="detail"></main>
     <section class="card preview" id="preview"></section>
   </section>
 </div>
@@ -361,7 +367,7 @@ function render() {
   // the ServiceM8 job card of this job (ServiceM8's own link for a job)
   const sm8 = $('#sm8Job'); sm8.hidden = !j.job_uuid; if (j.job_uuid) sm8.href = 'https://go.servicem8.com/openjob/' + encodeURIComponent(j.job_uuid);
   showInboxCount(state.data.inboxCount);
-  const typingIn = (el) => el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select');
+
   const isStock = !!state.data.stock;
   $('#stockToggle').checked = isStock;
   $('#stockSwitch').classList.toggle('on', isStock);
@@ -542,10 +548,30 @@ function statusChip(inv) {
   return { paid: '<span class="chip c-paid">Paid</span>', part: '<span class="chip c-part">Part paid</span>', unpaid: '<span class="chip c-unpaid">Unpaid</span>' }[inv.payment_state];
 }
 
+// sorting the list (remembered on this device)
+let listSort = 'added';
+try { listSort = localStorage.getItem('cardSort') || 'added'; } catch (e) { /* fine */ }
+const LIST_SORTS = {
+  added: null,
+  date: (a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')),
+  date_asc: (a, b) => (a.invoice_date ? 0 : 1) - (b.invoice_date ? 0 : 1) || String(a.invoice_date || '').localeCompare(String(b.invoice_date || '')),
+  supplier: (a, b) => String(a.supplier || a.file_name || '').localeCompare(String(b.supplier || b.file_name || ''), 'en', { sensitivity: 'base' }),
+  amount: (a, b) => (Number(b.job_total) || 0) - (Number(a.job_total) || 0),
+  unpaid: (a, b) => (a.payment_state === 'paid' ? 1 : 0) - (b.payment_state === 'paid' ? 1 : 0),
+  due: (a, b) => ((a.payment_state !== 'paid' && a.due_date) ? 0 : 1) - ((b.payment_state !== 'paid' && b.due_date) ? 0 : 1) || String(a.due_date || '').localeCompare(String(b.due_date || '')),
+};
+const detailEl = document.getElementById('detail');
+// someone is typing (or choosing) in this part of the page: don't redraw it under them
+const typingIn = (el) => !!el && el.contains(document.activeElement) && document.activeElement.matches('input[type=text], input:not([type]), select, textarea');
 function renderList() {
   const d = state.data;
   $('#listToPay').textContent = d.totals.outstanding > 0.004 ? `${money(d.totals.outstanding)} to pay` : '';
-  $('#list').innerHTML = d.invoices.length ? d.invoices.map((inv) => {
+  // while typing in the breakdown, leave the list (and the breakdown's place in it) alone
+  if (detailEl.parentElement && detailEl.parentElement.id === 'list' && typingIn(detailEl)) return;
+  $('#aside').appendChild(detailEl); // out of the list while it's redrawn
+  const invoices = LIST_SORTS[listSort] ? d.invoices.slice().sort(LIST_SORTS[listSort]) : d.invoices;
+  $('#listSort').value = listSort;
+  $('#list').innerHTML = invoices.length ? invoices.map((inv) => {
     const ready = inv.status === 'ready';
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
@@ -553,6 +579,9 @@ function renderList() {
       <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${ready && !state.data.stock ? dueChip(inv.due_date, inv.payment_state !== 'paid') : ''}${statusChip(inv)}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
+  // the breakdown goes right under the chosen invoice (hidden when none is chosen)
+  const selRow = $('#list .inv.sel');
+  if (selRow) { selRow.after(detailEl); detailEl.hidden = false; } else detailEl.hidden = !!d.invoices.length;
   const o = state.outlook;
   const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
   const outlookHtml = !o || !o.available ? ''
@@ -1082,6 +1111,11 @@ document.addEventListener('click', async (e) => {
   } catch (x) { toast(x.message); if (!state.modal) load(); }
 });
 
+document.addEventListener('change', (e) => {
+  if (e.target.id !== 'listSort') return;
+  listSort = e.target.value; try { localStorage.setItem('cardSort', listSort); } catch (x) { /* fine */ }
+  renderList();
+});
 document.addEventListener('input', (e) => {
   if (e.target.id === 'pickSearch') { state.modal.search = e.target.value; return renderModal(); }
   if (e.target.closest('#manualForm')) {
