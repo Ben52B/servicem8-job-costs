@@ -1970,20 +1970,80 @@ window.addEventListener('message', function (e) {
     // the first payment to a supplier saves their bank details (from then on they're checked against every invoice)
     for (const p of plans) if (p.payee.from === 'invoice') repo.savePayee(req.account, p.supplier, p.payee);
     const id = repo.recordPayment(req.account, { aba: file, lines });
-    if (st.pay_move_email) fileEmails(req.account, id).catch((e) => console.error(`Filing paid emails: ${e.message}`));
+    const chosen = {};
+    for (const [k, v] of Object.entries(req.body?.folders || {})) if (v && v.id) chosen[Number(k)] = { id: String(v.id), path: String(v.path || '').slice(0, 300) };
+    if (st.pay_move_email) fileEmails(req.account, id, chosen).catch((e) => console.error(`Filing paid emails: ${e.message}`));
     else for (const l of lines) repo.setPaymentEmail(id, l.invoice_id, 'off');
     res.status(201).json({ ok: true, id, total: lines.reduce((s, l) => s + l.amount_cents, 0) / 100, count: lines.length });
   });
+  // ---- choosing the email folder ----
+  /** The mailbox an invoice's email is in: { kind: 'outlook' | 'imap', token | client } or a reason it can't be filed. */
+  async function mailboxOf(accountUUID, inv) {
+    if (!inv.email_message_id && !inv.email_subject) return { none: 'Not from an email' };
+    const out = repo.getOutlook(accountUUID); const im = repo.getImap(accountUUID);
+    if (inv.source === 'outlook' && out) {
+      if (!out.can_write) return { none: 'Reconnect Outlook in ⚙ Settings and allow filing' };
+      return { kind: 'outlook', token: await outlook.tokenFor(out, { repo, config, api: outlookApi }) };
+    }
+    if (inv.source === 'mailbox' && im) return { kind: 'imap', make: () => imapClient({ host: im.host, port: im.port, user: im.email, password: unseal(im.password_enc) }) };
+    return { none: inv.source === 'email' ? 'Came to the Job Costs email address' : 'Its mailbox isn\u2019t connected' };
+  }
+  // where each invoice's email will go: { [id]: { status: 'found' | 'new' | 'no_folder' | 'none', path, note } }
+  api.get('/pay/mailplan', async (req, res) => {
+    const st = settingsFor(req.account);
+    const out = {};
+    let outlookToken = null;
+    for (const inv of payInvoices(req, String(req.query.ids || '').split(',')).slice(0, 30)) {
+      try {
+        const saved = repo.getSupplierFolder(req.account, inv.supplier);
+        const mb = await mailboxOf(req.account, inv);
+        if (mb.none) { out[inv.id] = { status: 'none', note: mb.none }; continue; }
+        if (saved) { out[inv.id] = { status: 'found', path: saved.path, chosen: true }; continue; }
+        if (mb.kind === 'outlook') {
+          outlookToken = outlookToken || mb.token;
+          const plan = await mailFiler.planOutlook(outlookToken, { root: st.pay_folder || 'Inbox/Paid', supplier: inv.supplier });
+          out[inv.id] = plan.status === 'no_folder' ? { status: 'no_folder', note: plan.note } : { status: plan.status, path: plan.status === 'found' ? plan.dest.path : plan.path };
+        } else out[inv.id] = { status: 'new', path: `${st.pay_folder || 'Paid'} / ${mailfile.folderName(inv.supplier)}` };
+      } catch (e) { out[inv.id] = { status: 'error', note: String(e.message).slice(0, 160) }; }
+    }
+    res.json({ plans: out });
+  });
+  // browse the mailbox's folders (Outlook: one level at a time; IMAP: all at once)
+  api.get('/pay/mailfolders', async (req, res) => {
+    const inv = payInvoices(req, [req.query.invoice])[0];
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    try {
+      const mb = await mailboxOf(req.account, inv);
+      if (mb.none) return res.status(400).json({ error: mb.none });
+      if (mb.kind === 'outlook') return res.json({ folders: await mailfile.outlookApi.folders(mb.token, req.query.parent ? String(req.query.parent) : null), nested: true });
+      res.json({ folders: await mailfile.listImapFolders(mb.make()), nested: false });
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
+  // make a folder (Outlook), e.g. the supplier's under Paid
+  api.post('/pay/mailfolders', async (req, res) => {
+    const inv = payInvoices(req, [req.body?.invoice])[0];
+    const name = mailfile.folderName(req.body?.name);
+    if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+    try {
+      const mb = await mailboxOf(req.account, inv);
+      if (mb.kind !== 'outlook') return res.status(400).json({ error: mb.none || 'Make the folder in your mailbox, then choose it' });
+      res.status(201).json(await mailfile.outlookApi.createFolder(mb.token, req.body?.parent ? String(req.body.parent) : null, name));
+    } catch (e) { res.status(502).json({ error: e.message }); }
+  });
   /** After paying: each invoice's email marked read and moved to Paid / <supplier>. Results show in the payment. */
-  async function fileEmails(accountUUID, paymentId) {
+  // folders: { [invoiceId]: { id, path } } chosen by hand (remembered for the supplier); a chosen one is moved even if filed already
+  async function fileEmails(accountUUID, paymentId, folders = {}) {
     const p = repo.getPayment(accountUUID, paymentId);
     if (!p) return;
     const st = settingsFor(accountUUID);
     const out = repo.getOutlook(accountUUID); const im = repo.getImap(accountUUID);
     for (const item of p.items) {
-      if (item.email_status === 'done') continue; // filed already (e.g. "try again" after one failed)
+      const chosen = folders[item.invoice_id] || null;
+      if (item.email_status === 'done' && !chosen) continue; // filed already (e.g. "try again" after one failed)
       const inv = repo.getInvoice(item.invoice_id);
-      const what = { messageId: inv.email_message_id, subject: inv.email_subject, from: inv.email_from, root: st.pay_folder || 'Paid', supplier: inv.supplier };
+      if (chosen) repo.saveSupplierFolder(accountUUID, inv.supplier, chosen);
+      const what = { messageId: inv.email_message_id, subject: inv.email_subject, from: inv.email_from, root: st.pay_folder || 'Inbox/Paid', supplier: inv.supplier,
+        folder: chosen || repo.getSupplierFolder(accountUUID, inv.supplier) };
       try {
         if (!inv.email_message_id && !inv.email_subject) { repo.setPaymentEmail(p.id, inv.id, 'no_email', 'Not from an email (uploaded or typed in)'); continue; }
         let r;
@@ -1994,6 +2054,8 @@ window.addEventListener('message', function (e) {
           r = await mailFiler.fileInImap(imapClient({ host: im.host, port: im.port, user: im.email, password: unseal(im.password_enc) }), what);
         } else { repo.setPaymentEmail(p.id, inv.id, 'no_mailbox', inv.source === 'email' ? 'It came to the Job Costs email address – nothing to file' : 'Its mailbox isn\u2019t connected'); continue; }
         repo.setPaymentEmail(p.id, inv.id, r.status, r.folder || (r.status === 'not_found' ? 'The email wasn\u2019t found (moved or deleted already?)' : null));
+        // the supplier's folder, once known, is remembered (found automatically or chosen)
+        if (r.status === 'done' && r.folderId && !repo.getSupplierFolder(accountUUID, inv.supplier)) repo.saveSupplierFolder(accountUUID, inv.supplier, { id: r.folderId, path: r.folder });
       } catch (e) {
         repo.setPaymentEmail(p.id, inv.id, 'error', String(e.message).slice(0, 200));
       }
@@ -2016,7 +2078,9 @@ window.addEventListener('message', function (e) {
   api.post('/pay/:id/email', async (req, res) => {
     const p = repo.getPayment(req.account, req.params.id);
     if (!p || p.cancelled_at) return res.status(404).json({ error: 'Not found' });
-    await fileEmails(req.account, p.id);
+    // { invoice_id, folder: { id, path } }: put it in this folder (and remember it for the supplier)
+    const f = req.body?.folder && req.body.folder.id ? { id: String(req.body.folder.id), path: String(req.body.folder.path || '').slice(0, 300) } : null;
+    await fileEmails(req.account, p.id, f && req.body?.invoice_id ? { [Number(req.body.invoice_id)]: f } : {});
     const { aba: _f, ...rest } = repo.getPayment(req.account, p.id);
     res.json(rest);
   });

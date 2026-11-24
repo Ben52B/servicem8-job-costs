@@ -680,6 +680,7 @@ function renderDetail() {
     const okMail = pe.status === 'done';
     h += `<div class="note ${okMail ? 'info' : ''}" style="margin-top:8px;${okMail ? '' : 'background:#fef3c7;border-color:#fde68a'}">📧 ${okMail ? `Email marked read and moved to <b>${esc(pe.note || '')}</b>`
       : pe.status === 'waiting' ? 'Filing the email…' : `Email not filed: ${esc(pe.note || pe.status)}`}
+      ${pe.status === 'waiting' ? '' : ` <button class="small" data-pick-folder="${pe.payment_id}" data-inv="${inv.id}" data-sup="${esc(inv.supplier || '')}">📁 ${okMail ? 'Move it' : 'Choose folder'}</button>`}
       ${okMail || pe.status === 'waiting' ? '' : ` <button class="small" data-refile="${pe.payment_id}">↻ Try again</button>`}</div>`;
   }
   if (ready) h += priceCheckBox(inv);
@@ -1056,6 +1057,12 @@ document.addEventListener('click', async (e) => {
       t.disabled = true; t.textContent = 'Adding…';
       const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
       closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
+    }
+    if (ds.pickFolder) {
+      const f = await browseMailFolders(Number(ds.inv), ds.sup);
+      if (!f) return;
+      const r = await post(`/pay/${ds.pickFolder}/email`, { invoice_id: Number(ds.inv), folder: f }); const it = (r.items || []).find((x) => String(x.invoice_id) === ds.inv);
+      toast(it && it.email_status === 'done' ? `Moved to ${it.email_note} – ${ds.sup || 'this supplier'}'s emails go there from now on` : `Not filed: ${(it && it.email_note) || 'see the note'}`); return load();
     }
     if (ds.refile) { t.disabled = true; t.textContent = 'Filing…'; const r = await post(`/pay/${ds.refile}/email`, {}); const it = (r.items || [])[0];
       toast(it && it.email_status === 'done' ? 'Email filed' : `Not filed: ${(it && it.email_note) || 'see the note'}`); return load(); }

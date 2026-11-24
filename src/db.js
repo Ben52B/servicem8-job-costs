@@ -390,6 +390,9 @@ function migrateColumns(db) {
     total_cents INTEGER NOT NULL, count INTEGER NOT NULL, aba TEXT NOT NULL, cancelled_at TEXT)`);
   db.exec(`CREATE TABLE IF NOT EXISTS payment_items (payment_id INTEGER NOT NULL, invoice_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, reference TEXT NOT NULL,
     bsb TEXT NOT NULL, account_number TEXT NOT NULL, account_name TEXT NOT NULL, email_status TEXT, email_note TEXT, PRIMARY KEY (payment_id, invoice_id))`);
+  // the email folder chosen by hand for a supplier's paid invoices (wins over finding Paid / <supplier>)
+  db.exec(`CREATE TABLE IF NOT EXISTS supplier_folders (account_key TEXT NOT NULL, supplier TEXT NOT NULL, folder_id TEXT NOT NULL, folder_path TEXT,
+    PRIMARY KEY (account_key, supplier))`);
   // Outlook connections that may also mark emails read and move them (asked for when connecting)
   if (!db.prepare('PRAGMA table_info(outlook)').all().some((x) => x.name === 'can_write')) db.exec('ALTER TABLE outlook ADD COLUMN can_write INTEGER NOT NULL DEFAULT 0');
   // the emails already brought in from Outlook: their message id, from what was recorded on import
@@ -1699,6 +1702,17 @@ function createRepo(db, dataDir) {
       if (p) db.prepare("UPDATE payees SET bsb = ?, account_number = ?, account_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(bsb, account_number, account_name, p.id);
       else db.prepare('INSERT INTO payees (account_key, supplier, bsb, account_number, account_name) VALUES (?, ?, ?, ?, ?)').run(accountUUID ?? '', supplier, bsb, account_number, account_name);
     },
+    getSupplierFolder(accountUUID, supplier) {
+      if (!supplier) return null;
+      const r = db.prepare('SELECT * FROM supplier_folders WHERE account_key = ?').all(accountUUID ?? '').find((f) => sameSupplier(supplierKey(f.supplier), supplierKey(supplier)));
+      return r ? { id: r.folder_id, path: r.folder_path } : null;
+    },
+    saveSupplierFolder(accountUUID, supplier, { id, path }) {
+      if (!supplier || !id) return;
+      const old = db.prepare('SELECT supplier FROM supplier_folders WHERE account_key = ?').all(accountUUID ?? '').find((f) => sameSupplier(supplierKey(f.supplier), supplierKey(supplier)));
+      db.prepare(`INSERT INTO supplier_folders (account_key, supplier, folder_id, folder_path) VALUES (?, ?, ?, ?)
+        ON CONFLICT(account_key, supplier) DO UPDATE SET folder_id = excluded.folder_id, folder_path = excluded.folder_path`).run(accountUUID ?? '', old ? old.supplier : supplier, String(id), path ? String(path).slice(0, 300) : null);
+    },
     listPayees(accountUUID) { return db.prepare('SELECT * FROM payees WHERE account_key = ? ORDER BY supplier').all(accountUUID ?? ''); },
     deletePayee(accountUUID, id) { return db.prepare('DELETE FROM payees WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
     /** Save a payment (the bank file and its lines) and mark its invoices paid – all or nothing. */
@@ -1866,7 +1880,7 @@ function createRepo(db, dataDir) {
       timezone: 'Australia/Sydney', check_days: ['mon', 'tue', 'wed', 'thu', 'fri'], check_from: 6, check_to: 18, diary_summary: false, onboarded: false,
       // paying suppliers: the business's own bank account and how payments are described
       pay_bank: 'WBC', pay_bsb: '', pay_account: '', pay_account_name: '', pay_apca_id: '', pay_remitter: '', pay_reference: 'INV {invoice} PO {job}',
-      pay_balance: false, pay_folder: 'Paid', pay_move_email: true,
+      pay_balance: false, pay_folder: 'Inbox/Paid', pay_move_email: true,
       // 'manual': you pay in your own banking, then press "I've paid it" (Job Costs never touches the bank); 'file': a bank payment file to upload
       pay_mode: 'manual',
     },

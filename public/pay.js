@@ -21,6 +21,13 @@
   .pay .cp { display: flex; gap: 8px; align-items: center; } .pay .cp span { flex: 1; min-width: 0; }
   .pay .cpb { padding: 3px 10px; font-size: 12px; border-radius: 8px; flex: none; } .pay .cpb.done { background: #e8f8ef; border-color: #a7e3c4; }
   .pay .p-row.paid { border-color: #a7e3c4; background: #f3fbf7; }
+  .pay .fold { margin-top: 8px; font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .pay .fold b { word-break: break-word; }
+  .fb-bg { position: fixed; inset: 0; background: rgba(15, 30, 26, .45); display: flex; align-items: flex-start; justify-content: center; padding: 40px 12px; z-index: 90; overflow-y: auto; }
+  .fb { background: #fff; border-radius: 16px; width: min(460px, 100%); padding: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.3); font-size: 14px; }
+  .fb h4 { margin: 0 0 4px; font-size: 16px; } .fb .crumb { color: #6b8a82; font-size: 12.5px; margin-bottom: 8px; word-break: break-word; }
+  .fb .row { display: flex; gap: 6px; align-items: center; padding: 7px 0; border-top: 1px solid #eef3f1; } .fb .row span { flex: 1; min-width: 0; word-break: break-word; }
+  .fb button { font: inherit; font-weight: 700; border: 1px solid #d6e2de; background: #fff; border-radius: 9px; padding: 5px 11px; cursor: pointer; }
+  .fb .go { background: #10b981; border-color: #10b981; color: #fff; } .fb .fb-foot { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; } .fb .fb-foot .sp { flex: 1; }
   .pay ol { margin: 8px 0 0 18px; padding: 0; } .pay li { margin: 4px 0; }
   @media (max-width: 560px) { .pay dl { grid-template-columns: 1fr; } .pay dt { margin-top: 4px; } .pay .p-form { grid-template-columns: 1fr; } }`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
@@ -38,6 +45,48 @@
   }
   const acct = (p) => `${esc(p.bsb)} ${esc(p.account_number)}`;
 
+  /** Browse the mailbox's folders and pick one for an invoice's email. Resolves { id, path } or null. */
+  window.browseMailFolders = function browseMailFolders(invoiceId, supplier) {
+    return new Promise((resolve) => {
+      const bg = document.createElement('div'); bg.className = 'fb-bg';
+      bg.innerHTML = '<div class="fb"><div class="crumb">Opening your folders…</div></div>';
+      document.body.appendChild(bg);
+      const box = bg.firstChild;
+      const trail = [{ id: null, name: 'Mailbox' }];
+      let list = []; let nested = true;
+      const done = (v) => { bg.remove(); resolve(v); };
+      const pathOf = (f) => trail.slice(1).map((t) => t.name).concat(f ? [f.name] : []).join(' / ');
+      async function show() {
+        const here = trail[trail.length - 1];
+        box.innerHTML = '<div class="crumb">Loading…</div>';
+        try { const r = await call(`/pay/mailfolders?invoice=${invoiceId}${here.id ? '&parent=' + encodeURIComponent(here.id) : ''}`); list = r.folders || []; nested = r.nested; }
+        catch (e) { box.innerHTML = `<div class="bad">${esc(e.message)}</div><div class="fb-foot"><span class="sp"></span><button data-fx>Close</button></div>`; return; }
+        box.innerHTML = `<h4>📁 Where should ${esc(supplier || 'this')}'s paid invoices go?</h4>
+          <div class="crumb">${trail.length > 1 ? `<button data-fback>‹ Back</button> ` : ''}${esc(trail.map((t) => t.name).join(' / '))}</div>
+          ${list.length ? list.map((f, i) => `<div class="row"><span>📁 ${esc(f.name)}</span>${nested && f.children ? `<button data-fopen="${i}">Open ›</button>` : ''}<button class="go" data-fpick="${i}">Choose</button></div>`).join('') : '<div class="crumb">No folders here.</div>'}
+          <div class="fb-foot">${nested && here.id && supplier ? `<button data-fnew>＋ Make "${esc(String(supplier).replace(/\b(pty\.?|ltd\.?|limited|p\/l)\b/gi, '').replace(/\s+/g, ' ').trim())}" folder here</button>` : ''}${nested && here.id ? `<button data-fhere>Choose ${esc(here.name)}</button>` : ''}<span class="sp"></span><button data-fx>Cancel</button></div>`;
+      }
+      box.addEventListener('click', async (e) => {
+        const b = e.target.closest('button'); if (!b) return;
+        const d = b.dataset;
+        try {
+          if (d.fx !== undefined) return done(null);
+          if (d.fback !== undefined) { trail.pop(); return show(); }
+          if (d.fopen) { const f = list[Number(d.fopen)]; trail.push({ id: f.id, name: f.name }); return show(); }
+          if (d.fpick) { const f = list[Number(d.fpick)]; return done({ id: f.id, path: nested ? pathOf(f) : f.name }); }
+          if (d.fhere !== undefined) { const h = trail[trail.length - 1]; return done({ id: h.id, path: trail.slice(1).map((t) => t.name).join(' / ') }); }
+          if (d.fnew !== undefined) {
+            b.disabled = true;
+            const f = await call('/pay/mailfolders', { method: 'POST', body: JSON.stringify({ invoice: invoiceId, parent: trail[trail.length - 1].id, name: supplier }) });
+            return done({ id: f.id, path: pathOf(f) });
+          }
+        } catch (x) { const t = document.createElement('div'); t.className = 'bad'; t.textContent = x.message; box.appendChild(t); b.disabled = false; }
+      });
+      bg.addEventListener('click', (e) => { if (e.target === bg) done(null); });
+      show();
+    });
+  };
+
   window.openPay = async function openPay(ids, { onDone } = {}) {
     const bg = document.createElement('div'); bg.className = 'pay-bg';
     bg.innerHTML = '<div class="pay"><div class="muted">Getting the details…</div></div>';
@@ -45,6 +94,7 @@
     const box = bg.firstChild;
     let data = null; let busy = false; let paid = null;
     const paidNow = new Map(); // invoice id → payment (marked "I've paid it" in this box)
+    let mailPlan = null; const chosenFolder = {}; // where each email goes; folders chosen in this box
     // copy a detail for pasting into the banking app (works inside ServiceM8's window too)
     async function copy(text) {
       try { await navigator.clipboard.writeText(text); return true; } catch (e) {
@@ -56,8 +106,22 @@
     const close = () => { bg.remove(); if (paid && onDone) onDone(); };
     bg.addEventListener('click', (e) => { if (e.target === bg && !busy) close(); });
 
+    async function loadMailPlan() {
+      if (!data || !data.moveEmail) return;
+      try { mailPlan = (await call('/pay/mailplan?ids=' + ids.join(','))).plans; } catch (e) { mailPlan = {}; }
+      if (bg.isConnected) render();
+    }
+    function folderHtml(p) {
+      if (!data.moveEmail) return '';
+      const c = chosenFolder[p.id]; const m = mailPlan && mailPlan[p.id];
+      if (c) return `<div class="fold">📁 Email goes to: <b>${esc(c.path)}</b> <button class="cpb" data-folder="${p.id}">Change</button></div>`;
+      if (!mailPlan) return '<div class="fold muted">📁 Finding where the email goes…</div>';
+      if (!m || m.status === 'none') return m ? `<div class="fold muted">📁 Email: ${esc(m.note)}</div>` : '';
+      if (m.status === 'no_folder' || m.status === 'error') return `<div class="fold warn">📁 ${esc(m.note)} <button class="cpb" data-folder="${p.id}">Choose folder</button></div>`;
+      return `<div class="fold">📁 Email goes to: <b>${esc(m.path)}</b>${m.status === 'new' ? ' <span class="muted">(new folder)</span>' : ''} <button class="cpb" data-folder="${p.id}">Change</button></div>`;
+    }
     async function load() {
-      try { data = await call('/pay/preview?ids=' + ids.join(',')); render(); } catch (e) { box.innerHTML = `<div class="bad">${esc(e.message)}</div><div class="p-foot"><span class="sp"></span><button data-x>Close</button></div>`; }
+      try { data = await call('/pay/preview?ids=' + ids.join(',')); render(); loadMailPlan(); } catch (e) { box.innerHTML = `<div class="bad">${esc(e.message)}</div><div class="p-foot"><span class="sp"></span><button data-x>Close</button></div>`; }
     }
     function checkHtml(p) {
       if (p.check === 'match') return '<div class="p-check ok">✓ Same BSB and account number as printed on the invoice</div>';
@@ -83,6 +147,7 @@
           <input class="full" name="account_name" placeholder="Account name" value="${esc(p.supplier || '')}"><button class="full" data-save-payee="${p.id}">Save ${esc(p.supplier || '')}'s bank details</button></div>
           <div class="muted" style="font-size:12px;margin-top:4px">Take them from a statement or a call to the supplier – they're checked against every invoice from them after this.</div>` : ''}
         ${p.warnings.filter((w) => !/couldn.t be checked/.test(w)).map((w) => `<div class="warn" style="margin-top:6px;font-size:13px">⚠ ${esc(w)}</div>`).join('')}
+        ${!p.blocked ? folderHtml(p) : ''}
         ${data.mode === 'manual' && !p.blocked ? `<div style="margin-top:10px;display:flex;justify-content:flex-end"><button class="go" data-paid-one="${p.id}">✓ I've paid it</button></div>` : ''}
       </div>`;
     }
@@ -114,7 +179,7 @@
     async function markPaid(plans) {
       for (const p of plans) {
         const confirm = { [p.id]: { amount_cents: p.amount_cents, bsb: p.payee.bsb, account_number: p.payee.account_number } };
-        const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: [p.id], confirm }) });
+        const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: [p.id], confirm, folders: chosenFolder[p.id] ? { [p.id]: chosenFolder[p.id] } : {} }) });
         paidNow.set(p.id, await call('/pay/' + r.id));
         paid = r.id;
       }
@@ -148,6 +213,12 @@
       const d = b.dataset;
       try {
         if (d.x !== undefined) return close();
+        if (d.folder) {
+          const p = data.plans.find((x) => String(x.id) === d.folder);
+          const f = await browseMailFolders(p.id, p.supplier);
+          if (f) { chosenFolder[p.id] = f; render(); }
+          return;
+        }
         if (d.copy !== undefined) { const ok = await copy(d.copy); b.textContent = ok ? '✓ Copied' : 'Select it'; b.classList.toggle('done', ok); setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500); return; }
         if (d.paidOne) {
           const p = data.plans.find((x) => String(x.id) === d.paidOne);
@@ -181,7 +252,7 @@
           const ok = data.plans.filter((p) => !p.blocked);
           busy = true; b.disabled = true; b.textContent = 'Making the file…';
           const confirm = Object.fromEntries(ok.map((p) => [p.id, { amount_cents: p.amount_cents, bsb: p.payee.bsb, account_number: p.payee.account_number }]));
-          const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: ok.map((p) => p.id), confirm }) });
+          const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: ok.map((p) => p.id), confirm, folders: chosenFolder }) });
           paid = r.id; busy = false;
           return doneHtml(await call('/pay/' + r.id));
         }

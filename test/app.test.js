@@ -99,6 +99,7 @@ const fetchActiveJobsImpl = async () => [{ jobUUID: 'never-opened', jobNumber: '
 const filed = [];
 const fakeMailFiler = {
   async fileInOutlook(token, what) { filed.push({ via: 'outlook', token, ...what }); return what.subject === 'gone' ? { status: 'not_found' } : { status: 'done', folder: `${what.root} / ${what.supplier}` }; },
+  async planOutlook(token, what) { return what.folder ? { status: 'found', dest: what.folder } : { status: 'new', path: `Inbox / Paid / ${what.supplier}` }; },
   async fileInImap(client, what) { filed.push({ via: 'imap', ...what }); return { status: 'done', folder: `${what.root} / ${what.supplier}` }; },
 };
 // A pretend ServiceM8 job diary.
@@ -2002,8 +2003,8 @@ test('paying: the confirm details, bank details checked against the invoice, the
   repo.saveOutlook('acc-pay', { canWrite: true }); // reconnected with filing allowed
   await app.locals.fileEmails('acc-pay', ok.id);
   pay = await json(t, `/pay/${ok.id}`);
-  assert.deepEqual([pay.items[0].email_status, pay.items[0].email_note], ['done', 'Paid / Jacksyl Pty Ltd']);
-  assert.deepEqual(filed.at(-1), { via: 'outlook', token: 'tok', messageId: '<J-1001@supplier.au>', subject: 'Invoice J-1001', from: 'accounts <acc@supplier.au>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' });
+  assert.deepEqual([pay.items[0].email_status, pay.items[0].email_note], ['done', 'Inbox/Paid / Jacksyl Pty Ltd']);
+  assert.deepEqual(filed.at(-1), { via: 'outlook', token: 'tok', messageId: '<J-1001@supplier.au>', subject: 'Invoice J-1001', from: 'accounts <acc@supplier.au>', root: 'Inbox/Paid', supplier: 'Jacksyl Pty Ltd', folder: null });
   // paid already: can't be paid twice
   assert.equal((await json(t, `/pay/preview?ids=${a}`)).plans[0].blocked, 'Already paid');
   // the same supplier, but this invoice says to pay a DIFFERENT account: stopped
@@ -2073,7 +2074,16 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
   repo.saveOutlook('acc-man', { accessToken: 'tok', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), email: 'a@b.au', canWrite: true });
   const again = await post(t, `/pay/${pe.payment_id}/email`).then((x) => x.json());
   assert.equal(again.items[0].email_status, 'done');
-  assert.equal((await json(t, '/job')).invoices.find((i) => i.id === inv.id).pay_email.note, 'Paid / Smart Hire');
+  assert.equal((await json(t, '/job')).invoices.find((i) => i.id === inv.id).pay_email.note, 'Inbox/Paid / Smart Hire');
+  // wrong place? "Move it" to a folder chosen by hand – remembered for the supplier
+  fakeMailFiler.fileInOutlook = async (tok, what) => { filed.push({ via: 'outlook', ...what }); return { status: 'done', folder: what.folder ? what.folder.path : `${what.root} / ${what.supplier}`, folderId: what.folder ? what.folder.id : 'auto' }; };
+  const moved = await post(t, `/pay/${pe.payment_id}/email`, { invoice_id: inv.id, folder: { id: 'f-hire', path: 'Inbox / Paid / Hire' } }).then((x) => x.json());
+  assert.deepEqual([moved.items[0].email_status, moved.items[0].email_note], ['done', 'Inbox / Paid / Hire'], 'moved even though it was filed');
+  assert.deepEqual(repo.getSupplierFolder('acc-man', 'Smart Hire Pty Ltd'), { id: 'f-hire', path: 'Inbox / Paid / Hire' });
+  // the next invoice from them: the Pay box says it goes there
+  const inv2 = repo.createInvoice({ accountUUID: 'acc-man', source: 'outlook', emailSubject: 'Invoice H-2', emailMessageId: '<H-2@x>' });
+  repo.saveExtraction(inv2.id, { supplier_name: 'Smart Hire', invoice_number: 'H-2', total: 100, tax: 0, subtotal: 100, items: [{ description: 'Saw', line_total: 100 }] });
+  assert.deepEqual((await json(t, `/pay/mailplan?ids=${inv2.id}`)).plans[inv2.id], { status: 'found', path: 'Inbox / Paid / Hire', chosen: true });
   // paid from the Inbox (not on a job yet): the reference uses the job it looks like it's for; leading zeros kept
   const inb = repo.createInvoice({ accountUUID: 'acc-man', source: 'email' });
   repo.saveExtraction(inb.id, { supplier_name: 'Moorabbin Steel', invoice_number: '00110266', total: 114.66, tax: 10.42, subtotal: 104.24, items: [{ description: 'Posts', line_total: 114.66 }] });
@@ -2100,15 +2110,23 @@ test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier
     async markRead(tok, id) { calls.push(['read', id]); },
     async move(tok, id, f) { calls.push(['move', id, f]); },
   };
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL' }, 'found inside the Inbox');
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL', folderId: 'j' }, 'found inside the Inbox');
   assert.deepEqual(calls.slice(-2), [['read', 'm1'], ['move', 'm1', 'j']]);
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / Summit Door Supplies' });
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / Summit Door Supplies', folderId: 'new' });
   assert.deepEqual(calls.find((c) => c[0] === 'create'), ['create', 'pd', 'Summit Door Supplies']);
   assert.deepEqual(await fileInOutlook('t', { messageId: null, root: 'Paid', supplier: 'X' }, fake), { status: 'not_found' });
   // deeper down (Inbox / Accounts / Paid), and no Paid folder at all: never made at the top
   folders.in = [{ id: 'ac', name: 'Accounts' }]; folders.ac = [{ id: 'pd', name: 'Paid' }];
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake), { status: 'done', folder: 'Inbox / Accounts / Paid / JACKSYL' });
-  folders.ac = [];
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake), { status: 'done', folder: 'Inbox / Accounts / Paid / JACKSYL', folderId: 'j' });
+  // a stray Paid at the top (made by an older version) doesn't win over Inbox / Paid
+  folders.root = [{ id: 'in', name: 'Inbox' }, { id: 'stray', name: 'Paid' }]; folders.in = [{ id: 'pd', name: 'Paid' }]; folders.stray = [];
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<s>', root: 'Paid', supplier: 'Jacksyl' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL', folderId: 'j' });
+  // a path: followed exactly
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<s>', root: 'Inbox/Paid', supplier: 'Jacksyl' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL', folderId: 'j' });
+  assert.equal((await fileInOutlook('t', { messageId: '<s>', root: 'Inbox/Nope', supplier: 'Jacksyl' }, fake)).status, 'no_folder');
+  // a folder chosen by hand wins
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<s>', root: 'Paid', supplier: 'Jacksyl', folder: { id: 'g', path: 'Inbox / Paid / Gliderol' } }, fake), { status: 'done', folder: 'Inbox / Paid / Gliderol', folderId: 'g' });
+  folders.root = [{ id: 'in', name: 'Inbox' }]; folders.in = [{ id: 'ac', name: 'Accounts' }]; folders.ac = [];
   const r = await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake);
   assert.equal(r.status, 'no_folder');
   assert.ok(!calls.some((c) => c[0] === 'create' && c[1] === null), 'no Paid folder made at the top');
