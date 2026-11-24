@@ -48,6 +48,9 @@
 .pen{border:0;background:none;cursor:pointer;color:#64748b;padding:0 2px;font-size:13px}
 .dupwarn{color:#b42318;font-size:12px;font-weight:600;margin-top:3px;max-width:240px;white-space:normal}
   @media (max-width: 640px) { .wrap { padding: 12px 10px; } .panel { overflow-x: auto; } header h1 { font-size: 19px; } }
+  .same { background: #fef3c7; border: 1px solid #fde68a; color: #7c4a03; border-radius: 14px; padding: 12px 14px; margin: 12px 0; font-size: 13.5px; }
+  .same .srow { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid #fde68a; margin-top: 6px; flex-wrap: wrap; } .same .srow span { flex: 1; min-width: 160px; }
+  .same .lnk { background: none; border: 0; padding: 0; color: #7c4a03; font-weight: 800; text-decoration: underline; cursor: pointer; font: inherit; }
 </style>
 <style>
   .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 12px; }
@@ -145,12 +148,24 @@ async function load() {
       <a class="tile" href="${link('stock')}"><div class="l">📦 Stock</div><div class="v">${money(d.stockLeft)}</div><div class="s">left, ex GST</div></a>
       ${d.statementsWaiting ? `<a class="tile warn" href="${link('checks')}"><div class="l">🔎 Statements</div><div class="v">${d.statementsWaiting}</div><div class="s">waiting to be checked</div></a>` : ''}
     </div>
+    ${(d.sameSupplier || []).length ? `<div class="same"><b>⚠ ${d.sameSupplier.length} job${d.sameSupplier.length === 1 ? '' : 's'} with two or more invoices from the same supplier</b>
+      <span class="muted"> – check none is the same order invoiced twice</span>
+      ${d.sameSupplier.map((g) => `<div class="srow"><button class="lnk" data-open-job="${esc(g.job_uuid)}">#${esc(g.job_number || '?')}</button>
+        <span>${esc(g.supplier)} – ${g.invoices.map((i) => `${esc(i.invoice_number ? '#' + i.invoice_number : 'no number')} ${money(i.total)}`).join(', ')}</span>
+        <button class="small" data-same-ok="${esc(g.ids)}" data-job="${esc(g.job_uuid)}">✓ Fine</button></div>`).join('')}</div>` : ''}
     <div class="menu">
       <a class="btn" href="${link('inbox')}">📥 Inbox</a><a class="btn" href="${link('bills')}">🧾 Bills</a><a class="btn" href="${link('stock')}">📦 Stock</a>
       <a class="btn" href="${link('checks')}">🔎 Statement check</a><a class="btn" href="${link('prices')}">💲 Prices &amp; rules</a><a class="btn" href="${link('report')}">📊 Reports</a><a class="btn" href="${link('settings')}">⚙ Settings</a>
     </div>`;
   } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    if (b.dataset.openJob) { const r = await api(`/jobs/${encodeURIComponent(b.dataset.openJob)}/open`); location.href = '/card?t=' + encodeURIComponent(r.token); }
+    if (b.dataset.sameOk) { b.disabled = true; await api('/same-supplier/ok', { method: 'POST', body: JSON.stringify({ job_uuid: b.dataset.job, ids: b.dataset.sameOk }) }); b.closest('.srow').remove(); }
+  } catch (x) { if (typeof toast === 'function') toast(x.message); b.disabled = false; }
+});
 async function openJob() {
   const n = $('#jobNo').value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
   if (!n) { $('#jobNo').focus(); return toast('Type a job number'); }

@@ -1242,8 +1242,19 @@ window.addEventListener('message', function (e) {
     res.json({ welcome: needsWelcome(req.account), inboxCount: repo.inboxCount(req.account), unpaidCount: unpaid.length,
       toPay: Math.round(unpaid.reduce((a, b) => a + (Number(b.total) || 0), 0) * 100) / 100,
       duplicates: unpaid.filter((b) => b.twin).length, flagged: flags.size, stockLeft: repo.listStock(req.account).leftTotal,
+      sameSupplier: repo.sameSupplierOnJobs(req.account),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
       jobs: repo.listJobs(req.account).slice(0, 300).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title })) });
+  });
+  // Every job with two or more invoices from the same supplier; "they're right" hides that set
+  api.get('/same-supplier', (req, res) => res.json({ jobs: repo.sameSupplierOnJobs(req.account) }));
+  api.post('/same-supplier/ok', (req, res) => {
+    const job = repo.getJob(String(req.body?.job_uuid || ''));
+    if (!job || (job.account_uuid ?? null) !== req.account) return res.status(404).json({ error: 'Job not found' });
+    const ids = String(req.body?.ids || '').split(',').map(Number).filter(Number.isInteger).sort((a, b) => a - b).join(',');
+    if (!ids) return res.status(400).json({ error: 'Which invoices?' });
+    repo.sameSupplierOk(req.account, job.job_uuid, ids);
+    res.json({ ok: true });
   });
   api.get('/jobs/find', async (req, res) => {
     const n = String(req.query.number || '').trim().replace(/^#/, '');
@@ -1272,6 +1283,8 @@ window.addEventListener('message', function (e) {
     // what the statement checks found on this job's invoices (until marked resolved)
     const flags = repo.checkFlagsFor(req.account, (summary.invoices || []).map((i) => i.id));
     for (const i of summary.invoices || []) i.check_flag = flags.get(i.id) || null;
+    // two or more invoices from the same supplier on this job: worth a look (the same order invoiced twice?)
+    summary.sameSupplier = repo.isStockJob(req.job.job_uuid) ? [] : repo.sameSupplierOnJobs(req.account, req.job.job_uuid);
     // paid with 💳 Pay: what happened to its email
     const payMail = repo.paymentEmails((summary.invoices || []).map((i) => i.id));
     for (const i of summary.invoices || []) i.pay_email = payMail.get(i.id) || null;

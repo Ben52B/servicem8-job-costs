@@ -2099,6 +2099,37 @@ test('the invoice reader asks for at most 16 fields that may be empty (the Claud
   assert.ok(n <= 16, `${n} fields can be empty – the API refuses more than 16`);
 });
 
+test('two or more invoices from the same supplier on one job are flagged (the same order twice?), on the job and across Job Costs', async () => {
+  JOBS['ss-job'] = { jobNumber: '208163', jobTitle: '1 Same St' };
+  const t = await openCard('ss-job', 'acc-ss');
+  const bill = (supplier, number, total, job = 'ss-job') => {
+    const inv = repo.createInvoice({ accountUUID: 'acc-ss', source: 'upload' });
+    repo.saveExtraction(inv.id, { supplier_name: supplier, invoice_number: number, invoice_date: '2026-11-0' + (number.length % 9 + 1), total, tax: Math.round(total / 11 * 100) / 100, subtotal: total, items: [{ description: 'Stuff', line_total: total }] });
+    if (job) repo.assignWhole(inv.id, job, {});
+    return inv.id;
+  };
+  const a = bill('Moorabbin Steel', 'MS-1', 198); const b = bill('Moorabbin Steel Pty Ltd', 'MS-2', 198);
+  bill('Summit Door Supplies', 'SD-1', 3412); // one from them: fine
+  bill('Moorabbin Steel', 'CR-1', -198); // a credit note doesn't count
+  let j = await json(t, '/job');
+  assert.equal(j.sameSupplier.length, 1);
+  assert.deepEqual([j.sameSupplier[0].supplier, j.sameSupplier[0].invoices.map((i) => i.id)], ['Moorabbin Steel', [a, b]]);
+  // across Job Costs (the home page)
+  assert.deepEqual((await json(t, '/home')).sameSupplier.map((g) => [g.job_number, g.invoices.length]), [['208163', 2]]);
+  // checked: they're both right – not asked again about these two
+  await post(t, '/same-supplier/ok', { job_uuid: 'ss-job', ids: j.sameSupplier[0].ids });
+  assert.deepEqual((await json(t, '/job')).sameSupplier, []);
+  assert.deepEqual((await json(t, '/same-supplier')).jobs, []);
+  // a third one from them: asked again
+  const c = bill('MOORABBIN STEEL', 'MS-3', 50);
+  j = await json(t, '/job');
+  assert.deepEqual(j.sameSupplier[0].invoices.map((i) => i.id), [a, b, c]);
+  // stock order jobs aren't checked; another business can't hide them
+  JOBS['ss-job2'] = { jobNumber: '208164', jobTitle: '2 Same St' };
+  const t2 = await openCard('ss-job2', 'acc-ss2');
+  assert.equal((await post(t2, '/same-supplier/ok', { job_uuid: 'ss-job', ids: '1,2' })).status, 404);
+});
+
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {
   const { fileInOutlook, sameName } = require('../src/mailfile');
   const calls = [];

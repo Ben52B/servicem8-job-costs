@@ -370,7 +370,7 @@ function render() {
       <div class="why">Remove it from Job Costs too?</div></div>
       <div class="acts"><button class="solid-danger small" data-diary-remove="${i.id}">Remove from Job Costs</button><button class="small" data-diary-keep="${i.id}">Keep it here</button></div></div></div>`).join('')
     + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '')
-    + flagBanner()
+    + flagBanner() + sameSupplierBanner()
     + (state.data.welcome ? `<a class="welcome" href="/welcome?t=${encodeURIComponent(BOOT.token)}">👋 <b>Set up Job Costs</b> – connect your email and price lists (2 minutes) →</a>` : '');
   $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
   $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
@@ -505,6 +505,14 @@ function renderStockKpis() {
 
 // ---------- What the statement checks found on this job's invoices ----------
 const reportUrl = (f) => `/checks?t=${encodeURIComponent(BOOT.token)}&id=${f.check_id}`;
+// Two or more invoices from the same supplier on this job: the same order invoiced twice?
+function sameSupplierBanner() {
+  return (state.data.sameSupplier || []).map((g) => `<div class="note bad" style="margin-bottom:12px;background:#fef3c7;border-color:#fde68a;color:#7c4a03">
+    <b>⚠ ${g.invoices.length} invoices from ${esc(g.supplier)} on this job</b> – check it isn't the same order invoiced twice:
+    ${g.invoices.map((i) => `<div style="margin-top:4px"><button class="mk-link" data-select="${i.id}">${esc(i.invoice_number ? '#' + i.invoice_number : 'no number')}</button>
+      ${i.invoice_date ? esc(fmtDate(i.invoice_date)) + ' · ' : ''}${money(i.total)} inc GST${Math.abs(i.job_total - i.total / 1.1) > 1 ? ` <span class="muted">(${money(i.job_total)} on this job)</span>` : ''}</div>`).join('')}
+    <div style="margin-top:8px"><button class="small" data-same-ok="${esc(g.ids)}">✓ They're both right</button></div></div>`).join('');
+}
 function flagBanner() {
   const flagged = state.data.invoices.filter((i) => i.check_flag);
   if (!flagged.length) return '';
@@ -1058,6 +1066,7 @@ document.addEventListener('click', async (e) => {
       const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
       closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
     }
+    if (ds.sameOk) { await post('/same-supplier/ok', { job_uuid: state.data.job.job_uuid, ids: ds.sameOk }); toast('OK – it won\u2019t ask about these again'); return load(); }
     if (ds.pickFolder) {
       const f = await browseMailFolders(Number(ds.inv), ds.sup);
       if (!f) return;

@@ -393,6 +393,9 @@ function migrateColumns(db) {
   // the email folder chosen by hand for a supplier's paid invoices (wins over finding Paid / <supplier>)
   db.exec(`CREATE TABLE IF NOT EXISTS supplier_folders (account_key TEXT NOT NULL, supplier TEXT NOT NULL, folder_id TEXT NOT NULL, folder_path TEXT,
     PRIMARY KEY (account_key, supplier))`);
+  // "Two invoices from the same supplier on one job" that the business checked and said are fine (that exact set of invoices)
+  db.exec(`CREATE TABLE IF NOT EXISTS same_supplier_ok (account_key TEXT NOT NULL, job_uuid TEXT NOT NULL, invoice_ids TEXT NOT NULL,
+    PRIMARY KEY (account_key, job_uuid, invoice_ids))`);
   // Outlook connections that may also mark emails read and move them (asked for when connecting)
   if (!db.prepare('PRAGMA table_info(outlook)').all().some((x) => x.name === 'can_write')) db.exec('ALTER TABLE outlook ADD COLUMN can_write INTEGER NOT NULL DEFAULT 0');
   // the emails already brought in from Outlook: their message id, from what was recorded on import
@@ -1701,6 +1704,43 @@ function createRepo(db, dataDir) {
       const p = repo.getPayee(accountUUID, supplier);
       if (p) db.prepare("UPDATE payees SET bsb = ?, account_number = ?, account_name = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(bsb, account_number, account_name, p.id);
       else db.prepare('INSERT INTO payees (account_key, supplier, bsb, account_number, account_name) VALUES (?, ?, ?, ?, ?)').run(accountUUID ?? '', supplier, bsb, account_number, account_name);
+    },
+    /**
+     * Jobs with two or more invoices from the same supplier (could be the same order invoiced twice).
+     * Not stock order jobs, stock invoices or credit notes; not a set the business already said is fine.
+     * [{ job_uuid, job_number, job_title, supplier, invoices: [{ id, invoice_number, invoice_date, total, job_total }] }]
+     */
+    sameSupplierOnJobs(accountUUID, jobUUID = null) {
+      const rows = db.prepare(`SELECT allocations.job_uuid, invoices.id, invoices.supplier, invoices.invoice_number, invoices.invoice_date, invoices.total,
+          SUM(items.cost * allocations.fraction) AS job_total
+        FROM allocations JOIN items ON items.id = allocations.item_id JOIN invoices ON invoices.id = items.invoice_id
+        WHERE invoices.account_uuid IS ? AND invoices.status = 'ready' AND invoices.kept_as_stock = 0 AND invoices.total > 0 AND invoices.supplier IS NOT NULL
+          ${jobUUID ? 'AND allocations.job_uuid = ?' : ''}
+        GROUP BY allocations.job_uuid, invoices.id ORDER BY invoices.invoice_date, invoices.id`).all(...[accountUUID ?? null, ...(jobUUID ? [jobUUID] : [])]);
+      const ok = new Set(db.prepare('SELECT job_uuid, invoice_ids FROM same_supplier_ok WHERE account_key = ?').all(accountUUID ?? '').map((r) => `${r.job_uuid}|${r.invoice_ids}`));
+      const byJob = new Map();
+      for (const r of rows) { if (!byJob.has(r.job_uuid)) byJob.set(r.job_uuid, []); byJob.get(r.job_uuid).push(r); }
+      const out = [];
+      for (const [job, invs] of byJob) {
+        if (repo.isStockJob(job)) continue;
+        const groups = [];
+        for (const inv of invs) {
+          const g = groups.find((x) => sameSupplier(supplierKey(x[0].supplier), supplierKey(inv.supplier)));
+          if (g) g.push(inv); else groups.push([inv]);
+        }
+        for (const g of groups) {
+          if (g.length < 2) continue;
+          const ids = g.map((i) => i.id).sort((a, b) => a - b).join(',');
+          if (ok.has(`${job}|${ids}`)) continue;
+          const j = repo.getJob(job) || {};
+          out.push({ job_uuid: job, job_number: j.job_number || null, job_title: j.job_title || null, supplier: g[0].supplier, ids,
+            invoices: g.map((i) => ({ id: i.id, invoice_number: i.invoice_number, invoice_date: i.invoice_date, total: i.total, job_total: round2(i.job_total || 0) })) });
+        }
+      }
+      return out.sort((a, b) => String(b.job_number || '').localeCompare(String(a.job_number || '')));
+    },
+    sameSupplierOk(accountUUID, jobUUID, ids) {
+      db.prepare('INSERT OR IGNORE INTO same_supplier_ok (account_key, job_uuid, invoice_ids) VALUES (?, ?, ?)').run(accountUUID ?? '', jobUUID, ids);
     },
     getSupplierFolder(accountUUID, supplier) {
       if (!supplier) return null;
