@@ -355,9 +355,9 @@ async function deleteFromInbox(id) {
   let scope = '';
   if (chk.ask) {
     const sup = chk.supplier;
-    const r = await ask({ title: 'Bring it in again if it\u2019s emailed?', never: true,
-      text: `You can undo this in \u2699 Settings.${sup && chk.sameSupplier ? ` There ${chk.sameSupplier === 1 ? 'is 1 more invoice' : `are ${chk.sameSupplier} more invoices`} from ${sup} in the Inbox.` : ''}`,
-      buttons: [...(sup ? [{ a: 'supplier', label: `Ignore everything from ${sup}` }] : []), { a: 'bill', label: 'Ignore just this invoice' }, { a: 'keep', label: 'Keep bringing it in' }] });
+    const r = await ask({ title: 'It\u2019s deleted. If it\u2019s emailed again…', never: true,
+      text: `Should Job Costs bring it back into the Inbox? You can change this later in \u2699 Settings.${sup && chk.sameSupplier ? ` There ${chk.sameSupplier === 1 ? 'is 1 more invoice' : `are ${chk.sameSupplier} more invoices`} from ${sup} in the Inbox.` : ''}`,
+      buttons: [{ a: 'bill', label: 'Don\u2019t bring this invoice back' }, ...(sup ? [{ a: 'supplier', label: `Don\u2019t bring in anything from ${sup}` }] : []), { a: 'keep', label: 'Bring it back if it comes again' }] });
     if (r.a === null) return false; // closed: nothing deleted
     if (r.never) { try { await api('/settings', { method: 'PUT', body: JSON.stringify({ ask_ignore_on_delete: false }) }); } catch (x) { /* asks next time */ } }
     scope = r.a === 'keep' ? '' : r.a;
