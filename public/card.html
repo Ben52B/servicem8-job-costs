@@ -566,7 +566,10 @@ const LIST_SORTS = {
   type: (a, b) => String(a.category || 'zz').localeCompare(String(b.category || 'zz')) || String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
   number: (a, b) => String(a.invoice_number || '~').localeCompare(String(b.invoice_number || '~'), 'en', { numeric: true }),
   unpaid: (a, b) => (a.payment_state === 'paid' ? 1 : 0) - (b.payment_state === 'paid' ? 1 : 0),
-  due: (a, b) => ((a.payment_state !== 'paid' && a.due_date) ? 0 : 1) - ((b.payment_state !== 'paid' && b.due_date) ? 0 : 1) || String(a.due_date || '').localeCompare(String(b.due_date || '')),
+  // soonest first: the due date, or the invoice date when none is printed; unpaid before paid; no date at all last
+  due: (a, b) => (a.payment_state === 'paid' ? 1 : 0) - (b.payment_state === 'paid' ? 1 : 0)
+    || ((a.due_date || a.invoice_date) ? 0 : 1) - ((b.due_date || b.invoice_date) ? 0 : 1)
+    || String(a.due_date || a.invoice_date || '').localeCompare(String(b.due_date || b.invoice_date || '')),
 };
 const detailEl = document.getElementById('detail');
 // someone is typing (or choosing) in this part of the page: don't redraw it under them

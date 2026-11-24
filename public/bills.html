@@ -151,7 +151,8 @@ let sortBy = 'date';
 try { sortBy = localStorage.getItem('billsSort') || 'date'; } catch (e) { /* fine */ }
 const SORTS = {
   date: (a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')),
-  due: (a, b) => (a.due_date ? 0 : 1) - (b.due_date ? 0 : 1) || String(a.due_date || '').localeCompare(String(b.due_date || '')),
+  // soonest first: the due date, or the invoice date when none is printed; no date at all last
+  due: (a, b) => ((a.due_date || a.invoice_date) ? 0 : 1) - ((b.due_date || b.invoice_date) ? 0 : 1) || String(a.due_date || a.invoice_date || '').localeCompare(String(b.due_date || b.invoice_date || '')),
   supplier: (a, b) => String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
   amount_desc: (a, b) => (Number(b.total) || 0) - (Number(a.total) || 0),
   amount_asc: (a, b) => (Number(a.total) || 0) - (Number(b.total) || 0),
