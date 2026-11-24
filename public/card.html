@@ -82,8 +82,10 @@
   /* columns */
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(420px, 48%); gap: 16px; align-items: start; }
   /* the breakdown of the chosen invoice opens under its row in the list */
-  #list > .detail { margin: -4px 0 12px; border: 2px solid var(--brand); border-top: 0; border-radius: 0 0 16px 16px; min-height: 0; padding-top: 8px; }
-  #list .inv.sel { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; }
+  #list > .detail { margin: -4px 0 12px; border: 2px solid var(--brand); border-top: 0; border-radius: 0 0 16px 16px; min-height: 0; padding-top: 30px; }
+  #list .inv.sel.open { border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 0; }
+  #list > .detail { position: relative; }
+  .close-detail { position: absolute; top: 6px; right: 10px; z-index: 2; background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 700; padding: 4px 6px; cursor: pointer; }
   .list-head select { font: inherit; font-size: 12.5px; font-weight: 600; border: 1px solid #d6e2de; border-radius: 9px; padding: 4px 6px; background: #fff; color: var(--ink); }
   .list-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .list-head b { font-size: 14px; }
@@ -587,7 +589,8 @@ function renderList() {
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   // the breakdown goes right under the chosen invoice (hidden when none is chosen)
   const selRow = $('#list .inv.sel');
-  if (selRow) { selRow.after(detailEl); detailEl.hidden = false; } else detailEl.hidden = !!d.invoices.length;
+  if (selRow && !state.detailClosed) { selRow.after(detailEl); detailEl.hidden = false; selRow.classList.add('open'); }
+  else detailEl.hidden = !!d.invoices.length;
   const o = state.outlook;
   const ago = (t) => { const m = Math.round((Date.now() - Date.parse(t)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
   const outlookHtml = !o || !o.available ? ''
@@ -663,6 +666,10 @@ function renderStockDetail(inv, el) {
 }
 
 function renderDetail() {
+  renderDetailInner();
+  if (selectedInvoice() && !$('#detail .close-detail')) $('#detail').insertAdjacentHTML('afterbegin', '<button class="close-detail" data-close-detail title="Close (click the invoice line again to open it)">▴ Close</button>');
+}
+function renderDetailInner() {
   const inv = selectedInvoice();
   const el = $('#detail');
   if (inv && state.data.stock) return renderStockDetail(inv, el);
@@ -1005,7 +1012,11 @@ document.addEventListener('click', async (e) => {
     if (ds.pull) return openPull(ds.pull);
     if (ds.notNeeded) { await post(`/joblines/${encodeURIComponent(ds.notNeeded)}/not-needed`, { not_needed: true }); return load(); }
     if (ds.needed) { await post(`/joblines/${encodeURIComponent(ds.needed)}/not-needed`, { not_needed: false }); return load(); }
+    if (ds.closeDetail !== undefined) { state.detailClosed = true; return renderList(); }
     if (ds.select) {
+      // the same invoice again (on its line in the list): close / open its breakdown; the invoice stays shown on the right
+      if (Number(ds.select) === state.selected && t.closest('#list') && !t.closest('#detail')) { state.detailClosed = !state.detailClosed; return renderList(); }
+      state.detailClosed = false;
       state.selected = Number(ds.select); state.confirmDel = null; state.editing = null; state.draft = {}; state.mkOpen = null; render();
       // on a phone the details are below the list: take the user there
       if (window.innerWidth <= 780 && !t.closest('#detail')) $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
