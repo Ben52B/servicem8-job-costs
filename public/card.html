@@ -258,7 +258,8 @@
       <button class="primary add-btn" data-add>＋ Add costs</button>
       <div class="list-head"><b id="listTitle">Costs on this job</b><span class="muted" id="listToPay"></span><span style="flex:1"></span>
         <select id="listSort" title="Sort the list"><option value="added">Sort: as added</option><option value="date">Newest invoice first</option><option value="date_asc">Oldest invoice first</option>
-          <option value="supplier">Supplier A–Z</option><option value="amount">Amount (high to low)</option><option value="unpaid">Unpaid first</option><option value="due">Due date (soonest)</option></select></div>
+          <option value="supplier">Supplier name A–Z</option><option value="supplier_desc">Supplier name Z–A</option><option value="amount">Amount (high to low)</option><option value="amount_asc">Amount (low to high)</option>
+          <option value="due">Due date (soonest)</option><option value="type">Type (materials, subcontractor…)</option><option value="unpaid">Unpaid first</option><option value="number">Invoice number</option></select></div>
       <div id="list"></div>
       <main class="card detail" id="detail"></main>
       <div class="dropzone-hint">or drop invoice files here</div>
@@ -556,7 +557,12 @@ const LIST_SORTS = {
   date: (a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')),
   date_asc: (a, b) => (a.invoice_date ? 0 : 1) - (b.invoice_date ? 0 : 1) || String(a.invoice_date || '').localeCompare(String(b.invoice_date || '')),
   supplier: (a, b) => String(a.supplier || a.file_name || '').localeCompare(String(b.supplier || b.file_name || ''), 'en', { sensitivity: 'base' }),
+  supplier_desc: (a, b) => String(b.supplier || b.file_name || '').localeCompare(String(a.supplier || a.file_name || ''), 'en', { sensitivity: 'base' }),
   amount: (a, b) => (Number(b.job_total) || 0) - (Number(a.job_total) || 0),
+  amount_asc: (a, b) => (Number(a.job_total) || 0) - (Number(b.job_total) || 0),
+  // by type (the job's type for it), then supplier
+  type: (a, b) => String(a.category || 'zz').localeCompare(String(b.category || 'zz')) || String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
+  number: (a, b) => String(a.invoice_number || '~').localeCompare(String(b.invoice_number || '~'), 'en', { numeric: true }),
   unpaid: (a, b) => (a.payment_state === 'paid' ? 1 : 0) - (b.payment_state === 'paid' ? 1 : 0),
   due: (a, b) => ((a.payment_state !== 'paid' && a.due_date) ? 0 : 1) - ((b.payment_state !== 'paid' && b.due_date) ? 0 : 1) || String(a.due_date || '').localeCompare(String(b.due_date || '')),
 };
