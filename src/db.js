@@ -1728,6 +1728,13 @@ function createRepo(db, dataDir) {
       });
       return true;
     },
+    /** The latest (not undone) payment of each of these invoices, with what happened to its email. */
+    paymentEmails(invoiceIds) {
+      if (!invoiceIds.length) return new Map();
+      const rows = db.prepare(`SELECT payment_items.* FROM payment_items JOIN payments ON payments.id = payment_items.payment_id
+        WHERE payments.cancelled_at IS NULL AND payment_items.invoice_id IN (${invoiceIds.map(Number).join(',')}) ORDER BY payment_items.payment_id`).all();
+      return new Map(rows.map((r) => [r.invoice_id, { payment_id: r.payment_id, status: r.email_status, note: r.email_note }]));
+    },
     setPaymentEmail(paymentId, invoiceId, status, note = null) {
       db.prepare('UPDATE payment_items SET email_status = ?, email_note = ? WHERE payment_id = ? AND invoice_id = ?').run(status, note, paymentId, invoiceId);
     },

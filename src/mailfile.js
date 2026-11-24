@@ -58,19 +58,24 @@ const outlookApi = {
 async function fileInOutlook(token, { messageId, subject, from, root = 'Paid', supplier }, api = outlookApi) {
   const id = await api.findMessage(token, { messageId, subject, from });
   if (!id) return { status: 'not_found' };
-  // the paid folder: at the top, or inside the Inbox
-  let top = await api.folders(token);
-  let paid = top.find((f) => f.name.toLowerCase() === root.toLowerCase());
-  if (!paid) {
-    const inbox = top.find((f) => f.name.toLowerCase() === 'inbox');
-    if (inbox) paid = (await api.folders(token, inbox.id)).find((f) => f.name.toLowerCase() === root.toLowerCase());
+  // the paid folder, wherever it is (looked for 4 levels deep, top level first); never made – it must be the business's own
+  let paid = null; let level = [{ id: null, name: '' }];
+  for (let depth = 0; depth < 4 && !paid && level.length; depth++) {
+    const next = [];
+    for (const parent of level.slice(0, 60)) {
+      const kids = await api.folders(token, parent.id);
+      paid = kids.find((f) => f.name.trim().toLowerCase() === root.trim().toLowerCase());
+      if (paid) { paid = { ...paid, path: parent.name ? `${parent.name} / ${paid.name}` : paid.name }; break; }
+      next.push(...kids.map((k) => ({ ...k, name: parent.name ? `${parent.name} / ${k.name}` : k.name })));
+    }
+    level = next;
   }
-  if (!paid) paid = await api.createFolder(token, null, root);
+  if (!paid) return { status: 'no_folder', folder: `No folder called "${root}" in Outlook – make it (or change the name in Settings → Paying suppliers)` };
   const subs = await api.folders(token, paid.id);
   const dest = subs.find((f) => sameName(f.name, supplier)) || await api.createFolder(token, paid.id, folderName(supplier));
   await api.markRead(token, id);
   await api.move(token, id, dest.id);
-  return { status: 'done', folder: `${paid.name} / ${dest.name}` };
+  return { status: 'done', folder: `${paid.path} / ${dest.name}` };
 }
 
 // ---------- IMAP (Gmail and others) ----------
@@ -81,7 +86,7 @@ async function fileInImap(client, { messageId, subject, from, root = 'Paid', sup
     const boxes = await client.list();
     const leaf = (b) => String(b.name || b.path.split(b.delimiter || '/').pop());
     let paid = boxes.find((b) => leaf(b).toLowerCase() === root.toLowerCase() && !/^\[gmail\]/i.test(b.path));
-    if (!paid) { await client.mailboxCreate(root); paid = { path: root, delimiter: (boxes[0] && boxes[0].delimiter) || '/' }; }
+    if (!paid) return { status: 'no_folder', folder: `No folder called "${root}" in the mailbox – make it (or change the name in Settings → Paying suppliers)` };
     const d = paid.delimiter || '/';
     const subs = boxes.filter((b) => b.path.startsWith(paid.path + d) && !b.path.slice(paid.path.length + 1).includes(d));
     let dest = subs.find((b) => sameName(leaf(b), supplier));

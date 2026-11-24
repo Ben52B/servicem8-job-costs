@@ -24,21 +24,22 @@ function normAccount(acc) {
 const toCents = (amount) => Math.round(Number(amount) * 100);
 
 /**
- * The reference the supplier sees: the business's template, e.g. "INV {invoice} PO {job}", at most 18 characters
- * (the bank file's limit). Too long: spaces after INV / PO go first, then the start of the invoice number.
+ * The reference the supplier sees: the business's template, e.g. "INV {invoice} PO {job}", with the invoice number
+ * exactly as printed (leading zeros kept). maxLength (the bank file's 18): spaces go first, then the job number,
+ * never the invoice number's digits.
  */
-function makeReference(template, { invoice = '', job = '' } = {}) {
+function makeReference(template, { invoice = '', job = '' } = {}, maxLength = Infinity) {
   const inv = clean(invoice).replace(/^inv(oice)?[\s#:.\-]*/i, '').replace(/\s+/g, '');
   job = String(job || '').trim().split(/[\/,\s]+/)[0]; // on two jobs: the first
   const fill = (i) => clean(String(template || 'INV {invoice} PO {job}').replace(/\{invoice\}/gi, i).replace(/\{job\}/gi, clean(job).replace(/\s+/g, '')))
     .replace(/\bPO\s*$/i, '').replace(/\bINV\s*(?=PO\b|$)/i, '').trim();
   let r = fill(inv);
-  if (r.length <= 18) return r;
+  if (r.length <= maxLength) return r;
   r = r.replace(/\b(INV|PO)\s+/gi, '$1');
-  if (r.length <= 18) return r;
-  // still too long: keep the end of the invoice number (the part that differs)
-  const over = r.length - 18;
-  return fill(inv.slice(Math.min(over, inv.length - 1))).replace(/\b(INV|PO)\s+/gi, '$1').slice(0, 18);
+  if (r.length <= maxLength) return r;
+  // still too long: the job number goes (the invoice number is what the supplier matches the payment to)
+  r = clean(String(template || 'INV {invoice}').replace(/\{invoice\}/gi, inv).replace(/\s*\bPO\s*\{job\}/gi, '').replace(/\{job\}/gi, '')).replace(/\b(INV)\s+/gi, '$1');
+  return r.slice(0, maxLength);
 }
 
 /**

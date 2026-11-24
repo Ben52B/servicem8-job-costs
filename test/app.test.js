@@ -2045,7 +2045,9 @@ test('paying: the confirm details, bank details checked against the invoice, the
   assert.equal((await api(t2, `/pay/preview?ids=${a}`)).status, 404);
   assert.equal((await api(t2, `/pay/${ok.id}/file`)).status, 404);
   // the reference fits the bank's 18 characters
-  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '12345', job: '208118' }), 'INV12345 PO208118');
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '12345', job: '208118' }, 18), 'INV12345 PO208118', 'the bank file: 18 characters');
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '00110266', job: '208377' }), 'INV 00110266 PO 208377', 'paying in the app: as written, leading zeros kept');
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '00110266', job: '208377' }, 18), 'INV00110266', 'too long for the file: the job number goes, never the invoice digits');
   assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: 'S667', job: '' }), 'INV S667');
 });
 
@@ -2064,6 +2066,19 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
   assert.equal((await json(t, `/pay/${r.id}`)).has_file, false);
   assert.equal((await api(t, `/pay/${r.id}/file`)).status, 404, 'no bank file');
   assert.equal(repo.getPayee('acc-man', 'Smart Hire').account_number, '10203040', 'their details are remembered for checking the next invoice');
+  // the job card says what happened to the email; "try again" files it once the problem is fixed
+  await new Promise((r) => setTimeout(r, 30));
+  let pe = (await json(t, '/job')).invoices.find((i) => i.id === inv.id).pay_email;
+  assert.equal(pe.status, 'no_mailbox');
+  repo.saveOutlook('acc-man', { accessToken: 'tok', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), email: 'a@b.au', canWrite: true });
+  const again = await post(t, `/pay/${pe.payment_id}/email`).then((x) => x.json());
+  assert.equal(again.items[0].email_status, 'done');
+  assert.equal((await json(t, '/job')).invoices.find((i) => i.id === inv.id).pay_email.note, 'Paid / Smart Hire');
+  // paid from the Inbox (not on a job yet): the reference uses the job it looks like it's for; leading zeros kept
+  const inb = repo.createInvoice({ accountUUID: 'acc-man', source: 'email' });
+  repo.saveExtraction(inb.id, { supplier_name: 'Moorabbin Steel', invoice_number: '00110266', total: 114.66, tax: 10.42, subtotal: 104.24, items: [{ description: 'Posts', line_total: 114.66 }] });
+  repo.db.prepare('UPDATE invoices SET suggested_job_uuid = ? WHERE id = ?').run('man-job', inb.id);
+  assert.equal((await json(t, `/pay/preview?ids=${inb.id}`)).plans[0].reference, 'INV 00110266 PO 209260');
 });
 
 test('the invoice reader asks for at most 16 fields that may be empty (the Claude API limit)', () => {
@@ -2085,11 +2100,18 @@ test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier
     async markRead(tok, id) { calls.push(['read', id]); },
     async move(tok, id, f) { calls.push(['move', id, f]); },
   };
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Paid / JACKSYL' });
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL' }, 'found inside the Inbox');
   assert.deepEqual(calls.slice(-2), [['read', 'm1'], ['move', 'm1', 'j']]);
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Paid / Summit Door Supplies' });
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / Summit Door Supplies' });
   assert.deepEqual(calls.find((c) => c[0] === 'create'), ['create', 'pd', 'Summit Door Supplies']);
   assert.deepEqual(await fileInOutlook('t', { messageId: null, root: 'Paid', supplier: 'X' }, fake), { status: 'not_found' });
+  // deeper down (Inbox / Accounts / Paid), and no Paid folder at all: never made at the top
+  folders.in = [{ id: 'ac', name: 'Accounts' }]; folders.ac = [{ id: 'pd', name: 'Paid' }];
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake), { status: 'done', folder: 'Inbox / Accounts / Paid / JACKSYL' });
+  folders.ac = [];
+  const r = await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake);
+  assert.equal(r.status, 'no_folder');
+  assert.ok(!calls.some((c) => c[0] === 'create' && c[1] === null), 'no Paid folder made at the top');
   assert.equal(sameName('Gliderol', 'Gliderol Doors Pty Ltd'), true);
   assert.equal(sameName('Gliderol', 'Glide'), true);
   assert.equal(sameName('B&D', 'Bunnings'), false);

@@ -1272,6 +1272,9 @@ window.addEventListener('message', function (e) {
     // what the statement checks found on this job's invoices (until marked resolved)
     const flags = repo.checkFlagsFor(req.account, (summary.invoices || []).map((i) => i.id));
     for (const i of summary.invoices || []) i.check_flag = flags.get(i.id) || null;
+    // paid with 💳 Pay: what happened to its email
+    const payMail = repo.paymentEmails((summary.invoices || []).map((i) => i.id));
+    for (const i of summary.invoices || []) i.pay_email = payMail.get(i.id) || null;
     const ruleTexts = new Set(repo.listRules(req.account).map((r) => r.text));
     for (const i of summary.invoices || []) if (i.price_check && i.price_check.suggested_rule) i.price_check.rule_saved = ruleTexts.has(i.price_check.suggested_rule);
     const acc = repo.ensureAccount(req.account);
@@ -1887,11 +1890,14 @@ window.addEventListener('message', function (e) {
     const saved = repo.getPayee(accountUUID, inv.supplier);
     const payee = saved ? { bsb: saved.bsb, account_number: saved.account_number, account_name: saved.account_name, from: 'saved' }
       : printed && aba.normBsb(printed.bsb) && aba.normAccount(printed.account_number) ? { ...printed, account_name: printed.account_name || inv.supplier || '', from: 'invoice' } : null;
-    const jobNumbers = jobs.filter((j) => !repo.isStockJob(j.job_uuid)).map((j) => j.job_number).filter(Boolean);
+    let jobNumbers = jobs.filter((j) => !repo.isStockJob(j.job_uuid)).map((j) => j.job_number).filter(Boolean);
+    // still in the Inbox: the job it looks like it's for
+    if (!jobNumbers.length && inv.suggested_job_uuid && !repo.isStockJob(inv.suggested_job_uuid)) { const sj = repo.getJob(inv.suggested_job_uuid); if (sj && sj.job_number) jobNumbers = [sj.job_number]; }
     const plan = {
       id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date,
       amount: inv.total, amount_cents: aba.toCents(inv.total), jobs: jobNumbers,
-      reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers[0] || '' }),
+      // in full for paying in the banking app; the bank file allows 18 characters
+      reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers[0] || '' }, st.pay_mode === 'file' ? 18 : Infinity),
       payee, printed, bpay: inv.bpay_biller ? { biller: inv.bpay_biller, ref: inv.bpay_ref } : null,
       check: !printed ? 'not_printed' : !payee ? 'no_payee' : sameBank(payee, printed) ? 'match' : 'mismatch',
       email: !!inv.email_message_id || !!inv.email_subject, blocked: null, warnings: [],
@@ -1975,6 +1981,7 @@ window.addEventListener('message', function (e) {
     const st = settingsFor(accountUUID);
     const out = repo.getOutlook(accountUUID); const im = repo.getImap(accountUUID);
     for (const item of p.items) {
+      if (item.email_status === 'done') continue; // filed already (e.g. "try again" after one failed)
       const inv = repo.getInvoice(item.invoice_id);
       const what = { messageId: inv.email_message_id, subject: inv.email_subject, from: inv.email_from, root: st.pay_folder || 'Paid', supplier: inv.supplier };
       try {
@@ -2004,6 +2011,14 @@ window.addEventListener('message', function (e) {
     const p = repo.getPayment(req.account, req.params.id);
     if (!p || !p.aba) return res.status(404).json({ error: 'Not found' });
     res.set({ 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="supplier-payments-${p.id}.aba"`, 'Cache-Control': 'no-store' }).send(p.aba);
+  });
+  // file the email again (after a problem was fixed, e.g. Outlook reconnected or the Paid folder made)
+  api.post('/pay/:id/email', async (req, res) => {
+    const p = repo.getPayment(req.account, req.params.id);
+    if (!p || p.cancelled_at) return res.status(404).json({ error: 'Not found' });
+    await fileEmails(req.account, p.id);
+    const { aba: _f, ...rest } = repo.getPayment(req.account, p.id);
+    res.json(rest);
   });
   // didn't use the file: the invoices go back to unpaid
   api.post('/pay/:id/cancel', (req, res) => (repo.cancelPayment(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found or already cancelled' })));

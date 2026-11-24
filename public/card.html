@@ -674,6 +674,14 @@ function renderDetail() {
       ${o.trace.left > 1e-6 ? `<button class="small" data-add-rest="${o.id}" data-qty="${o.trace.quantity ? 1 : ''}" data-left="${o.trace.quantity ? o.trace.left_quantity : o.trace.left_amount}">＋ Add to this job</button>` : ''}</div>`).join('')}</div>`;
   }
   if (inv.notes) h += `<details class="rnote"><summary>ℹ Note from reading the invoice</summary><div>${esc(inv.notes)}</div></details>`;
+  // paid with 💳 Pay: where its email went (or why it couldn't be filed)
+  const pe = inv.pay_email;
+  if (pe && pe.status !== 'off' && pe.status !== 'no_email') {
+    const okMail = pe.status === 'done';
+    h += `<div class="note ${okMail ? 'info' : ''}" style="margin-top:8px;${okMail ? '' : 'background:#fef3c7;border-color:#fde68a'}">📧 ${okMail ? `Email marked read and moved to <b>${esc(pe.note || '')}</b>`
+      : pe.status === 'waiting' ? 'Filing the email…' : `Email not filed: ${esc(pe.note || pe.status)}`}
+      ${okMail || pe.status === 'waiting' ? '' : ` <button class="small" data-refile="${pe.payment_id}">↻ Try again</button>`}</div>`;
+  }
   if (ready) h += priceCheckBox(inv);
   if (inv.email_from) h += `<div class="muted" style="margin-top:10px;font-size:12px">Emailed by ${esc(inv.email_from)}${inv.email_subject ? ' — “' + esc(inv.email_subject) + '”' : ''}</div>`;
   h += `<div class="actions">
@@ -1049,6 +1057,8 @@ document.addEventListener('click', async (e) => {
       const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
       closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
     }
+    if (ds.refile) { t.disabled = true; t.textContent = 'Filing…'; const r = await post(`/pay/${ds.refile}/email`, {}); const it = (r.items || [])[0];
+      toast(it && it.email_status === 'done' ? 'Email filed' : `Not filed: ${(it && it.email_note) || 'see the note'}`); return load(); }
     if (ds.pay) return openPay([Number(ds.pay)], { onDone: load });
     if (ds.edit) { state.editing = Number(ds.edit); state.draft = {}; return renderDetail(); }
     if (ds.mkOpen) { state.mkOpen = Number(ds.mkOpen); renderDetail(); const sel = $('#detail [data-autofocus]'); sel?.focus(); try { sel?.showPicker(); } catch {} return; }
