@@ -402,7 +402,8 @@ function render() {
       const x = i._done;
       h += `<div class="item doneline"><span class="what">✓ <b>${esc(i.supplier || 'Invoice')}</b>${i.invoice_number ? ' #' + esc(i.invoice_number) : ''} <span class="muted">${money(i.total_ex ?? i.total)}</span>
         → ${x.split ? `split between ${x.split.map((j) => `<b>#${esc(j.job_number)}</b>`).join(' and ')}` : x.to_stock && !x.job_number ? '<b>sent to stock</b>' : `${x.to_stock ? 'stock order' : 'added to'} <b>#${esc(x.job_number || '?')}</b>`}${x.paid ? ' <span class="muted">· marked paid</span>' : ''}</span>
-        <span class="acts">${x.to_stock ? `<a class="btn" href="/stock?t=${encodeURIComponent(BOOT.token)}">Open stock →</a>` : `<button class="primary" data-open-job="${esc(x.job_uuid)}">Open job →</button>`}<button data-undo-done="${i.id}">↶ Undo</button></span></div>`;
+        <span class="acts">${x.split ? x.split.map((j) => `<button class="primary" data-open-job="${esc(j.job_uuid)}" title="Open job #${esc(j.job_number)}">Open #${esc(j.job_number)}${j.total != null ? ` (${money(j.total)})` : ''} →</button>`).join('')
+          : x.to_stock ? `<a class="btn" href="/stock?t=${encodeURIComponent(BOOT.token)}">Open stock →</a>` : `<button class="primary" data-open-job="${esc(x.job_uuid)}">Open job →</button>`}<button data-undo-done="${i.id}">↶ Undo</button></span></div>`;
       continue;
     }
     const s = i.suggestion;
@@ -573,7 +574,9 @@ document.addEventListener('click', async (e) => {
     if (d.pay) return openPay([Number(d.pay)], { onDone: load });
     if (d.split) {
       const r = await openSplit(Number(d.split));
-      if (r) { markDone(d.split, { split: r.jobs, job_uuid: r.jobs[0] && r.jobs[0].job_uuid, job_number: r.jobs[0] && r.jobs[0].job_number, paid: r.paid }); load(); }
+      // each job with its share (ex GST), for an "Open #… →" button each
+      const split = r.jobs.map((j) => ({ ...j, total: ((r.totals || []).find((x) => x.job_number === j.job_number) || {}).total ?? null }));
+      if (r) { markDone(d.split, { split, job_uuid: split[0] && split[0].job_uuid, job_number: split[0] && split[0].job_number, paid: r.paid }); load(); }
       return;
     }
     if (d.undoDone) {
