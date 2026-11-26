@@ -1758,12 +1758,15 @@ function createRepo(db, dataDir) {
       const r = db.prepare('SELECT * FROM supplier_folders WHERE account_key = ?').all(accountUUID ?? '').find((f) => sameSupplier(supplierKey(f.supplier), supplierKey(supplier)));
       return r ? { id: r.folder_id, path: r.folder_path } : null;
     },
+    /** The supplier's email folder, chosen or confirmed once: from then on their paid emails go there (without asking). */
     saveSupplierFolder(accountUUID, supplier, { id, path }) {
       if (!supplier || !id) return;
       const old = db.prepare('SELECT supplier FROM supplier_folders WHERE account_key = ?').all(accountUUID ?? '').find((f) => sameSupplier(supplierKey(f.supplier), supplierKey(supplier)));
       db.prepare(`INSERT INTO supplier_folders (account_key, supplier, folder_id, folder_path) VALUES (?, ?, ?, ?)
         ON CONFLICT(account_key, supplier) DO UPDATE SET folder_id = excluded.folder_id, folder_path = excluded.folder_path`).run(accountUUID ?? '', old ? old.supplier : supplier, String(id), path ? String(path).slice(0, 300) : null);
     },
+    listSupplierFolders(accountUUID) { return db.prepare('SELECT supplier, folder_path FROM supplier_folders WHERE account_key = ? ORDER BY supplier').all(accountUUID ?? ''); },
+    forgetSupplierFolder(accountUUID, supplier) { return db.prepare('DELETE FROM supplier_folders WHERE account_key = ? AND supplier = ?').run(accountUUID ?? '', supplier).changes > 0; },
     listPayees(accountUUID) { return db.prepare('SELECT * FROM payees WHERE account_key = ? ORDER BY supplier').all(accountUUID ?? ''); },
     deletePayee(accountUUID, id) { return db.prepare('DELETE FROM payees WHERE id = ? AND account_key = ?').run(Number(id), accountUUID ?? '').changes > 0; },
     /** Save a payment (the bank file and its lines) and mark its invoices paid – all or nothing. */

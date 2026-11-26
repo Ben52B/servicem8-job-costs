@@ -180,7 +180,7 @@
           ${found ? `<div style="font-size:15px;font-weight:800;margin:6px 0 10px;word-break:break-word">${esc(m.path)}</div>` : '<div class="crumb">Job Costs doesn\u2019t make folders – choose one of yours.</div>'}
           <div class="fb-foot">${found ? '<button class="go" data-fa="yes">✓ Yes, file it there</button>' : ''}<button ${found ? '' : 'class="go"'} data-fa="choose">📁 ${found ? 'Choose another folder' : 'Choose the folder'}</button>
             <button data-fa="skip">Don't file it</button><span class="sp"></span><button data-fa="cancel">Cancel</button></div>
-          ${found ? '<label style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:13px"><input type="checkbox" data-fnever> Don\u2019t ask me again (still asked when there\u2019s no folder for a supplier)</label>' : ''}</div>`;
+          <div class="crumb" style="margin-top:10px">Asked once: from then on ${esc(p.supplier || 'this supplier')}\u2019s paid emails go to the folder you pick here (change it any time with 📁 Move it, or in ⚙ Settings).</div></div>`;
         document.body.appendChild(fbg);
         const done = (v) => { fbg.remove(); resolve(v); };
         fbg.addEventListener('click', async (e) => {
@@ -188,12 +188,7 @@
           const a = b.dataset.fa;
           if (a === 'cancel') return done('cancel');
           if (a === 'skip') return done({ skip: true });
-          if (a === 'yes') {
-            if (fbg.querySelector('[data-fnever]') && fbg.querySelector('[data-fnever]').checked) {
-              try { await call('/settings', { method: 'PUT', body: JSON.stringify({ pay_confirm_folder: false }) }); data.confirmFolder = false; } catch (x) { /* asks next time */ }
-            }
-            return done({ id: m.id, path: m.path });
-          }
+          if (a === 'yes') return done({ id: m.id, path: m.path });
           if (a === 'choose') { const f = await browseMailFolders(p.id, p.supplier); if (f) done(f); }
         });
       });
@@ -203,7 +198,8 @@
       if (!mailPlan) await loadMailPlan();
       const m = chosenFolder[p.id] ? { status: 'found', ...chosenFolder[p.id] } : (mailPlan || {})[p.id];
       if (!m || m.status === 'none') return null; // no email to file (or no mailbox): nothing to ask
-      if (m.status === 'found' && m.id && !data.confirmFolder) return { id: m.id, path: m.path };
+      // the supplier's folder was chosen (or confirmed) before: that's it – shown in the box, not asked again
+      if (m.status === 'found' && m.id && m.chosen) return { id: m.id, path: m.path };
       return askFolder(p, m.status === 'found' && !m.id ? { ...m, status: 'no_folder' } : m);
     }
     // each invoice on its own, so "Undo" on one leaves the others paid

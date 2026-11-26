@@ -1196,7 +1196,7 @@ window.addEventListener('message', function (e) {
       priceLists: repo.listPriceLists(req.account).map((p) => ({ id: p.id, supplier: p.supplier, name: p.name })),
       imap: im ? { email: im.email, host: im.host, error: im.error, last_check: im.last_check } : null,
       outlook: { available: !!(config.msClientId && config.msClientSecret), connected: !!(o && o.refresh_token), email: o ? o.email : null, error: o ? o.error : null, canWrite: !!(o && o.can_write) },
-      payBanks: PAY_BANKS, payees: repo.listPayees(req.account) });
+      payBanks: PAY_BANKS, payees: repo.listPayees(req.account), supplierFolders: repo.listSupplierFolders(req.account) });
   });
   api.put('/settings', (req, res) => {
     const b = req.body || {};
@@ -2110,6 +2110,8 @@ window.addEventListener('message', function (e) {
   });
   // didn't use the file: the invoices go back to unpaid
   api.post('/pay/:id/cancel', (req, res) => (repo.cancelPayment(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found or already cancelled' })));
+  // each supplier's email folder: forget it (asked again the next time one of theirs is paid)
+  api.post('/supplier-folders/forget', (req, res) => (repo.forgetSupplierFolder(req.account, String(req.body?.supplier || '')) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
   api.get('/payees', (req, res) => res.json({ payees: repo.listPayees(req.account) }));
   api.delete('/payees/:id', (req, res) => (repo.deletePayee(req.account, req.params.id) ? res.json({ ok: true }) : res.status(404).json({ error: 'Not found' })));
 

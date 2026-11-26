@@ -2091,6 +2091,11 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
   const sk = await post(t, '/pay', { ids: [inv2.id], confirm: { [inv2.id]: { amount_cents: 10000, bsb: '062-001', account_number: '10203040' } }, folders: { [inv2.id]: { skip: true } } }).then((x) => x.json());
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual([(await json(t, `/pay/${sk.id}`)).items[0].email_status, (await json(t, `/pay/${sk.id}`)).items[0].email_note], ['off', 'You chose not to file it']);
+  // Settings lists each supplier's folder; "Forget" means asked again next time
+  assert.deepEqual((await json(t, '/settings')).supplierFolders, [{ supplier: 'Smart Hire', folder_path: 'Inbox / Paid / Hire' }]);
+  assert.equal((await post(t, '/supplier-folders/forget', { supplier: 'Smart Hire' })).status, 200);
+  assert.equal(repo.getSupplierFolder('acc-man', 'Smart Hire'), null);
+  assert.equal((await post(t, '/supplier-folders/forget', { supplier: 'Smart Hire' })).status, 404);
   // asking before filing: on by default, "don't ask me again" turns it off (Settings turns it back on)
   assert.equal((await json(t, `/pay/preview?ids=${inv2.id}`)).confirmFolder, true);
   await api(t, '/settings', { method: 'PUT', json: { pay_confirm_folder: false } });

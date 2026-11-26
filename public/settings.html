@@ -221,8 +221,8 @@ function render() {
         <div class="hint">Each email goes into the supplier's folder under it (made if it isn't there).</div></div>
     </div>
     <label class="switch"><input type="checkbox" id="pmove" ${st.pay_move_email !== false ? 'checked' : ''}><span><b>Mark the invoice email read and file it when I pay</b></span></label>
-    <label class="switch"><input type="checkbox" id="pconf" ${st.pay_confirm_folder !== false ? 'checked' : ''}><span><b>Show me the folder and ask before filing each email</b><br>
-      <span class="muted" style="font-size:12.5px">Job Costs never makes folders: when a supplier has no folder, it always asks you to choose one.</span></span></label>
+    ${(data.supplierFolders || []).length ? `<div class="hint" style="margin-top:10px">Where each supplier\u2019s paid emails go (set the first time you pay them):</div>${data.supplierFolders.map((f) => `<div class="mb" style="display:flex;gap:8px;align-items:center">
+      <span style="flex:1"><b>${esc(f.supplier)}</b> <span class="muted">→ ${esc(f.folder_path || '')}</span></span><button data-folder-forget="${esc(f.supplier)}" title="Asked again the next time you pay them">Forget</button></div>`).join('')}` : ''}
     <details style="margin-top:8px"${st.pay_mode === 'file' ? ' open' : ''}><summary class="hint" style="cursor:pointer">Bank payment file (optional – only if you want to upload payments to your bank instead)</summary>
     <label class="switch"><input type="checkbox" id="pfile" ${st.pay_mode === 'file' ? 'checked' : ''}><span><b>Make a bank payment file (ABA) instead</b><br><span class="muted" style="font-size:12.5px">To upload in business online banking and approve there. Needs the bank's Direct Entry user ID.</span></span></label>
     <div class="grid2">
@@ -246,6 +246,9 @@ async function load() {
 }
 document.addEventListener('click', async (e) => {
   const mb = e.target.closest('button'); if (mb && await mailboxClick(mb, load)) return;
+  if (mb && mb.dataset.folderForget) {
+    try { await api('/supplier-folders/forget', { method: 'POST', body: JSON.stringify({ supplier: mb.dataset.folderForget }) }); toast('Forgotten – you\u2019ll be asked the next time you pay them'); } catch (x) { toast(x.message); } return load();
+  }
   if (mb && mb.dataset.payeeDel) {
     if (!mb.dataset.sure) { mb.dataset.sure = '1'; mb.textContent = 'Sure? Remove'; return; }
     try { await api('/payees/' + mb.dataset.payeeDel, { method: 'DELETE' }); toast('Removed – the next invoice from them asks for their bank details again'); } catch (x) { toast(x.message); } return load();
@@ -259,7 +262,7 @@ document.addEventListener('click', async (e) => {
       check_days: [...document.querySelectorAll('[data-day]')].filter((x) => x.checked).map((x) => x.dataset.day),
       check_from: Number($('#from').value), check_to: Number($('#to').value), timezone: $('#tz').value, diary_summary: $('#ds').checked, ask_ignore_on_delete: $('#ai').checked,
       pay_bank: $('#pbank').value, pay_apca_id: $('#papca').value, pay_bsb: $('#pbsb').value, pay_account: $('#pacc').value, pay_account_name: $('#pname').value,
-      pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_confirm_folder: $('#pconf').checked, pay_balance: $('#pbal').checked, pay_mode: $('#pfile').checked ? 'file' : 'manual' }) });
+      pay_remitter: $('#prem').value, pay_reference: $('#pref').value, pay_folder: $('#pfold').value, pay_move_email: $('#pmove').checked, pay_balance: $('#pbal').checked, pay_mode: $('#pfile').checked ? 'file' : 'manual' }) });
     const turnedOn = r.settings.diary_summary && !data.settings.diary_summary;
     data.settings = r.settings; render();
     const msg = turnedOn ? '✓ Saved – every open job with costs gets its Job Costs note in the diary within a couple of minutes' : '✓ Saved';
