@@ -2194,6 +2194,55 @@ test('an Outlook email brought in from a job’s Job Costs goes straight onto th
   assert.equal((await post(t, '/outlook/import-chosen', { message_ids: [], folder_ids: [] })).status, 400);
 });
 
+test('one invoice for two jobs: spotted, split from the Inbox (lines, shared delivery, amounts), paid once, undone', async () => {
+  JOBS['sp-a'] = { jobNumber: '209290', jobTitle: '1 Split St' };
+  JOBS['sp-b'] = { jobNumber: '209291', jobTitle: '2 Split St' };
+  const t = await openCard('sp-a', 'acc-sp');
+  await openCard('sp-b', 'acc-sp');
+  // $1,100 + $550 + $110 delivery + $220 posts (both jobs) = $1,980 inc GST ($1,800 ex GST)
+  const inv = repo.createInvoice({ accountUUID: 'acc-sp', source: 'email', emailSubject: 'Invoice 4710 – PO 209290 & 209291' });
+  repo.saveExtraction(inv.id, { supplier_name: 'Fine Tuned Garage Doors', invoice_number: '4710', total: 1980, tax: 180, subtotal: 1800, references: ['PO 209290', 'PO 209291'], items: [
+    { description: 'Door 2400x2100', line_total: 1100, category: 'materials', job_reference: 'PO 209290' },
+    { description: 'Motor', line_total: 550, category: 'materials', job_reference: 'PO 209291' },
+    { description: 'Delivery', line_total: 110, category: 'freight', job_reference: '' },
+    { description: 'Posts x4', line_total: 220, category: 'materials', quantity: 4, job_reference: '' }] });
+  // spotted in the Inbox
+  const ib = (await json(t, '/inbox')).invoices.find((i) => i.id === inv.id);
+  assert.deepEqual(ib.multi_jobs.map((j) => j.job_number).sort(), ['209290', '209291']);
+  const sp = await json(t, `/inbox/${inv.id}/split`);
+  const L = Object.fromEntries(sp.lines.map((l) => [l.description, l]));
+  assert.equal(L['Door 2400x2100'].job_uuid, 'sp-a', 'the line says which job');
+  assert.equal(L.Motor.job_uuid, 'sp-b');
+  assert.deepEqual(sp.lines.map((l) => l.cost), [1000, 500, 100, 200], 'ex GST');
+  // every line must be shared out in full
+  assert.equal((await post(t, `/inbox/${inv.id}/split`, { lines: [{ item_id: L.Motor.id, shares: [{ job: '209291', fraction: 1 }] }] })).status, 400);
+  assert.equal((await post(t, `/inbox/${inv.id}/split`, { lines: sp.lines.map((l) => ({ item_id: l.id, shares: [{ job: '209290', fraction: 0.5 }] })) })).status, 400);
+  assert.equal((await post(t, `/inbox/${inv.id}/split`, { lines: sp.lines.map((l) => ({ item_id: l.id, shares: [{ job: '999999', fraction: 1 }] })) })).status, 404);
+  // door → A, motor → B, delivery in proportion (1000:500 → 2/3 : 1/3), posts 2 and 2 ($100 each)
+  const r = await post(t, `/inbox/${inv.id}/split`, { paid: true, lines: [
+    { item_id: L['Door 2400x2100'].id, shares: [{ job: '209290', fraction: 1 }] },
+    { item_id: L.Motor.id, shares: [{ job: 'sp-b', fraction: 1 }] },
+    { item_id: L.Delivery.id, shares: [{ job: '209290', fraction: 2 / 3 }, { job: '209291', fraction: 1 / 3 }] },
+    { item_id: L['Posts x4'].id, shares: [{ job: '209290', fraction: 0.5 }, { job: '209291', fraction: 0.5 }] }] }).then((x) => x.json());
+  assert.deepEqual(r.jobs.map((j) => j.job_number).sort(), ['209290', '209291']);
+  const tot = Object.fromEntries(r.totals.map((x) => [x.job_number, x.total]));
+  assert.equal(tot['209290'], 1166.67, '1000 + 66.67 + 100');
+  assert.equal(tot['209291'], 633.33, '500 + 33.33 + 100');
+  assert.equal(Math.round((tot['209290'] + tot['209291']) * 100) / 100, 1800, 'the whole invoice, once');
+  // one invoice, paid once; not in the Inbox any more
+  assert.equal((await json(t, '/inbox')).invoices.some((i) => i.id === inv.id), false);
+  assert.equal((await summary(t)).invoices.find((i) => i.id === inv.id).payment_state, 'paid');
+  // the Pay reference names both jobs
+  const aba = require('../src/aba');
+  assert.equal(aba.makeReference('INV {invoice} PO {job}', { invoice: '4710', job: '209290/209291' }), 'INV 4710 PO 209290/209291');
+  // already on jobs: can't be split again from the Inbox
+  assert.equal((await post(t, `/inbox/${inv.id}/split`, { lines: [] })).status, 400);
+  // undo: off both jobs, back in the Inbox, unpaid
+  await post(t, `/inbox/${inv.id}/undo`, { all_jobs: true, unpaid: true });
+  assert.deepEqual(repo.jobsOnInvoice(inv.id), []);
+  assert.ok((await json(t, '/inbox')).invoices.some((i) => i.id === inv.id));
+});
+
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (never makes one), marks read, moves', async () => {
   const { fileInOutlook, sameName } = require('../src/mailfile');
   const calls = [];

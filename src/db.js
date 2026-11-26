@@ -406,6 +406,8 @@ function migrateColumns(db) {
   db.prepare("UPDATE invoices SET status = 'processing', error = NULL WHERE error LIKE '%parameters with union types%'").run();
   // …and those that failed because the API key was refused (fixed by setting a working key in Render, which restarts the server)
   db.prepare("UPDATE invoices SET status = 'processing', error = NULL WHERE error = 'Invoice reading is not set up (check ANTHROPIC_API_KEY).' OR error LIKE '%out of credit%'").run();
+  // the job / PO / site a line is for, when the invoice says (for invoices covering several jobs)
+  if (!db.prepare('PRAGMA table_info(items)').all().some((x) => x.name === 'job_ref')) db.exec('ALTER TABLE items ADD COLUMN job_ref TEXT');
   // brought in on purpose (ticked in "Import from Outlook"): never dropped quietly, always left in the Inbox to approve
   if (!db.prepare('PRAGMA table_info(invoices)').all().some((x) => x.name === 'chosen')) db.exec('ALTER TABLE invoices ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0');
   // scope 'supplier': everything from that supplier is ignored (not just the one bill)
@@ -1013,15 +1015,15 @@ function createRepo(db, dataDir) {
         db.prepare('DELETE FROM allocations WHERE item_id IN (SELECT id FROM items WHERE invoice_id = ?)').run(id);
         db.prepare('DELETE FROM items WHERE invoice_id = ?').run(id);
         const ins = db.prepare(`INSERT INTO items
-          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          (invoice_id, position, description, category, quantity, unit, unit_price, line_total, cost, paid, paid_at, job_ref)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
         const now = new Date().toISOString();
         items.forEach((it, i) => {
           const old = before.get(norm(it.description));
           const paid = alreadyPaid || wasAllPaid || !!(old && old.paid);
           ins.run(id, i, String(it.description).slice(0, 500), it.category || 'other',
             it.quantity ?? null, it.unit || null, it.unit_price ?? null, round2(it.line_total), costs[i],
-            paid ? 1 : 0, paid ? (old?.paid_at || oldItems[0]?.paid_at || now) : null);
+            paid ? 1 : 0, paid ? (old?.paid_at || oldItems[0]?.paid_at || now) : null, it.job_reference ? String(it.job_reference).slice(0, 100) : null);
         });
         const newItems = db.prepare('SELECT id, description FROM items WHERE invoice_id = ?').all(id);
         const insA = db.prepare(`INSERT INTO allocations (item_id, job_uuid, fraction, category, mistake_reason, mistake_at)
@@ -1214,6 +1216,25 @@ function createRepo(db, dataDir) {
      * the invoice's references or the file name, or the site address. Stores the best
      * guess (only if it's clear) with the reason.
      */
+    /**
+     * The jobs an invoice mentions by job number (subject, references, file name, email, and each line's job reference),
+     * for invoices covering several jobs: [{ job_uuid, job_number, job_title, lines: [item ids that name it] }]
+     */
+    jobsMentioned(invoiceId) {
+      const inv = repo.getInvoice(invoiceId);
+      if (!inv) return [];
+      const items = db.prepare('SELECT id, job_ref, description FROM items WHERE invoice_id = ?').all(invoiceId);
+      const text = [inv.email_subject, parseJson(inv.refs, []).join(' | '), inv.file_name, inv.email_text].filter(Boolean).join(' | ');
+      const out = [];
+      for (const j of repo._withoutSplitParts(db.prepare('SELECT * FROM jobs WHERE account_uuid IS ? AND job_number IS NOT NULL').all(inv.account_uuid))) {
+        const num = String(j.job_number).trim().replace(/[^0-9a-z]/gi, '');
+        if (num.length < 4 || (j.stock_manual != null ? j.stock_manual : j.stock_auto)) continue;
+        const re = new RegExp(`(^|[^0-9])${num}([^0-9]|$)`, 'i');
+        const lines = items.filter((it) => re.test(`${it.job_ref || ''} ${it.description || ''}`)).map((it) => it.id);
+        if (lines.length || re.test(text)) out.push({ job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title, lines });
+      }
+      return out;
+    },
     suggestJob(invoiceId) {
       const inv = repo.getInvoice(invoiceId);
       if (!inv || inv.status !== 'ready') return null;
@@ -1617,6 +1638,8 @@ function createRepo(db, dataDir) {
           paid: lines.length > 0 && lines.every((l) => l.paid), created_at: inv.created_at,
           total_ex: exGst(inv.total, inv.tax), category: inv.category, source: inv.source, file_path: inv.file_path, mime_type: inv.mime_type, email_from: inv.email_from, email_subject: inv.email_subject,
           untouched, kept_as_stock: !!inv.kept_as_stock, duplicate_of: dupOf,
+          // mentions two or more jobs: offered to split between them
+          multi_jobs: untouched ? (() => { const m = repo.jobsMentioned(inv.id); return m.length >= 2 ? m.map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number })) : null; })() : null,
           price_check: parseJson(inv.price_check, null), price_check_status: inv.price_check_status || null, possible_duplicate: untouched ? repo.possibleDuplicate(inv) : null,
           stock_job: inv.stock_job_uuid && jobsById.get(inv.stock_job_uuid)
             ? { job_uuid: inv.stock_job_uuid, job_number: jobsById.get(inv.stock_job_uuid).job_number } : null,

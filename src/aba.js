@@ -29,6 +29,13 @@ const toCents = (amount) => Math.round(Number(amount) * 100);
  * never the invoice number's digits.
  */
 function makeReference(template, { invoice = '', job = '' } = {}, maxLength = Infinity) {
+  // several jobs (an invoice split between them): "208118/208163", or just the first when that's too long
+  const jobs = String(job || '').trim().split(/[\/,\s]+/).filter(Boolean);
+  if (jobs.length > 1) {
+    const all = makeReference(template, { invoice, job: jobs.join('-') }, Infinity).replace(jobs.join('-'), jobs.join('/'));
+    if (all.length <= maxLength) return all;
+    return makeReference(template, { invoice, job: jobs[0] }, maxLength);
+  }
   const inv = clean(invoice).replace(/^inv(oice)?[\s#:.\-]*/i, '').replace(/\s+/g, '');
   job = String(job || '').trim().split(/[\/,\s]+/)[0]; // on two jobs: the first
   const fill = (i) => clean(String(template || 'INV {invoice} PO {job}').replace(/\{invoice\}/gi, i).replace(/\{job\}/gi, clean(job).replace(/\s+/g, '')))

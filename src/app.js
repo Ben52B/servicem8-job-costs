@@ -1707,6 +1707,67 @@ window.addEventListener('message', function (e) {
     for (const id of ids) processor.enqueue(id);
     res.json({ ok: true, queued: ids.length });
   });
+  // ---- one invoice for several jobs ----
+  // the lines (this job's cost of each, ex GST) and the jobs the invoice mentions, with the job each line looks like it's for
+  api.get('/inbox/:id/split', (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    if (repo.jobsOnInvoice(inv.id).length) return res.status(400).json({ error: 'It\u2019s already on a job – split it from that job\u2019s Job Costs' });
+    const jobs = repo.jobsMentioned(inv.id);
+    const lines = repo.db.prepare('SELECT id, description, category, quantity, unit, line_total, cost, job_ref FROM items WHERE invoice_id = ? ORDER BY position, id').all(inv.id)
+      .map((l) => ({ ...l, job_uuid: (jobs.find((j) => j.lines.includes(l.id)) || {}).job_uuid || null }));
+    res.json({ invoice: { id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, total: inv.total, total_ex: Math.round((inv.total - (inv.tax || 0)) * 100) / 100 },
+      jobs: jobs.map(({ lines: _l, ...j }) => j), lines });
+  });
+  // { lines: [{ item_id, shares: [{ job, fraction }] }], paid } – every line's shares add up to the whole line
+  api.post('/inbox/:id/split', async (req, res) => {
+    const inv = accountInvoice(req, res);
+    if (!inv) return;
+    if (inv.status !== 'ready') return res.status(400).json({ error: 'Wait until the invoice has been read' });
+    if (repo.jobsOnInvoice(inv.id).length) return res.status(400).json({ error: 'It\u2019s already on a job' });
+    const items = repo.db.prepare('SELECT id, category FROM items WHERE invoice_id = ?').all(inv.id);
+    const given = new Map((Array.isArray(req.body?.lines) ? req.body.lines : []).map((l) => [Number(l.item_id), Array.isArray(l.shares) ? l.shares : []]));
+    // the jobs: by uuid or number, this business's, not stock order jobs
+    const jobCache = new Map();
+    const jobOf = async (ref) => {
+      const k = String(ref || '').trim().replace(/^#/, '');
+      if (!k) return null;
+      if (!jobCache.has(k)) jobCache.set(k, repo.getJob(k) || await jobByNumber(req.account, k).catch(() => null));
+      const j = jobCache.get(k);
+      return j && (j.account_uuid ?? null) === req.account ? j : null;
+    };
+    const plan = [];
+    for (const it of items) {
+      const shares = given.get(it.id);
+      if (!shares || !shares.length) return res.status(400).json({ error: 'Every line needs a job' });
+      let sum = 0;
+      for (const s of shares) {
+        const f = Number(s.fraction);
+        if (!(f > 0) || f > 1 + 1e-9) return res.status(400).json({ error: 'A line\u2019s share isn\u2019t right' });
+        const job = await jobOf(s.job);
+        if (!job) return res.status(404).json({ error: `Job #${String(s.job || '').replace(/^#/, '')} wasn\u2019t found` });
+        if (repo.isStockJob(job.job_uuid)) return res.status(400).json({ error: `#${job.job_number} is a stock order job – it doesn\u2019t take costs` });
+        sum += f; plan.push({ item: it, job, fraction: f });
+      }
+      if (Math.abs(sum - 1) > 0.001) return res.status(400).json({ error: 'Each line has to be shared out in full (100%)' });
+    }
+    if (twinBlocks(res, inv)) return;
+    try {
+      repo.db.exec('BEGIN');
+      // each job's shares of a line add up (a line may be on one job twice in the list)
+      const byKey = new Map();
+      for (const p of plan) { const k = `${p.item.id}|${p.job.job_uuid}`; byKey.set(k, { ...p, fraction: (byKey.get(k)?.fraction || 0) + p.fraction }); }
+      for (const p of byKey.values()) repo.setShare(p.item.id, p.job.job_uuid, Math.min(1, p.fraction), { category: p.item.category });
+      repo.db.prepare('UPDATE invoices SET suggested_job_uuid = NULL, suggestion_reason = NULL, diary_pending = 1 WHERE id = ?').run(inv.id);
+      repo.markApproved(inv.id, null);
+      if (req.body?.paid === true) repo.setInvoicePaid(inv.id, true);
+      repo.db.exec('COMMIT');
+    } catch (e) { try { repo.db.exec('ROLLBACK'); } catch { /* fine */ } return res.status(e.status || 500).json({ error: e.message }); }
+    const jobs = repo.jobsOnInvoice(inv.id);
+    kickDiary();
+    res.json({ ok: true, jobs: jobs.map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number })), totals: jobs.map((j) => ({ job_number: j.job_number, total: repo.getJobSummary(j.job_uuid).invoices.find((i) => i.id === inv.id)?.job_total ?? null })) });
+  });
   api.post('/inbox/:id/assign', async (req, res) => {
     const inv = accountInvoice(req, res);
     if (!inv) return;
@@ -1751,6 +1812,7 @@ window.addEventListener('message', function (e) {
     // straight after adding it: also off the job it was added to (a stock order job too), and not paid if that was ticked with it
     const jobUUID = req.body?.job_uuid ? String(req.body.job_uuid) : null;
     if (jobUUID && repo.jobsOnInvoice(inv.id).some((j) => j.job_uuid === jobUUID)) repo.removeFromJob(inv.id, jobUUID);
+    if (req.body?.all_jobs === true) for (const j of repo.jobsOnInvoice(inv.id)) repo.removeFromJob(inv.id, j.job_uuid); // split between jobs
     if (req.body?.unpaid === true) repo.setInvoicePaid(inv.id, false);
     repo.undoApproval(inv.id);
     repo.suggestJob(inv.id);
@@ -1934,7 +1996,7 @@ window.addEventListener('message', function (e) {
       id: inv.id, supplier: inv.supplier, invoice_number: inv.invoice_number, invoice_date: inv.invoice_date, due_date: inv.due_date,
       amount: inv.total, amount_cents: aba.toCents(inv.total), jobs: jobNumbers,
       // in full for paying in the banking app; the bank file allows 18 characters
-      reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers[0] || '' }, st.pay_mode === 'file' ? 18 : Infinity),
+      reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers.join('/') }, st.pay_mode === 'file' ? 18 : Infinity),
       payee, printed, bpay: inv.bpay_biller ? { biller: inv.bpay_biller, ref: inv.bpay_ref } : null,
       // 'first': the first payment to this supplier – the details come from this invoice, so there's nothing yet to compare them with
       check: !printed ? 'not_printed' : !payee ? 'no_payee' : payee.from === 'invoice' ? 'first' : sameBank(payee, printed) ? 'match' : 'mismatch',

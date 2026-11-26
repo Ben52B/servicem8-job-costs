@@ -189,6 +189,107 @@ async function readerRetry(b, reload) {
   catch (x) { b.disabled = false; }
   setTimeout(reload, 1500);
 }
+// ✂ Split one invoice between jobs: each line → a job, shared in proportion (delivery, fees…), or amounts per job
+async function openSplit(id) {
+  const sp = await api(`/inbox/${id}/split`);
+  const jobs = sp.jobs.map((j) => ({ num: String(j.job_number), title: j.job_title || '' }));
+  const choice = new Map(); // item id → job number | 'shared' | 'amounts'
+  const amounts = new Map(); // item id → { job number: dollars }
+  const SHARED = /^(freight|fees)$/;
+  for (const l of sp.lines) {
+    const j = l.job_uuid && sp.jobs.find((x) => x.job_uuid === l.job_uuid);
+    choice.set(l.id, j ? String(j.job_number) : SHARED.test(l.category) || /deliver|freight|cartage|surcharge|fee/i.test(l.description) ? 'shared' : (jobs[0] ? jobs[0].num : ''));
+  }
+  const box = document.createElement('div'); box.className = 'ask';
+  document.body.appendChild(box);
+  const r2 = (n) => Math.round(n * 100) / 100;
+  // each job's share of each line (fractions)
+  function shares() {
+    const direct = new Map(jobs.map((j) => [j.num, 0]));
+    for (const l of sp.lines) { const c = choice.get(l.id); if (direct.has(c)) direct.set(c, direct.get(c) + l.cost);
+      if (c === 'amounts') for (const [n, v] of Object.entries(amounts.get(l.id) || {})) if (direct.has(n)) direct.set(n, direct.get(n) + (Number(v) || 0)); }
+    const directSum = [...direct.values()].reduce((a, b) => a + b, 0);
+    const out = new Map();
+    for (const l of sp.lines) {
+      const c = choice.get(l.id);
+      if (c === 'shared') out.set(l.id, jobs.map((j) => ({ job: j.num, fraction: directSum > 0 ? direct.get(j.num) / directSum : 1 / jobs.length })).filter((x) => x.fraction > 0));
+      else if (c === 'amounts') { const a = amounts.get(l.id) || {}; out.set(l.id, jobs.map((j) => ({ job: j.num, fraction: l.cost ? (Number(a[j.num]) || 0) / l.cost : 0 })).filter((x) => x.fraction > 0)); }
+      else if (c) out.set(l.id, [{ job: c, fraction: 1 }]);
+      else out.set(l.id, []);
+    }
+    return out;
+  }
+  function problems(sh) {
+    if (jobs.length < 1) return 'Add the jobs it’s for';
+    for (const l of sp.lines) {
+      const s = sh.get(l.id) || [];
+      if (!s.length) return `Choose a job for “${l.description}”`;
+      if (choice.get(l.id) === 'amounts') { const sum = Object.values(amounts.get(l.id) || {}).reduce((a, v) => a + (Number(v) || 0), 0); if (Math.abs(sum - l.cost) > 0.005) return `“${l.description}”: the amounts add up to ${money(sum)}, not ${money(l.cost)}`; }
+    }
+    return '';
+  }
+  function render() {
+    const sh = shares();
+    const per = new Map(jobs.map((j) => [j.num, 0]));
+    for (const l of sp.lines) for (const s of sh.get(l.id) || []) per.set(s.job, (per.get(s.job) || 0) + l.cost * s.fraction);
+    const issue = problems(sh);
+    const opts = (l) => `${jobs.map((j) => `<option value="${esc(j.num)}" ${choice.get(l.id) === j.num ? 'selected' : ''}>#${esc(j.num)}</option>`).join('')}
+      ${jobs.length > 1 ? `<option value="shared" ${choice.get(l.id) === 'shared' ? 'selected' : ''}>Shared – in proportion</option><option value="amounts" ${choice.get(l.id) === 'amounts' ? 'selected' : ''}>Split by amount…</option>` : ''}
+      ${choice.get(l.id) ? '' : '<option value="" selected>Choose…</option>'}`;
+    box.innerHTML = `<div class="ask-card" style="max-width:680px;max-height:90vh;overflow:auto">
+      <b style="font-size:16px">✂ Split ${esc(sp.invoice.supplier || 'this invoice')}${sp.invoice.invoice_number ? ' #' + esc(sp.invoice.invoice_number) : ''} between jobs</b>
+      <div class="muted" style="margin:4px 0 10px;font-size:13px">It stays one invoice (paid once); each job gets its part of the cost. Amounts are ex GST.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:13px">Jobs:</b>
+        ${jobs.map((j, k) => `<span class="chip c-proc" title="${esc(j.title)}">#${esc(j.num)} <button class="lnk" data-sj-del="${k}" title="Remove" style="padding:0 2px">✕</button></span>`).join('')}
+        <input id="sjAdd" list="jobList" placeholder="+ job #" autocomplete="off" style="width:110px;font:inherit;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px"><button data-sj-add>Add</button></div>
+      ${sp.lines.map((l) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line2)">
+        <span style="font-size:13.5px">${esc(l.description)}${l.job_ref ? ` <span class="muted">(${esc(l.job_ref)})</span>` : ''}</span><b style="font-size:13.5px;white-space:nowrap">${money(l.cost)}</b>
+        <select data-sj-line="${l.id}" style="font:inherit;font-size:13px;border:1px solid #d6e2de;border-radius:9px;padding:4px 6px;background:#fff">${opts(l)}</select>
+        ${choice.get(l.id) === 'amounts' ? `<div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;padding-left:12px">${jobs.map((j) => `<label style="font-size:12.5px">#${esc(j.num)} $<input data-sj-amt="${l.id}" data-job="${esc(j.num)}" inputmode="decimal" value="${esc((amounts.get(l.id) || {})[j.num] ?? '')}" style="width:80px;font:inherit;border:1px solid #d6e2de;border-radius:8px;padding:3px 6px"></label>`).join('')}</div>` : ''}
+      </div>`).join('')}
+      <div style="border-top:2px solid var(--line);margin-top:4px;padding-top:8px;display:flex;gap:12px;flex-wrap:wrap;font-size:13.5px">${jobs.map((j) => `<span>#${esc(j.num)}: <b>${money(r2(per.get(j.num) || 0))}</b></span>`).join('')}
+        <span class="muted">= ${money(r2([...per.values()].reduce((a, b) => a + b, 0)))} of ${money(sp.invoice.total_ex)} ex GST</span></div>
+      ${issue ? `<div style="color:var(--bad);font-size:13px;margin-top:6px">${esc(issue)}</div>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px"><label class="paidbox"><input type="checkbox" id="sjPaid"> Paid</label><span style="flex:1"></span>
+        <button data-sj-cancel>Cancel</button><button class="primary" data-sj-save ${issue ? 'disabled' : ''}>✂ Split between ${jobs.length} job${jobs.length === 1 ? '' : 's'}</button></div></div>`;
+  }
+  return new Promise((resolve) => {
+    const close = (v) => { box.remove(); resolve(v); };
+    box.addEventListener('change', (e) => {
+      const l = e.target.dataset.sjLine;
+      if (l) { choice.set(Number(l), e.target.value); if (e.target.value === 'amounts' && !amounts.has(Number(l))) { const line = sp.lines.find((x) => x.id === Number(l)); const each = r2(line.cost / jobs.length); amounts.set(Number(l), Object.fromEntries(jobs.map((j, k) => [j.num, k === jobs.length - 1 ? r2(line.cost - each * (jobs.length - 1)) : each]))); } render(); }
+    });
+    box.addEventListener('input', (e) => {
+      const l = e.target.dataset.sjAmt;
+      if (l) { const a = amounts.get(Number(l)) || {}; a[e.target.dataset.job] = e.target.value; amounts.set(Number(l), a); const pos = e.target.selectionStart; render(); const el = box.querySelector(`[data-sj-amt="${l}"][data-job="${e.target.dataset.job}"]`); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (x) { /* fine */ } } }
+    });
+    box.addEventListener('click', async (e) => {
+      if (e.target === box) return close(null);
+      const b = e.target.closest('button'); if (!b) return;
+      const d = b.dataset;
+      if (d.sjCancel !== undefined) return close(null);
+      if (d.sjDel !== undefined) { const j = jobs.splice(Number(d.sjDel), 1)[0]; for (const [k, v] of choice) if (v === j.num) choice.set(k, ''); render(); return; }
+      if (d.sjAdd !== undefined) {
+        const n = box.querySelector('#sjAdd').value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
+        if (!n || jobs.some((j) => j.num === n)) return;
+        const known = (data.jobs || []).find((j) => String(j.job_number) === n);
+        jobs.push({ num: n, title: known ? known.job_title || '' : '' });
+        for (const [k, v] of choice) if (!v) choice.set(k, n);
+        render(); return;
+      }
+      if (d.sjSave !== undefined) {
+        const sh = shares();
+        b.disabled = true; b.textContent = 'Splitting…';
+        try {
+          const paid = box.querySelector('#sjPaid').checked;
+          const r = await api(`/inbox/${id}/split`, { method: 'POST', body: JSON.stringify({ paid, lines: sp.lines.map((l) => ({ item_id: l.id, shares: sh.get(l.id) })) }) });
+          close({ ...r, paid });
+        } catch (x) { toast(x.message); b.disabled = false; b.textContent = 'Split'; }
+      }
+    });
+    render();
+  });
+}
 // Invoices added (or sent to stock) since the page opened: a slim line in their place, with "Open job" and "Undo"
 const done = new Map(); // id → { inv, job_uuid, job_number, to_stock, paid }
 let shownOrder = [];
@@ -300,7 +401,7 @@ function render() {
     if (i._done) {
       const x = i._done;
       h += `<div class="item doneline"><span class="what">✓ <b>${esc(i.supplier || 'Invoice')}</b>${i.invoice_number ? ' #' + esc(i.invoice_number) : ''} <span class="muted">${money(i.total_ex ?? i.total)}</span>
-        → ${x.to_stock && !x.job_number ? '<b>sent to stock</b>' : `${x.to_stock ? 'stock order' : 'added to'} <b>#${esc(x.job_number || '?')}</b>`}${x.paid ? ' <span class="muted">· marked paid</span>' : ''}</span>
+        → ${x.split ? `split between ${x.split.map((j) => `<b>#${esc(j.job_number)}</b>`).join(' and ')}` : x.to_stock && !x.job_number ? '<b>sent to stock</b>' : `${x.to_stock ? 'stock order' : 'added to'} <b>#${esc(x.job_number || '?')}</b>`}${x.paid ? ' <span class="muted">· marked paid</span>' : ''}</span>
         <span class="acts">${x.to_stock ? `<a class="btn" href="/stock?t=${encodeURIComponent(BOOT.token)}">Open stock →</a>` : `<button class="primary" data-open-job="${esc(x.job_uuid)}">Open job →</button>`}<button data-undo-done="${i.id}">↶ Undo</button></span></div>`;
       continue;
     }
@@ -316,12 +417,15 @@ function render() {
       <div class="sub">${dueChip(i.due_date, !i.paid)} ${esc([i.invoice_number && '#' + i.invoice_number, fmtDate(i.invoice_date), i.due_date && 'due ' + fmtDate(i.due_date), i.lines.length + ' line' + (i.lines.length === 1 ? '' : 's'), from && 'from ' + from, i.source === 'outlook' && 'Outlook'].filter(Boolean).join(' · '))}</div>
       ${pcChip(i) ? `<div class="pcline">${pcChip(i)}<span class="muted">${esc(i.price_check && i.price_check_status === 'done' ? i.price_check.headline || '' : '')}</span></div>` : ''}
       ${dupNote(i.possible_duplicate, s && s.job_uuid)}
+      ${i.multi_jobs ? `<div class="sugg"><span class="why">💡 Looks like it’s for <b>${i.multi_jobs.length} jobs: ${i.multi_jobs.map((j) => '#' + esc(j.job_number)).join(' and ')}</b></span>
+        <span class="go"><button class="primary" data-split="${i.id}">✂ Split between jobs</button></span></div>` : ''}
       ${s ? `<div class="sugg"><span class="why">💡 Looks like <b>${esc(jobLabel(s))}</b><span class="muted"> – ${esc(s.reason || '')}</span></span>
         <span class="go">${paidBox}<button class="primary" data-assign="${i.id}" data-job="${esc(s.job_uuid)}">✓ ${s.is_stock ? 'Add to stock order' : 'Add to'} #${esc(s.job_number)}</button>${!s.is_stock ? openJob(s.job_uuid, s.job_number) : ''}</span></div>`
         : i.looks_like_stock ? `<div class="sugg"><span class="why">💡 Looks like stock<span class="muted"> – no job number or site on it, and it reads like a restock order</span></span>
         <span class="go">${paidBox}<button class="primary" data-stock="${i.id}">✓ 📦 Send to stock</button></span></div>` : ''}
       <div class="acts left">${fileLink(i)}${s || i.looks_like_stock ? '' : paidBox}${jobBox(i.id, !!s)}
         ${i.looks_like_stock ? '' : `<button data-stock="${i.id}" title="Not for one job – keep it to take items from later">📦 Send to stock</button>`}
+        ${i.lines.length && !i.multi_jobs ? `<button data-split="${i.id}" title="One invoice for several jobs: give each job its part">✂ Split between jobs</button>` : ''}
         <span style="flex:1"></span><button class="danger" data-del="${i.id}" title="Not a cost (e.g. a remittance or a duplicate)">🗑 Delete</button></div></div>`;
   }
   const recent = (data.recent || []).filter((r) => !done.has(r.id));
@@ -467,10 +571,15 @@ document.addEventListener('click', async (e) => {
     }
     if (d.readerRetry !== undefined) return readerRetry(b, load);
     if (d.pay) return openPay([Number(d.pay)], { onDone: load });
+    if (d.split) {
+      const r = await openSplit(Number(d.split));
+      if (r) { markDone(d.split, { split: r.jobs, job_uuid: r.jobs[0] && r.jobs[0].job_uuid, job_number: r.jobs[0] && r.jobs[0].job_number, paid: r.paid }); load(); }
+      return;
+    }
     if (d.undoDone) {
       const id = Number(d.undoDone), x = done.get(id);
       b.disabled = true;
-      const r = await api(`/inbox/${id}/undo`, { method: 'POST', body: JSON.stringify({ job_uuid: x && x.job_uuid, unpaid: !!(x && x.paid) }) });
+      const r = await api(`/inbox/${id}/undo`, { method: 'POST', body: JSON.stringify({ job_uuid: x && x.job_uuid, unpaid: !!(x && x.paid), ...(x && x.split ? { all_jobs: true } : {}) }) });
       done.delete(id); toast(r.diaryWarning || 'Back in the Inbox'); return load();
     }
     if (d.undo) { const r = await api(`/inbox/${d.undo}/undo`, { method: 'POST' }); toast(r.diaryWarning || 'Back in the Inbox'); return load(); }

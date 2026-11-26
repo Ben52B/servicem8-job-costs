@@ -25,6 +25,8 @@ const InvoiceSchema = z.object({
     unit: z.string().nullable(),
     unit_price: z.number().nullable(),
     line_total: z.number().describe('Line amount exactly as printed on the document.'),
+    // a plain string (empty when not shown): the API allows at most 16 fields that may be empty, and 15 are used
+    job_reference: z.string().describe('When the invoice is for several jobs and says which one this line is for (a PO / job number / site printed next to the line or as a heading above it): that reference exactly as printed. Empty string otherwise.'),
   })),
   references: z.array(z.string()).describe('Every reference the customer gave the supplier: PO number, order number, "your ref", job number, customer reference, project name. Copy them exactly as printed. Empty list if none.'),
   site_address: z.string().nullable().describe('Delivery or job-site address if shown (not the supplier\'s address and not the billing address unless it is the only one).'),
