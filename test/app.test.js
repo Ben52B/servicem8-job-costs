@@ -34,6 +34,8 @@ const DOOR = {
 const fakeAnalyzer = {
   async analyzeFile({ fileName }) {
     if (/notinvoice/.test(fileName)) throw new Error('This does not look like an invoice or receipt.');
+    if (/keyfail/.test(fileName) && fakeAnalyzer.keyRefused) { const e = new Error('401 {"type":"error","error":{"type":"authentication_error"}}'); e.status = 401; throw e; }
+    if (/keyfail/.test(fileName) && fakeAnalyzer.noCredit) { const e = new Error('400 Your credit balance is too low to access the Anthropic API.'); e.status = 400; throw e; }
     if (/Tax_Invoice_S/.test(fileName)) {
       const ref = fileName.match(/ref(\d+(?:-\d)?)/)[1];
       return { ...DOOR, supplier_name: 'Gliderol International Pty Ltd', invoice_number: fileName.match(/S\d+/)[0], references: [ref], subtotal: 1226, total: 1348.6, tax: 122.6,
@@ -2128,6 +2130,38 @@ test('two or more invoices from the same supplier on one job are flagged (the sa
   JOBS['ss-job2'] = { jobNumber: '208164', jobTitle: '2 Same St' };
   const t2 = await openCard('ss-job2', 'acc-ss2');
   assert.equal((await post(t2, '/same-supplier/ok', { job_uuid: 'ss-job', ids: '1,2' })).status, 404);
+});
+
+test('when the invoice reader stops (key refused, or out of credit): a warning on the Inbox, home and job card, and "try again"', async () => {
+  JOBS['rd-job'] = { jobNumber: '209270', jobTitle: '16 Reader St' };
+  const t = await openCard('rd-job', 'acc-rd');
+  assert.equal((await json(t, '/inbox')).readerWarning, null, 'nothing to warn about');
+  fakeAnalyzer.keyRefused = true;
+  const fd = new FormData(); fd.append('files', new Blob(['%PDF-1.4 k' + uniq()], { type: 'application/pdf' }), 'keyfail-1.pdf');
+  await api(t, '/inbox/upload', { method: 'POST', body: fd }); await processor.idle();
+  let w = (await json(t, '/inbox')).readerWarning;
+  assert.deepEqual([w.kind, w.failed], ['key', 1]);
+  assert.equal((await json(t, '/home')).readerWarning.kind, 'key');
+  assert.equal((await json(t, '/job')).readerWarning.failed, 1);
+  // out of credit says so
+  fakeAnalyzer.keyRefused = false; fakeAnalyzer.noCredit = true;
+  await post(t, '/reader/retry'); await processor.idle();
+  w = (await json(t, '/inbox')).readerWarning;
+  assert.deepEqual([w.kind, w.failed], ['credit', 1]);
+  // fixed: "try reading them again" reads it, and the warning goes
+  fakeAnalyzer.noCredit = false;
+  assert.equal((await post(t, '/reader/retry').then((x) => x.json())).queued, 1);
+  await processor.idle();
+  assert.equal((await json(t, '/inbox')).readerWarning, null);
+  // another business doesn't see this one's failures
+  JOBS['rd-job2'] = { jobNumber: '209271', jobTitle: '17 Reader St' };
+  fakeAnalyzer.keyRefused = true;
+  const fd2 = new FormData(); fd2.append('files', new Blob(['%PDF-1.4 k2' + uniq()], { type: 'application/pdf' }), 'keyfail-2.pdf');
+  await api(t, '/inbox/upload', { method: 'POST', body: fd2 }); await processor.idle();
+  fakeAnalyzer.keyRefused = false;
+  const t2 = await openCard('rd-job2', 'acc-rd2');
+  assert.equal((await json(t2, '/inbox')).readerWarning.failed, 0, 'the problem shows, but none of theirs failed');
+  await post(t, '/reader/retry'); await processor.idle();
 });
 
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {

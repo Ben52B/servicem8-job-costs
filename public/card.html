@@ -99,6 +99,7 @@
   .inv .r2 { margin-top: 4px; font-size: 12px; }
   .inv .r2 .meta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .inv .r2 .chips { display: flex; gap: 4px; flex-shrink: 0; }
+  .inv .row-pay { padding: 2px 9px; font-size: 11.5px; font-weight: 700; border-radius: 20px; box-shadow: none; }
   input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); cursor: pointer; flex-shrink: 0; }
   .dropzone-hint { text-align: center; font-size: 12px; color: var(--muted); padding: 10px; border: 2px dashed var(--line); border-radius: 14px; margin-top: 4px; }
   aside.over .dropzone-hint { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-dark); }
@@ -379,7 +380,7 @@ function render() {
       <div class="why">Remove it from Job Costs too?</div></div>
       <div class="acts"><button class="solid-danger small" data-diary-remove="${i.id}">Remove from Job Costs</button><button class="small" data-diary-keep="${i.id}">Keep it here</button></div></div></div>`).join('')
     + (state.data.diaryNote ? `<div class="note bad" style="margin-bottom:12px">⚠ ${esc(state.data.diaryNote)}</div>` : '')
-    + flagBanner() + sameSupplierBanner()
+    + readerBanner(state.data.readerWarning) + flagBanner() + sameSupplierBanner()
     + (state.data.welcome ? `<a class="welcome" href="/welcome?t=${encodeURIComponent(BOOT.token)}">👋 <b>Set up Job Costs</b> – connect your email and price lists (2 minutes) →</a>` : '');
   $('[data-add]').textContent = isStock ? '＋ Add stock invoice' : '＋ Add costs';
   $('#listTitle').textContent = isStock ? 'Invoices on this order' : 'Costs on this job';
@@ -514,6 +515,22 @@ function renderStockKpis() {
 
 // ---------- What the statement checks found on this job's invoices ----------
 const reportUrl = (f) => `/checks?t=${encodeURIComponent(BOOT.token)}&id=${f.check_id}`;
+// Invoice reading has stopped (the AI key was refused / expired, or the account is out of credit)
+function readerBanner(w) {
+  if (!w) return '';
+  const what = w.kind === 'credit'
+    ? 'the Claude API account is <b>out of credit</b>. Add credit at <b>console.anthropic.com → Billing</b>, then press “Try reading them again”.'
+    : 'the AI service <b>refused Job Costs’ key</b> (it may have expired). Make a new key at <b>console.anthropic.com → API keys</b>, put it in <b>Render → Environment → ANTHROPIC_API_KEY</b> and press <b>Save and deploy</b> – they’re then read again by themselves.';
+  return `<div class="reader-warn" style="background:#fde8e8;border:1px solid #f5c2c0;color:#7f1d1d;border-radius:14px;padding:12px 14px;margin:0 0 12px;font-size:13.5px">
+    <b>⚠ Invoices can’t be read right now${w.failed ? ` – ${w.failed} waiting` : ''}.</b> Reading stopped because ${what}
+    ${w.failed ? '<div style="margin-top:8px"><button data-reader-retry>↻ Try reading them again</button></div>' : ''}</div>`;
+}
+async function readerRetry(b, reload) {
+  b.disabled = true; b.textContent = 'Reading again…';
+  try { const r = await fetch('/api/reader/retry', { method: 'POST', headers: { Authorization: 'Bearer ' + BOOT.token } }).then((x) => x.json()); if (typeof toast === 'function') toast(`${r.queued} invoice${r.queued === 1 ? '' : 's'} being read again`); }
+  catch (x) { b.disabled = false; }
+  setTimeout(reload, 1500);
+}
 // Two or more invoices from the same supplier on this job: the same order invoiced twice?
 function sameSupplierBanner() {
   return (state.data.sameSupplier || []).map((g) => `<div class="note bad" style="margin-bottom:12px;background:#fef3c7;border-color:#fde68a;color:#7c4a03">
@@ -587,7 +604,7 @@ function renderList() {
     const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
-      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${ready && !state.data.stock ? dueChip(inv.due_date, inv.payment_state !== 'paid') : ''}${statusChip(inv)}</span></div>
+      <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${ready && !state.data.stock ? dueChip(inv.due_date, inv.payment_state !== 'paid') : ''}${statusChip(inv)}${ready && !state.data.stock && !inv.from_stock && inv.payment_state !== 'paid' && Number(inv.total) > 0 ? `<button class="row-pay" data-pay="${inv.id}" title="Pay this invoice">💳 Pay</button>` : ''}</span></div>
     </div>`;
   }).join('') : '<div class="card empty">No costs yet.<br>Click <b>＋ Add costs</b> to start.</div>';
   // the breakdown goes right under the chosen invoice (hidden when none is chosen)
@@ -1115,6 +1132,7 @@ document.addEventListener('click', async (e) => {
       const r = await post(`/diary/${encodeURIComponent(ds.diaryAdd)}/import`);
       closeModal(); toast(r.already ? 'Already in Job Costs' : 'Added – reading it now…'); state.selected = r.id; state.previewKey = null; return load();
     }
+    if (ds.readerRetry !== undefined) return readerRetry(t, load);
     if (ds.sameOk) { await post('/same-supplier/ok', { job_uuid: state.data.job.job_uuid, ids: ds.sameOk }); toast('OK – it won\u2019t ask about these again'); return load(); }
     if (ds.pickFolder) {
       const f = await browseMailFolders(Number(ds.inv), ds.sup);

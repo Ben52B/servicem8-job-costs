@@ -420,6 +420,16 @@ function createApp({ config, repo, processor, fetchJobImpl = fetchJob, fetchActi
     try { repo.addUsage(accountUUID, kind, { ...t, cost }); } catch (e) { console.error(`Usage not counted: ${e.message}`); }
   };
   processor.onUsage = recordUsage;
+  // The invoice reader stopped working (its key was refused / expired, or the account is out of credit): a warning on the pages
+  // kept on the reader itself (one reader, whichever part of the app asks)
+  processor.onReaderStatus = (kind) => { processor.readerProblem = kind ? { kind, at: new Date().toISOString() } : null; };
+  /** What to warn about, for this business: { kind: 'key' | 'credit', failed } or null */
+  const readerWarning = (accountUUID) => {
+    const failed = repo.readerFailures(accountUUID); const rp = processor.readerProblem || null;
+    if (!rp && !failed) return null;
+    return { kind: rp ? rp.kind : 'key', failed, since: rp ? rp.at : null };
+  };
+  app.locals.readerWarning = readerWarning;
 
   processor.lookupJobs = app.locals.lookupJobs = async (invoiceId) => {
     const inv = repo.getInvoice(invoiceId);
@@ -1242,7 +1252,7 @@ window.addEventListener('message', function (e) {
     res.json({ welcome: needsWelcome(req.account), inboxCount: repo.inboxCount(req.account), unpaidCount: unpaid.length,
       toPay: Math.round(unpaid.reduce((a, b) => a + (Number(b.total) || 0), 0) * 100) / 100,
       duplicates: unpaid.filter((b) => b.twin).length, flagged: flags.size, stockLeft: repo.listStock(req.account).leftTotal,
-      sameSupplier: repo.sameSupplierOnJobs(req.account),
+      sameSupplier: repo.sameSupplierOnJobs(req.account), readerWarning: readerWarning(req.account),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
       jobs: repo.listJobs(req.account).slice(0, 300).map((j) => ({ job_uuid: j.job_uuid, job_number: j.job_number, job_title: j.job_title })) });
   });
@@ -1285,6 +1295,7 @@ window.addEventListener('message', function (e) {
     for (const i of summary.invoices || []) i.check_flag = flags.get(i.id) || null;
     // two or more invoices from the same supplier on this job: worth a look (the same order invoiced twice?)
     summary.sameSupplier = repo.isStockJob(req.job.job_uuid) ? [] : repo.sameSupplierOnJobs(req.account, req.job.job_uuid);
+    summary.readerWarning = readerWarning(req.account);
     // paid with 💳 Pay: what happened to its email
     const payMail = repo.paymentEmails((summary.invoices || []).map((i) => i.id));
     for (const i of summary.invoices || []) i.pay_email = payMail.get(i.id) || null;
@@ -1685,7 +1696,14 @@ window.addEventListener('message', function (e) {
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
       recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(hoursOf(req.account)),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
-      askIgnore: settingsFor(req.account).ask_ignore_on_delete !== false });
+      askIgnore: settingsFor(req.account).ask_ignore_on_delete !== false, readerWarning: readerWarning(req.account) });
+  });
+  // "Try reading them again" (e.g. after adding credit): the invoices that failed for that reason go back in the queue
+  api.post('/reader/retry', (req, res) => {
+    const ids = repo.readerFailureIds(req.account);
+    processor.readerProblem = null;
+    for (const id of ids) processor.enqueue(id);
+    res.json({ ok: true, queued: ids.length });
   });
   api.post('/inbox/:id/assign', async (req, res) => {
     const inv = accountInvoice(req, res);

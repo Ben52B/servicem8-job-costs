@@ -66,6 +66,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
           ...(repo.getSettings ? { businessType: repo.getSettings(inv.account_uuid).business_type, businessName: repo.getSettings(inv.account_uuid).business_name } : {}) },
       });
       if (onUsage || api.onUsage) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', result && result.usage);
+      if (api.onReaderStatus) api.onReaderStatus(null); // reading works
       // A supplier statement (from anywhere): it goes to Statement check, ready to run, not into the costs.
       if (result.document_type === 'statement' && api.onStatement && !chosen) {
         let check;
@@ -102,6 +103,8 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
       // Check its prices against the supplier's / subcontractor's price list (in the background).
       if (api.afterRead) Promise.resolve().then(() => api.afterRead(id)).catch((e) => log.error(`Price check ${id}: ${e.message}`));
     } catch (e) {
+      // the reader itself can't work (key refused / expired, or out of credit): the app shows a warning until a read works
+      if (api.onReaderStatus && (e?.status === 401 || /credit balance/i.test(e?.message || ''))) api.onReaderStatus(e.status === 401 ? 'key' : 'credit');
       if (e && e.usage && (onUsage || api.onUsage)) (onUsage || api.onUsage)(inv.account_uuid ?? null, 'invoice_read', e.usage); // read, but not kept
       if (['outlook', 'mailbox'].includes(inv.source) && !chosen && /does not look like an invoice/i.test(e.message || '')) {
         log.log?.(`Outlook: "${inv.file_name}" is not an invoice, not kept`);
@@ -118,6 +121,7 @@ function createProcessor({ repo, analyzer, concurrency = 2, log = console, onUsa
     onStatement: null, // set by the app: (invoice, what was read) => file it under Statement check
     afterRead: null, // set by the app: (invoiceId) => price check against a matching price list
     onUsage: null, // set by the app: (account, kind, usage) => count what Claude was used for
+    onReaderStatus: null, // set by the app: ('key' | 'credit' | null) => the invoice reader stopped working / works
     enqueue(id) {
       repo.setInvoiceProcessing(id);
       queue.push(id);
