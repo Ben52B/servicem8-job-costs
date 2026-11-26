@@ -1934,6 +1934,8 @@ function createRepo(db, dataDir) {
       pay_balance: false, pay_folder: 'Inbox/Paid', pay_move_email: true,
       // 'manual': you pay in your own banking, then press "I've paid it" (Job Costs never touches the bank); 'file': a bank payment file to upload
       pay_mode: 'manual',
+      // before filing a paid invoice's email: show which folder and ask (unless "don't ask me again")
+      pay_confirm_folder: true,
     },
     getSettings(accountUUID) {
       const row = db.prepare('SELECT data FROM account_settings WHERE account_key = ?').get(accountUUID ?? '');

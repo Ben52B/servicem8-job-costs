@@ -57,7 +57,7 @@ const outlookApi = {
 /**
  * Where an invoice's email goes in Outlook, without moving anything:
  * { status: 'found', dest: { id, path } } – the supplier's folder under Paid (or the folder chosen for this supplier)
- * { status: 'new', parent: { id, path }, name, path } – the supplier's folder will be made under Paid
+ * { status: 'no_match', note } – no folder for the supplier under Paid: choose one (folders are never made)
  * { status: 'no_folder', note } – no Paid folder: choose one
  */
 async function planOutlook(token, { root = 'Paid', supplier, folder = null }, api = outlookApi) {
@@ -99,7 +99,7 @@ async function planOutlook(token, { root = 'Paid', supplier, folder = null }, ap
   const sub = subs.find((f) => sameName(f.name, supplier));
   if (sub) return { status: 'found', dest: { id: sub.id, path: `${paid.path} / ${sub.name}` } };
   const name = folderName(supplier);
-  return { status: 'new', parent: { id: paid.id, path: paid.path }, name, path: `${paid.path} / ${name}` };
+  return { status: 'no_match', note: `No folder for ${name} in ${paid.path} – choose where it goes`, parentPath: paid.path };
 }
 
 /** Outlook: mark the email read and move it. Returns { status: 'done' | 'not_found' | 'no_folder', folder, folderId } */
@@ -107,8 +107,9 @@ async function fileInOutlook(token, { messageId, subject, from, root = 'Paid', s
   const id = await api.findMessage(token, { messageId, subject, from });
   if (!id) return { status: 'not_found' };
   const plan = await planOutlook(token, { root, supplier, folder }, api);
-  if (plan.status === 'no_folder') return { status: 'no_folder', folder: plan.note };
-  const dest = plan.status === 'found' ? plan.dest : { ...(await api.createFolder(token, plan.parent.id, plan.name)), path: plan.path };
+  // never makes a folder: without a match it waits for a folder to be chosen
+  if (plan.status !== 'found') return { status: 'no_folder', folder: plan.note };
+  const dest = plan.dest;
   await api.markRead(token, id);
   await api.move(token, id, dest.id);
   return { status: 'done', folder: dest.path, folderId: dest.id };
@@ -127,7 +128,7 @@ async function fileInImap(client, { messageId, subject, from, root = 'Paid', sup
     const d = paid.delimiter || '/';
     const subs = boxes.filter((b) => b.path.startsWith(paid.path + d) && !b.path.slice(paid.path.length + 1).includes(d));
     let dest = subs.find((b) => sameName(leaf(b), supplier));
-    if (!dest) { const p = `${paid.path}${d}${folderName(supplier)}`; await client.mailboxCreate(p); dest = { path: p, name: folderName(supplier) }; }
+    if (!dest) return { status: 'no_folder', folder: `No folder for ${folderName(supplier)} in ${leaf(paid)} – choose where it goes` }; // never makes a folder
     return await moveImap(client, { messageId, subject, from }, dest, `${leaf(paid)} / ${leaf(dest)}`);
   } finally {
     await client.logout().catch(() => {});

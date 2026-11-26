@@ -168,6 +168,9 @@ const SORTS = {
   job: (a, b) => ((a.suggestion && a.suggestion.job_number) ? 0 : 1) - ((b.suggestion && b.suggestion.job_number) ? 0 : 1)
     || String((a.suggestion || {}).job_number || '').localeCompare(String((b.suggestion || {}).job_number || ''), 'en', { numeric: true })
     || String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
+  job_desc: (a, b) => ((a.suggestion && a.suggestion.job_number) ? 0 : 1) - ((b.suggestion && b.suggestion.job_number) ? 0 : 1)
+    || String((b.suggestion || {}).job_number || '').localeCompare(String((a.suggestion || {}).job_number || ''), 'en', { numeric: true })
+    || String(a.supplier || '').localeCompare(String(b.supplier || ''), 'en', { sensitivity: 'base' }),
 };
 // Invoice reading has stopped (the AI key was refused / expired, or the account is out of credit)
 function readerBanner(w) {
@@ -281,7 +284,7 @@ function render() {
     <div class="acts"><a class="btn" href="/checks?t=${encodeURIComponent(BOOT.token)}">🔎 Open Statement check</a></div></div>` : '');
   h += `<h2 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Needs a job <span class="badge">${waiting.length + data.pending.length}</span>
     ${waiting.length > 1 ? `<span style="flex:1"></span><select id="sort" title="Sort" style="font:inherit;font-size:13px;font-weight:600;border:1px solid #d6e2de;border-radius:10px;padding:5px 8px;background:#fff">
-      ${[['new', 'Newest in'], ['due', 'Due date (soonest)'], ['supplier', 'Supplier A–Z'], ['amount_desc', 'Amount (high to low)'], ['amount_asc', 'Amount (low to high)'], ['date', 'Invoice date (newest)'], ['job', 'Job number']]
+      ${[['new', 'Newest in'], ['due', 'Due date (soonest)'], ['supplier', 'Supplier A–Z'], ['amount_desc', 'Amount (high to low)'], ['amount_asc', 'Amount (low to high)'], ['date', 'Invoice date (newest)'], ['job', 'Job number (low to high)'], ['job_desc', 'Job number (high to low)']]
         .map(([v, l]) => `<option value="${v}" ${sortBy === v ? 'selected' : ''}>Sort: ${l}</option>`).join('')}</select>` : ''}</h2>`;
   if (!waiting.length && !data.pending.length && !done.size) h += '<div class="empty">✅ Nothing waiting. New invoices emailed in will show up here.</div>';
   for (const p of data.pending) {

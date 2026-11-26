@@ -2085,7 +2085,15 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
   // the next invoice from them: the Pay box says it goes there
   const inv2 = repo.createInvoice({ accountUUID: 'acc-man', source: 'outlook', emailSubject: 'Invoice H-2', emailMessageId: '<H-2@x>' });
   repo.saveExtraction(inv2.id, { supplier_name: 'Smart Hire', invoice_number: 'H-2', total: 100, tax: 0, subtotal: 100, items: [{ description: 'Saw', line_total: 100 }] });
-  assert.deepEqual((await json(t, `/pay/mailplan?ids=${inv2.id}`)).plans[inv2.id], { status: 'found', path: 'Inbox / Paid / Hire', chosen: true });
+  assert.deepEqual((await json(t, `/pay/mailplan?ids=${inv2.id}`)).plans[inv2.id], { status: 'found', id: 'f-hire', path: 'Inbox / Paid / Hire', chosen: true });
+  // "Don't file it": paid, and the email left where it is
+  const sk = await post(t, '/pay', { ids: [inv2.id], confirm: { [inv2.id]: { amount_cents: 10000, bsb: '062-001', account_number: '10203040' } }, folders: { [inv2.id]: { skip: true } } }).then((x) => x.json());
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual([(await json(t, `/pay/${sk.id}`)).items[0].email_status, (await json(t, `/pay/${sk.id}`)).items[0].email_note], ['off', 'You chose not to file it']);
+  // asking before filing: on by default, "don't ask me again" turns it off (Settings turns it back on)
+  assert.equal((await json(t, `/pay/preview?ids=${inv2.id}`)).confirmFolder, true);
+  await api(t, '/settings', { method: 'PUT', json: { pay_confirm_folder: false } });
+  assert.equal((await json(t, `/pay/preview?ids=${inv2.id}`)).confirmFolder, false);
   // paid from the Inbox (not on a job yet): the reference uses the job it looks like it's for; leading zeros kept
   const inb = repo.createInvoice({ accountUUID: 'acc-man', source: 'email' });
   repo.saveExtraction(inb.id, { supplier_name: 'Moorabbin Steel', invoice_number: '00110266', total: 114.66, tax: 10.42, subtotal: 104.24, items: [{ description: 'Posts', line_total: 114.66 }] });
@@ -2164,7 +2172,7 @@ test('when the invoice reader stops (key refused, or out of credit): a warning o
   await post(t, '/reader/retry'); await processor.idle();
 });
 
-test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (or makes it), marks read, moves', async () => {
+test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (never makes one), marks read, moves', async () => {
   const { fileInOutlook, sameName } = require('../src/mailfile');
   const calls = [];
   const folders = { root: [{ id: 'in', name: 'Inbox' }], in: [{ id: 'pd', name: 'Paid' }], pd: [{ id: 'j', name: 'JACKSYL' }, { id: 'g', name: 'Gliderol' }] };
@@ -2177,8 +2185,9 @@ test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier
   };
   assert.deepEqual(await fileInOutlook('t', { messageId: '<x>', root: 'Paid', supplier: 'Jacksyl Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / JACKSYL', folderId: 'j' }, 'found inside the Inbox');
   assert.deepEqual(calls.slice(-2), [['read', 'm1'], ['move', 'm1', 'j']]);
-  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake), { status: 'done', folder: 'Inbox / Paid / Summit Door Supplies', folderId: 'new' });
-  assert.deepEqual(calls.find((c) => c[0] === 'create'), ['create', 'pd', 'Summit Door Supplies']);
+  // no folder for the supplier: it isn't made – the email waits for a folder to be chosen
+  assert.deepEqual(await fileInOutlook('t', { messageId: '<y>', root: 'Paid', supplier: 'Summit Door Supplies Pty Ltd' }, fake),
+    { status: 'no_folder', folder: 'No folder for Summit Door Supplies in Inbox / Paid – choose where it goes' });
   assert.deepEqual(await fileInOutlook('t', { messageId: null, root: 'Paid', supplier: 'X' }, fake), { status: 'not_found' });
   // deeper down (Inbox / Accounts / Paid), and no Paid folder at all: never made at the top
   folders.in = [{ id: 'ac', name: 'Accounts' }]; folders.ac = [{ id: 'pd', name: 'Paid' }];
@@ -2194,7 +2203,7 @@ test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier
   folders.root = [{ id: 'in', name: 'Inbox' }]; folders.in = [{ id: 'ac', name: 'Accounts' }]; folders.ac = [];
   const r = await fileInOutlook('t', { messageId: '<z>', root: 'Paid', supplier: 'Jacksyl' }, fake);
   assert.equal(r.status, 'no_folder');
-  assert.ok(!calls.some((c) => c[0] === 'create' && c[1] === null), 'no Paid folder made at the top');
+  assert.ok(!calls.some((c) => c[0] === 'create'), 'no folder is ever made');
   assert.equal(sameName('Gliderol', 'Gliderol Doors Pty Ltd'), true);
   assert.equal(sameName('Gliderol', 'Glide'), true);
   assert.equal(sameName('B&D', 'Bunnings'), false);

@@ -64,7 +64,7 @@
         box.innerHTML = `<h4>📁 Where should ${esc(supplier || 'this')}'s paid invoices go?</h4>
           <div class="crumb">${trail.length > 1 ? `<button data-fback>‹ Back</button> ` : ''}${esc(trail.map((t) => t.name).join(' / '))}</div>
           ${list.length ? list.map((f, i) => `<div class="row"><span>📁 ${esc(f.name)}</span>${nested && f.children ? `<button data-fopen="${i}">Open ›</button>` : ''}<button class="go" data-fpick="${i}">Choose</button></div>`).join('') : '<div class="crumb">No folders here.</div>'}
-          <div class="fb-foot">${nested && here.id && supplier ? `<button data-fnew>＋ Make "${esc(String(supplier).replace(/\b(pty\.?|ltd\.?|limited|p\/l)\b/gi, '').replace(/\s+/g, ' ').trim())}" folder here</button>` : ''}${nested && here.id ? `<button data-fhere>Choose ${esc(here.name)}</button>` : ''}<span class="sp"></span><button data-fx>Cancel</button></div>`;
+          <div class="fb-foot">${nested && here.id ? `<button data-fhere>Choose ${esc(here.name)}</button>` : ''}<span class="sp"></span><button data-fx>Cancel</button></div>`;
       }
       box.addEventListener('click', async (e) => {
         const b = e.target.closest('button'); if (!b) return;
@@ -75,11 +75,6 @@
           if (d.fopen) { const f = list[Number(d.fopen)]; trail.push({ id: f.id, name: f.name }); return show(); }
           if (d.fpick) { const f = list[Number(d.fpick)]; return done({ id: f.id, path: nested ? pathOf(f) : f.name }); }
           if (d.fhere !== undefined) { const h = trail[trail.length - 1]; return done({ id: h.id, path: trail.slice(1).map((t) => t.name).join(' / ') }); }
-          if (d.fnew !== undefined) {
-            b.disabled = true;
-            const f = await call('/pay/mailfolders', { method: 'POST', body: JSON.stringify({ invoice: invoiceId, parent: trail[trail.length - 1].id, name: supplier }) });
-            return done({ id: f.id, path: pathOf(f) });
-          }
         } catch (x) { const t = document.createElement('div'); t.className = 'bad'; t.textContent = x.message; box.appendChild(t); b.disabled = false; }
       });
       bg.addEventListener('click', (e) => { if (e.target === bg) done(null); });
@@ -175,11 +170,49 @@
         renderManual();
       }, 1500);
     }
+    // Before filing: which folder (asked, unless "don't ask me again"; always asked when there's no folder for the supplier).
+    // Resolves { id, path } (file it there), { skip: true } (don't file it), null (nothing to file) or 'cancel'.
+    function askFolder(p, m) {
+      return new Promise((resolve) => {
+        const fbg = document.createElement('div'); fbg.className = 'fb-bg';
+        const found = m.status === 'found';
+        fbg.innerHTML = `<div class="fb"><h4>📁 ${found ? `File the email from ${esc(p.supplier || '')} in:` : esc(m.note || 'Where should the email go?')}</h4>
+          ${found ? `<div style="font-size:15px;font-weight:800;margin:6px 0 10px;word-break:break-word">${esc(m.path)}</div>` : '<div class="crumb">Job Costs doesn\u2019t make folders – choose one of yours.</div>'}
+          <div class="fb-foot">${found ? '<button class="go" data-fa="yes">✓ Yes, file it there</button>' : ''}<button ${found ? '' : 'class="go"'} data-fa="choose">📁 ${found ? 'Choose another folder' : 'Choose the folder'}</button>
+            <button data-fa="skip">Don't file it</button><span class="sp"></span><button data-fa="cancel">Cancel</button></div>
+          ${found ? '<label style="display:flex;gap:6px;align-items:center;margin-top:10px;font-size:13px"><input type="checkbox" data-fnever> Don\u2019t ask me again (still asked when there\u2019s no folder for a supplier)</label>' : ''}</div>`;
+        document.body.appendChild(fbg);
+        const done = (v) => { fbg.remove(); resolve(v); };
+        fbg.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-fa]'); if (!b) { if (e.target === fbg) done('cancel'); return; }
+          const a = b.dataset.fa;
+          if (a === 'cancel') return done('cancel');
+          if (a === 'skip') return done({ skip: true });
+          if (a === 'yes') {
+            if (fbg.querySelector('[data-fnever]') && fbg.querySelector('[data-fnever]').checked) {
+              try { await call('/settings', { method: 'PUT', body: JSON.stringify({ pay_confirm_folder: false }) }); data.confirmFolder = false; } catch (x) { /* asks next time */ }
+            }
+            return done({ id: m.id, path: m.path });
+          }
+          if (a === 'choose') { const f = await browseMailFolders(p.id, p.supplier); if (f) done(f); }
+        });
+      });
+    }
+    async function folderFor(p) {
+      if (!data.moveEmail) return null;
+      if (!mailPlan) await loadMailPlan();
+      const m = chosenFolder[p.id] ? { status: 'found', ...chosenFolder[p.id] } : (mailPlan || {})[p.id];
+      if (!m || m.status === 'none') return null; // no email to file (or no mailbox): nothing to ask
+      if (m.status === 'found' && m.id && !data.confirmFolder) return { id: m.id, path: m.path };
+      return askFolder(p, m.status === 'found' && !m.id ? { ...m, status: 'no_folder' } : m);
+    }
     // each invoice on its own, so "Undo" on one leaves the others paid
     async function markPaid(plans) {
       for (const p of plans) {
+        const f = await folderFor(p);
+        if (f === 'cancel') break; // not marked paid
         const confirm = { [p.id]: { amount_cents: p.amount_cents, bsb: p.payee.bsb, account_number: p.payee.account_number } };
-        const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: [p.id], confirm, folders: chosenFolder[p.id] ? { [p.id]: chosenFolder[p.id] } : {} }) });
+        const r = await call('/pay', { method: 'POST', body: JSON.stringify({ ids: [p.id], confirm, folders: f ? { [p.id]: f } : {} }) });
         paidNow.set(p.id, await call('/pay/' + r.id));
         paid = r.id;
       }
