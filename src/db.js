@@ -404,6 +404,8 @@ function migrateColumns(db) {
   // Invoices that failed to read because of the schema limit (too many fields that may be empty, Nov 2026): read them again.
   // processor.resumeStuck() picks up every invoice left 'processing' when the server starts.
   db.prepare("UPDATE invoices SET status = 'processing', error = NULL WHERE error LIKE '%parameters with union types%'").run();
+  // …and those that failed because the API key was refused (fixed by setting a working key in Render, which restarts the server)
+  db.prepare("UPDATE invoices SET status = 'processing', error = NULL WHERE error = 'Invoice reading is not set up (check ANTHROPIC_API_KEY).'").run();
   // brought in on purpose (ticked in "Import from Outlook"): never dropped quietly, always left in the Inbox to approve
   if (!db.prepare('PRAGMA table_info(invoices)').all().some((x) => x.name === 'chosen')) db.exec('ALTER TABLE invoices ADD COLUMN chosen INTEGER NOT NULL DEFAULT 0');
   // scope 'supplier': everything from that supplier is ignored (not just the one bill)
