@@ -930,7 +930,7 @@ function renderModal() {
   if (m.tab === 'diary') body = renderDiary();
   $('#modalRoot').innerHTML = `<div class="overlay" data-overlay><div class="modal" role="dialog" aria-label="Add costs">
     <div class="m-head"><div><h2>${state.data.stock ? 'Add stock invoice to order' : 'Add costs to Job'} #${esc(state.data.job.job_number || '')}</h2><div class="muted">${state.data.stock ? 'Pick an invoice that came in by email, upload a file, or type one in. It goes into stock.' : 'Pick from invoices not assigned to a job yet, upload a file, or type one in.'}</div></div><button data-close>✕</button></div>
-    <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button><button class="${m.tab === 'diary' ? 'on' : ''}" data-tab="diary">📎 From ServiceM8 diary</button></div>
+    <div class="tabs"><button class="${m.tab === 'pick' ? 'on' : ''}" data-tab="pick">Not assigned yet (${count})</button><button class="${m.tab === 'upload' ? 'on' : ''}" data-tab="upload">⬆ Upload a file</button><button class="${m.tab === 'type' ? 'on' : ''}" data-tab="type">✎ Type it in</button><button class="${m.tab === 'diary' ? 'on' : ''}" data-tab="diary">📎 From ServiceM8 diary</button>${state.outlook && state.outlook.connected ? '<button data-outlook-import title="Pick emails in Outlook – their invoices go straight onto this job">📥 From Outlook</button>' : ''}</div>
     <div id="modalBody">${body}</div></div></div>`;
   if (m.tab === 'upload') wireDrop($('#bigdrop'), (files) => { closeModal(); uploadFiles(files); });
   if (m.tab === 'pick') { const s = $('#pickSearch'); if (s) { s.value = m.search; s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
@@ -1050,6 +1050,7 @@ document.addEventListener('click', async (e) => {
     }
     if (ds.add !== undefined) return openAdd('pick');
     if (ds.close !== undefined) return closeModal();
+    if (ds.outlookImport !== undefined) { location.href = '/inbox?t=' + encodeURIComponent(BOOT.token) + '&import=job'; return; }
     if (ds.tab) { state.modal.tab = ds.tab; renderModal(); if (ds.tab === 'pick' && !state.modal.list) loadUnassigned(); if (ds.tab === 'diary') loadDiary(); return; }
     if (ds.expand) { const s = state.modal.expanded; const id = Number(ds.expand); s.has(id) ? s.delete(id) : s.add(id); return renderModal(); }
     if (ds.takeAll) {

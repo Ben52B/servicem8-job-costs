@@ -1697,7 +1697,8 @@ window.addEventListener('message', function (e) {
     res.json({ ...repo.getUnassigned(req.account), jobs: repo.listJobs(req.account), inboxAddress: inboxAddress(acc.inbox_code, config),
       recent: repo.listRecentlyApproved(req.account), outlookHours: outlook.scheduleText(hoursOf(req.account)),
       statementsWaiting: repo.listChecks(req.account).filter((c) => c.status === 'waiting').length,
-      askIgnore: settingsFor(req.account).ask_ignore_on_delete !== false, readerWarning: readerWarning(req.account) });
+      askIgnore: settingsFor(req.account).ask_ignore_on_delete !== false, readerWarning: readerWarning(req.account),
+      job: req.job ? { job_uuid: req.job.job_uuid, job_number: req.job.job_number } : null });
   });
   // "Try reading them again" (e.g. after adding credit): the invoices that failed for that reason go back in the queue
   api.post('/reader/retry', (req, res) => {
@@ -1870,9 +1871,13 @@ window.addEventListener('message', function (e) {
     const ids = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean).slice(0, 300) : []);
     const messageIds = ids(req.body?.message_ids), folderIds = ids(req.body?.folder_ids).slice(0, 20);
     if (!messageIds.length && !folderIds.length) return res.status(400).json({ error: 'Tick the emails or folders to import' });
+    // { to_job: true } from a job's Job Costs: straight onto that job (not the Inbox)
+    const toJob = req.body?.to_job === true ? req.job : null;
+    if (req.body?.to_job === true && !toJob) return res.status(400).json({ error: 'Open Job Costs from a job to bring emails onto it' });
     try {
-      res.json(await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds, again: req.body?.again === true, chosen: true,
-        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook', chosen: true }) }));
+      const r = await outlook.importChosen({ repo, config, api: outlookApi, accountKey: req.account, messageIds, folderIds, again: req.body?.again === true, chosen: true,
+        onMail: (mail, account) => processMail(mail, { accountUUID: account || null, source: 'outlook', chosen: true, originJobUUID: toJob ? toJob.job_uuid : null }) });
+      res.json({ ...r, job_number: toJob ? toJob.job_number : null });
     } catch (e) { res.status(502).json({ error: e.message }); }
   });
   api.post('/outlook/import', async (req, res) => {
@@ -2331,7 +2336,8 @@ window.addEventListener('message', function (e) {
    * which business; with no code (a mailbox the app checks), it's the only business.
    */
   // chosen: brought in on purpose (ticked in "Import from Outlook") – kept in the Inbox whatever it reads as
-  function processMail(mail, { fallbackToOnlyAccount = false, accountUUID, source = 'email', chosen = false } = {}) {
+  // originJobUUID: imported from a job's own Job Costs – the invoices go straight onto that job once read
+  function processMail(mail, { fallbackToOnlyAccount = false, accountUUID, source = 'email', chosen = false, originJobUUID = null } = {}) {
     let accounts = accountUUID !== undefined ? [{ accountUUID }] : [...new Map(codesFromAddresses(mail.recipients || []).map((c) => repo.accountByInboxCode(c)).filter(Boolean)
       .map((a) => [a.accountUUID ?? '', a])).values()];
     if (!accounts.length && fallbackToOnlyAccount) {
@@ -2362,7 +2368,7 @@ window.addEventListener('message', function (e) {
       for (const f of files) {
         const inv = addInvoiceFile({
           accountUUID: acc.accountUUID, source, name: f.name, contentType: f.contentType, buffer: f.buffer,
-          emailFrom: mail.from, emailSubject: mail.subject, emailText: body, emailMessageId: mail.messageId || null, chosen,
+          emailFrom: mail.from, emailSubject: mail.subject, emailText: body, emailMessageId: mail.messageId || null, chosen, originJobUUID,
         });
         ids.push(inv.id);
         created++;

@@ -2178,6 +2178,22 @@ test('when the invoice reader stops (key refused, or out of credit): a warning o
   await post(t, '/reader/retry'); await processor.idle();
 });
 
+test('an Outlook email brought in from a job’s Job Costs goes straight onto that job (not the Inbox)', async () => {
+  JOBS['oj-job'] = { jobNumber: '209280', jobTitle: '18 Outlook St' };
+  const t = await openCard('oj-job', 'acc-oj');
+  const mail = { messageId: '<oj-1@x>', from: 'Sup <s@x.au>', subject: 'Invoice from Door Supplies', text: '', recipients: [],
+    attachments: [{ name: 'oj-door.pdf', contentType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 oj' + uniq()) }] };
+  const r = app.locals.processMail(mail, { accountUUID: 'acc-oj', source: 'outlook', chosen: true, originJobUUID: 'oj-job' });
+  await processor.idle();
+  const onJob = (await summary(t)).invoices.find((i) => i.id === r.ids[0]);
+  assert.ok(onJob, 'on the job');
+  assert.equal(onJob.job_total, 3000);
+  assert.equal((await json(t, '/inbox')).invoices.some((i) => i.id === r.ids[0]), false, 'not waiting in the Inbox');
+  assert.equal((await json(t, '/inbox')).job.job_number, '209280', 'the Inbox page knows which job it was opened from');
+  // the Outlook import from a job needs that job
+  assert.equal((await post(t, '/outlook/import-chosen', { message_ids: [], folder_ids: [] })).status, 400);
+});
+
 test('filing a paid email in Outlook: finds Paid (or Inbox / Paid), the supplier’s folder under it (never makes one), marks read, moves', async () => {
   const { fileInOutlook, sameName } = require('../src/mailfile');
   const calls = [];

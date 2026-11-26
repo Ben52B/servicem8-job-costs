@@ -130,6 +130,7 @@ let outlookStatus = null;
 async function load() {
   api('/outlook').then((o) => { outlookStatus = o; renderOutlook(); }).catch(() => {});
   try { data = await api('/inbox'); render(); } catch (e) { $('#content').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (toJob && !load.opened) { load.opened = true; openImport(); }
   clearTimeout(timer);
   if (data.pending.some((p) => p.status === 'processing') || data.invoices.some((i) => i.price_check_status === 'checking')) timer = setTimeout(load, 3000);
 }
@@ -208,6 +209,8 @@ function renderOutlook() {
 }
 
 // ---------- Import from Outlook: browse folders, tick folders or emails ----------
+// ?import=job (from a job's ＋ Add costs): what's ticked goes straight onto that job, not the Inbox
+const toJob = /[?&]import=job\b/.test(location.search);
 const imp = { path: [{ id: null, name: 'Mailbox' }], folders: [], messages: [], next: null, loading: false, emails: new Map(), whole: new Map() };
 async function openImport() { $('#importBox').hidden = false; imp.path = imp.path.slice(0, imp.path.length); return browse(); }
 async function browse(more = false) {
@@ -247,7 +250,8 @@ function renderImport() {
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.hasAttachments ? '📎 ' : ''}${esc(m.subject)}</span>
       ${badge(m)}</label>`).join('');
   const n = imp.emails.size, f = imp.whole.size;
-  $('#importBox').innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>Import invoices from Outlook</b><span class="muted">·</span><span>${crumbs}</span><span style="flex:1"></span><button data-import-close>✕ Close</button></div>
+  $('#importBox').innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${toJob && data && data.job ? `Bring invoices from Outlook onto job #${esc(data.job.job_number || '')}` : 'Import invoices from Outlook'}</b><span class="muted">·</span><span>${crumbs}</span><span style="flex:1"></span><button data-import-close>✕ Close</button></div>
+    ${toJob && data && data.job ? `<div style="font-size:12.5px;margin:4px 0 2px;color:var(--brand-dark);font-weight:700">What you tick is read and goes straight onto job #${esc(data.job.job_number || '')} – not the Inbox.</div>` : ''}
     <div class="muted" style="font-size:12.5px;margin:4px 0 8px">Open folders like in Outlook. Tick single emails, or tick a folder to bring in every email in it. Only invoices are kept (quotes, statements and other emails are skipped), and nothing comes in twice.</div>
     ${imp.loading && !imp.messages.length && !imp.folders.length ? '<div class="muted"><span class="spin"></span> Loading…</div>' : ''}
     ${folderRows ? `<div class="ilist">${folderRows}</div>` : ''}
@@ -255,7 +259,7 @@ function renderImport() {
       ${imp.next ? `<div style="margin-top:6px"><button data-more ${imp.loading ? 'disabled' : ''}>${imp.loading ? 'Loading…' : 'Show older emails'}</button></div>` : ''}` : (imp.loading ? '' : '<div class="muted" style="margin-top:6px">No emails in this folder.</div>')) : ''}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)">
       <span>${n || f ? `<b>${[n ? `${n} email${n === 1 ? '' : 's'}` : '', f ? `${f} whole folder${f === 1 ? '' : 's'} (${[...imp.whole.values()].map(esc).join(', ')})` : ''].filter(Boolean).join(' + ')}</b> ticked` : '<span class="muted">Nothing ticked yet</span>'}</span>
-      <span style="flex:1"></span>${n || f ? '<button data-import-clear>Untick all</button>' : ''}<button class="primary" data-import-go ${n || f ? '' : 'disabled'}>📂 Import ticked</button></div>`;
+      <span style="flex:1"></span>${n || f ? '<button data-import-clear>Untick all</button>' : ''}<button class="primary" data-import-go ${n || f ? '' : 'disabled'}>${toJob && data && data.job ? `📂 Put ticked onto job #${esc(data.job.job_number || '')}` : '📂 Import ticked'}</button></div>`;
 }
 
 function render() {
@@ -449,14 +453,16 @@ document.addEventListener('click', async (e) => {
       const wholeNames = [...imp.whole.values()];
       if (wholeNames.length && !confirm(`Import every email in: ${wholeNames.join(', ')}?`)) return;
       const repeats = imp.messages.filter((m) => ['imported', 'statement'].includes(m.status) && imp.emails.has(m.id));
-      if (repeats.length && !confirm(`Already in Job Costs:\n${repeats.map((m) => `• “${m.subject}” – ${m.where || 'Job Costs'}`).join('\n')}\n\nBring ${repeats.length === 1 ? 'it' : 'them'} in again anyway? (${repeats.length === 1 ? 'It goes' : 'They go'} to the Inbox for you to approve.)`)) return;
+      if (repeats.length && !confirm(`Already in Job Costs:\n${repeats.map((m) => `• “${m.subject}” – ${m.where || 'Job Costs'}`).join('\n')}\n\nBring ${repeats.length === 1 ? 'it' : 'them'} in again anyway? (${repeats.length === 1 ? 'It goes' : 'They go'} ${toJob ? 'onto this job' : 'to the Inbox for you to approve'}.)`)) return;
       b.disabled = true; b.textContent = 'Importing… (this can take a minute)';
       try {
-        const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()], again: true }) });
+        const r = await api('/outlook/import-chosen', { method: 'POST', body: JSON.stringify({ message_ids: [...imp.emails.keys()], folder_ids: [...imp.whole.keys()], again: true, ...(toJob ? { to_job: true } : {}) }) });
         imp.emails.clear(); imp.whole.clear();
         $('#importBox').hidden = true;
+        // brought onto the job: back to it (the invoices show up there as they're read)
+        if (toJob) { location.href = '/card?t=' + encodeURIComponent(BOOT.token); return; }
         toast(`${r.emails} email${r.emails === 1 ? '' : 's'} found: ${r.files} file${r.files === 1 ? '' : 's'} being read${r.skipped ? ` · ${r.skipped} already imported` : ''}${r.notInvoices ? ` · ${r.notInvoices} without an invoice` : ''}`);
-      } finally { b.disabled = false; b.textContent = '📂 Import ticked'; }
+      } finally { b.disabled = false; b.textContent = toJob ? '📂 Put ticked onto the job' : '📂 Import ticked'; }
       return load();
     }
     if (d.readerRetry !== undefined) return readerRetry(b, load);
