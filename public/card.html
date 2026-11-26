@@ -607,7 +607,11 @@ function renderList() {
   $('#listSort').value = listSort;
   $('#list').innerHTML = invoices.length ? invoices.map((inv) => {
     const ready = inv.status === 'ready';
-    const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', inv.from_stock ? 'part of invoice' : (inv.invoice_date ? fmtDate(inv.invoice_date) : '')].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
+    // sorted by due date: the line shows the due date (the invoice date when none is printed), so the order makes sense
+    const when = inv.from_stock ? 'part of invoice' : listSort === 'due'
+      ? (inv.due_date ? 'due ' + fmtDate(inv.due_date) : inv.invoice_date ? fmtDate(inv.invoice_date) + ' (no due date)' : '')
+      : (inv.invoice_date ? fmtDate(inv.invoice_date) : '');
+    const meta = [inv.invoice_number ? '#' + inv.invoice_number : '', when].filter(Boolean).join(' · ') || SOURCE_LABEL[inv.source] || '';
     return `<div class="inv ${inv.id === state.selected ? 'sel' : ''}" data-select="${inv.id}">
       <div class="r1"><span class="who">${ready && inv.items.length ? `<input type="checkbox" data-list-paid="${inv.id}" title="Paid" ${inv.payment_state === 'paid' ? 'checked' : ''}>` : ''}<b>${esc(ready ? (inv.supplier || 'Unknown supplier') : (inv.file_name || 'Invoice'))}</b></span><b class="num">${ready ? money(inv.job_total) : ''}</b></div>
       <div class="r2"><span class="meta">${esc(meta)}</span><span class="chips">${state.data.stock && inv.status === 'ready' ? `<span class="chip c-stock">${money0(inv.left)} left</span>` : ''}${inv.from_stock ? '<span class="chip c-stock">Shared</span>' : ''}${inv.in_diary ? '<span class="chip c-materials" title="Also in the ServiceM8 job diary">📎 Diary</span>' : ''}${inv.mistake_state && inv.mistake_state !== 'none' ? '<span class="chip c-mk">⚠</span>' : ''}${inv.check_flag ? `<span class="chip c-err" title="Flagged by the statement check">🔎 ${inv.check_flag.verdict === 'problem' ? '⚠' : 'Check'}</span>` : ''}${ready && !state.data.stock ? dueChip(inv.due_date, inv.payment_state !== 'paid') : ''}${statusChip(inv)}${ready && !state.data.stock && !inv.from_stock && inv.payment_state !== 'paid' && Number(inv.total) > 0 ? `<button class="row-pay" data-pay="${inv.id}" title="Pay this invoice">💳 Pay</button>` : ''}</span></div>
