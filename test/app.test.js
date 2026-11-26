@@ -886,6 +886,7 @@ test('Outlook: connect once, invoices from the inbox wait in the Inbox with a su
     const cb = await fetch(`${b3}/outlook/callback?code=ms-code&state=${loc.searchParams.get('state')}`);
     assert.equal(cb.status, 200);
     assert.match(await cb.text(), /Outlook is connected/);
+    assert.equal(repo.getOutlook('acc-ol').can_write, 1, 'any connect link asks to read and file, so reconnecting never takes filing away');
     await app3.locals.checkOutlook();
     await processor.idle();
 

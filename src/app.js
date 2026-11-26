@@ -2393,8 +2393,9 @@ window.addEventListener('message', function (e) {
     if (!config.msClientId || !config.msClientSecret) {
       return res.status(500).type('html').send(htmlPage('Job Costs', '<h2>Almost there</h2><p>Set <b>MS_CLIENT_ID</b>, <b>MS_CLIENT_SECRET</b> and <b>MS_TENANT_ID</b> in Render (see the README), then try again.</p>'));
     }
-    // ?write=1: also let Job Costs mark paid invoice emails read and file them (the Pay button)
-    const write = req.query.write === '1';
+    // Always asks to read and file (mark paid invoice emails read, move them to Paid) – every connect link, so
+    // reconnecting from anywhere never takes filing away. ?write=0 asks to read only.
+    const write = req.query.write !== '0';
     const state = jwt.sign({ purpose: 'outlook', account: job.account_uuid ?? null, write }, config.sessionSecret, { expiresIn: '15m' });
     res.redirect(outlookApi.authorizeUrl({ clientId: config.msClientId, tenant: config.msTenantId, redirectUri: outlookRedirect(), state, write }));
   });
