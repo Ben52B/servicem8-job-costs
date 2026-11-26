@@ -119,7 +119,8 @@
       try { data = await call('/pay/preview?ids=' + ids.join(',')); render(); loadMailPlan(); } catch (e) { box.innerHTML = `<div class="bad">${esc(e.message)}</div><div class="p-foot"><span class="sp"></span><button data-x>Close</button></div>`; }
     }
     function checkHtml(p) {
-      if (p.check === 'match') return '<div class="p-check ok">✓ Same BSB and account number as printed on the invoice</div>';
+      if (p.check === 'match') return '<div class="p-check ok">✓ Same BSB and account number you paid this supplier before, and as printed on this invoice</div>';
+      if (p.check === 'first') return `<div class="p-check warn">⚠ First payment to ${esc(p.supplier || 'this supplier')}: the bank details are read from this invoice. Check them (e.g. against a statement or a call) – after this, every invoice from them is checked against them.</div>`;
       if (p.check === 'mismatch') return `<div class="p-check bad">✗ The invoice says to pay <b>${acct(p.printed)}</b>${p.printed.account_name ? ' (' + esc(p.printed.account_name) + ')' : ''},
         but you've paid ${esc(p.supplier)} to <b>${acct(p.payee)}</b> before.<br>Changed bank details are a common scam. Call ${esc(p.supplier)} on a number you already have (not one on this invoice or email) before changing them.
         <div style="margin-top:6px"><button data-trust="${p.id}">The invoice's details are right – I've checked with ${esc(p.supplier)}</button></div></div>`;

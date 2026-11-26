@@ -1979,9 +1979,9 @@ test('paying: the confirm details, bank details checked against the invoice, the
   pv = await json(t, `/pay/preview?ids=${a}`);
   assert.deepEqual(pv.payer.missing, []);
   const p = pv.plans[0];
-  assert.deepEqual([p.amount, p.amount_cents, p.reference, p.jobs, p.blocked, p.check], [341, 34100, 'INVJ-1001 PO209240', ['209240'], null, 'match']);
+  assert.deepEqual([p.amount, p.amount_cents, p.reference, p.jobs, p.blocked, p.check], [341, 34100, 'INVJ-1001 PO209240', ['209240'], null, 'first']);
   assert.deepEqual([p.payee.bsb, p.payee.account_number, p.payee.from], ['033-123', '98765432', 'invoice']);
-  assert.match(p.warnings.join(' '), /First payment/);
+  assert.ok(!p.warnings.some((w) => /First payment/.test(w)), 'one message for a first payment, not two');
   repo.saveOutlook('acc-pay', { accessToken: 'tok', refreshToken: 'r', expiresAt: new Date(Date.now() + 3600e3).toISOString(), email: 'a@b.au' }); // read-only
   // paying needs what was confirmed – a different amount or account is refused
   assert.equal((await post(t, '/pay', { ids: [a] })).status, 409);
@@ -2063,7 +2063,7 @@ test('paying in your own banking (“I’ve paid it”): no bank details of your
     payment_bsb: '062-001', payment_account_number: '10203040', payment_account_name: 'Smart Hire' });
   repo.assignWhole(inv.id, 'man-job', {});
   const pv = await json(t, `/pay/preview?ids=${inv.id}`);
-  assert.deepEqual([pv.mode, pv.payer.missing, pv.plans[0].blocked, pv.plans[0].check, pv.plans[0].reference], ['manual', [], null, 'match', 'INV H-1 PO 209260']);
+  assert.deepEqual([pv.mode, pv.payer.missing, pv.plans[0].blocked, pv.plans[0].check, pv.plans[0].reference], ['manual', [], null, 'first', 'INV H-1 PO 209260']);
   const r = await post(t, '/pay', { ids: [inv.id], confirm: { [inv.id]: { amount_cents: 31000, bsb: '062-001', account_number: '10203040' } } }).then((x) => x.json());
   assert.equal(r.total, 310);
   assert.equal((await summary(t)).invoices.find((i) => i.id === inv.id).payment_state, 'paid');

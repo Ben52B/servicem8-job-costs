@@ -1936,7 +1936,8 @@ window.addEventListener('message', function (e) {
       // in full for paying in the banking app; the bank file allows 18 characters
       reference: aba.makeReference(st.pay_reference, { invoice: inv.invoice_number || '', job: jobNumbers[0] || '' }, st.pay_mode === 'file' ? 18 : Infinity),
       payee, printed, bpay: inv.bpay_biller ? { biller: inv.bpay_biller, ref: inv.bpay_ref } : null,
-      check: !printed ? 'not_printed' : !payee ? 'no_payee' : sameBank(payee, printed) ? 'match' : 'mismatch',
+      // 'first': the first payment to this supplier – the details come from this invoice, so there's nothing yet to compare them with
+      check: !printed ? 'not_printed' : !payee ? 'no_payee' : payee.from === 'invoice' ? 'first' : sameBank(payee, printed) ? 'match' : 'mismatch',
       email: !!inv.email_message_id || !!inv.email_subject, blocked: null, warnings: [],
     };
     const twin = repo.twinOf(inv);
@@ -1949,7 +1950,6 @@ window.addEventListener('message', function (e) {
     else if (plan.check === 'mismatch') plan.blocked = 'The bank details on this invoice are DIFFERENT from the ones you paid this supplier before';
     else if (!payee) plan.blocked = inv.bpay_biller ? 'It’s paid by BPAY – pay it in your banking' : 'No bank details for this supplier yet – enter them';
     if (!plan.blocked && plan.check === 'not_printed') plan.warnings.push('The invoice doesn’t print bank details, so they couldn’t be checked against it');
-    if (!plan.blocked && payee && payee.from === 'invoice') plan.warnings.push('First payment to this supplier: the bank details come from the invoice');
     if (!inv.invoice_number) plan.warnings.push('No invoice number on it');
     return plan;
   }
