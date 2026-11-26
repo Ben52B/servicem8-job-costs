@@ -87,6 +87,8 @@
   #list > .detail { position: relative; }
   .close-detail { position: absolute; top: 6px; right: 10px; z-index: 2; background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 700; padding: 4px 6px; cursor: pointer; }
   .list-head select { font: inherit; font-size: 12.5px; font-weight: 600; border: 1px solid #d6e2de; border-radius: 9px; padding: 4px 6px; background: #fff; color: var(--ink); }
+  .jump { display: inline-flex; gap: 4px; } .jump input { width: 120px; font: inherit; font-size: 13px; border: 1px solid #d6e2de; border-radius: 10px; padding: 6px 8px; background: #fff; }
+  .jump button { padding: 6px 12px; }
   .list-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .list-head b { font-size: 14px; }
   .add-btn { width: 100%; justify-content: center; padding: 11px; font-size: 14px; margin-bottom: 12px; }
@@ -239,7 +241,8 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><a class="btn" id="sm8Job" target="_blank" rel="noopener" hidden title="Open this job's card in ServiceM8">↗ Open job in ServiceM8</a><span class="sp"></span>
+    <h1>Job Costs</h1><span class="sub" id="jobLabel"></span><a class="btn" id="sm8Job" target="_blank" rel="noopener" hidden title="Open this job's card in ServiceM8">↗ Open job in ServiceM8</a>
+    <span class="jump"><input id="jumpJob" list="jumpJobs" inputmode="numeric" placeholder="Go to job #" autocomplete="off" title="Open another job's Job Costs"><button id="jumpGo">Go</button></span><datalist id="jumpJobs"></datalist><span class="sp"></span>
     <label class="stock-switch" id="stockSwitch" title="Stock orders are opened as their own job. Invoices for a stock order job go into stock instead of being a cost."><input type="checkbox" id="stockToggle"> 📦 Stock order job</label>
     <nav class="links">
     <a class="btn" id="pickLink">📋 Pick list</a>
@@ -368,6 +371,9 @@ function render() {
   const j = state.data.job || {};
   const parts = state.data.splitParts || [];
   $('#jobLabel').textContent = [j.job_number ? 'Job #' + j.job_number + (parts.length ? ` (+ ${parts.map((p) => '#' + p).join(', ')})` : '') : '', j.client_name, j.job_title].filter(Boolean).join(' · ');
+  // other jobs to go to (typing a number not in the list asks ServiceM8)
+  const jl = $('#jumpJobs');
+  if (jl && !jl.dataset.done) { jl.dataset.done = '1'; jl.innerHTML = (state.data.jobs || []).filter((x) => !x.is_stock).slice(0, 400).map((x) => `<option value="${esc(x.job_number)}">${esc(x.job_title || '')}</option>`).join(''); }
   // the ServiceM8 job card of this job (ServiceM8's own link for a job)
   const sm8 = $('#sm8Job'); sm8.hidden = !j.job_uuid; if (j.job_uuid) sm8.href = 'https://go.servicem8.com/openjob/' + encodeURIComponent(j.job_uuid);
   showInboxCount(state.data.inboxCount);
@@ -1149,6 +1155,16 @@ document.addEventListener('click', async (e) => {
   } catch (x) { toast(x.message); if (!state.modal) load(); }
 });
 
+// Go to another job's Job Costs, without leaving the window
+async function jumpToJob() {
+  const box = $('#jumpJob'); const n = box.value.trim().replace(/^#/, '').split(/[\s–-]/)[0];
+  if (!n) { box.focus(); return toast('Type a job number'); }
+  $('#jumpGo').disabled = true; $('#jumpGo').textContent = '…';
+  try { const r = await api('/jobs/find?number=' + encodeURIComponent(n)); location.href = '/card?t=' + encodeURIComponent(r.token); }
+  catch (x) { toast(x.message); $('#jumpGo').disabled = false; $('#jumpGo').textContent = 'Go'; }
+}
+$('#jumpGo').addEventListener('click', jumpToJob);
+$('#jumpJob').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); jumpToJob(); } });
 document.addEventListener('change', (e) => {
   if (e.target.id !== 'listSort') return;
   listSort = e.target.value; try { localStorage.setItem('cardSort', listSort); } catch (x) { /* fine */ }
